@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0.."
-echo Building UTVFX AI & VFX Suit...
+echo Building UTVFX AI ^& VFX Suit...
 echo Activating Virtual Environment...
 call venv\Scripts\activate.bat
 
@@ -16,11 +16,11 @@ pyinstaller --noconfirm --onedir --windowed ^
 echo Build completed.
 
 echo Generating Inno Setup Installer...
-set ISCC="C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+set ISCC="C:\Program Files\Inno Setup 7\ISCC.exe"
 if exist %ISCC% (
     %ISCC% "build\installer.iss"
     echo Installer successfully generated in Output folder.
 ) else (
-    echo Error: Inno Setup 6 not found at %ISCC%. Please install Inno Setup 6 to generate the installer.
+    echo Error: Inno Setup 7 not found at %ISCC%. Please install Inno Setup 7 to generate the installer.
 )
 pause
