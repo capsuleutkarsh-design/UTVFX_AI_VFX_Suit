@@ -21,6 +21,10 @@ UTVFX AI & VFX Suit is a high-performance desktop application built to bridge th
 *   **AI Depth Estimation:** Integration with `Depth Anything V2` to generate dense disparity maps from raw 2D plates.
 *   **Nuke Script Exporting:** Generates `.nk` and `.py` scripts natively, instantly bringing AI data (like Rotoscope shapes and 3D Camera tracking) into your compositing software.
 
+## 🧠 AI Model Weights (Required)
+Since the deep learning model weights exceed 20 GB, they are not included in this code repository. 
+Please refer to the [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md) guide for the official download links and instructions on exactly where to place each model before running the application.
+
 ## ⚙️ Requirements & Installation
 This software relies on Python 3.10+, PySide6, and PyTorch (CUDA required for hardware acceleration).
 
