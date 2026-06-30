@@ -1,0 +1,40 @@
+# Environments
+venv/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# PyInstaller / Build Output
+dist/
+build/Output/
+build/UTVFX_AI_VFX_Tool/
+*.spec
+
+# Application Cache and Output
+logs/
+outputs/
+cache/
+models/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# AI Agents
+.agents/
+.gemini/
+
+# Heavy Directories & ML Binaries
+python_base/
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.ckpt
+*.bin
+*.dll
+*.exe

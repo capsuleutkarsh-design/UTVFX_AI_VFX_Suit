@@ -1,0 +1,18 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+PySide6
+qasync
+torch==2.4.0+cu121
+torchvision==0.19.0+cu121
+torchaudio==2.4.0+cu121
+opencv-python
+numpy<2.0.0
+tqdm
+einops
+omegaconf
+imageio
+imageio-ffmpeg
+huggingface_hub
+requests
+psutil
+OpenImageIO
+pyqtgraph
