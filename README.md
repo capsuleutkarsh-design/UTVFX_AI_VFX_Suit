@@ -1,7 +1,15 @@
-<p align="center">
-  <img src="build/app_icon.ico" width="128" height="128" alt="UTVFX AI Logo">
-</p>
-<h1 align="center">UTVFX AI & VFX Suit</h1>
+<div align="center">
+  <img src="V0040/ut_vfx/icons/app_banner.bmp" alt="UTVFX Logo" width="600">
+
+  # 🎬 UTVFX AI & VFX Suit
+  
+  > 🚨 **IMPORTANT: FIRST TIME SETUP** 🚨
+  > Before doing anything else, you **MUST** run the setup script to download missing massive AI model weights (Gigabytes) and third-party binaries that were excluded from GitHub due to size limits.
+  > 
+  > ```bash
+  > python first_setup.py
+  > ```
+</div>
 
 <p align="center">
   <b>A Node-Based AI and Visual Effects Processing Tool</b><br>
