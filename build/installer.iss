@@ -3,7 +3,7 @@ AppName=UT_VFX_AI/VFX_Tool
 AppVersion=1.0.0
 DefaultDirName={autopf}\UT_VFX_Tool
 DefaultGroupName=UT_VFX_Tool
-OutputDir=..\Output
+OutputDir=..\build
 OutputBaseFilename=UT_VFX_Tool_Setup
 SetupIconFile=app_icon.ico
 WizardImageFile=wizard_large.bmp
@@ -12,6 +12,8 @@ Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64
 ArchitecturesInstallIn64BitMode=x64
+DiskSpanning=yes
+DiskSliceSize=2000000000
 
 [Files]
 Source: "..\dist\UTVFX_AI_VFX_Tool\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -49,7 +51,7 @@ begin
     ZipPath := ModelsPage.Values[0];
     if (ZipPath <> '') and FileExists(ZipPath) then
     begin
-      DestPath := ExpandConstant('{app}\models');
+      DestPath := ExpandConstant('{app}');
       ForceDirectories(DestPath);
       WizardForm.StatusLabel.Caption := 'Extracting models (this may take a while)...';
       // Use PowerShell to extract the zip silently
