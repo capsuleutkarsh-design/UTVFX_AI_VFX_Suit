@@ -8,8 +8,6 @@
     "parameters": [
         {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 3 (ViT-B)"]},
         {"id": "bg_color", "name": "Background Color", "tab": "Main Settings", "type": "color", "value": "#6aff9b"},
-        {"id": "start_frame", "name": "Start Frame", "tab": "Main Settings", "type": "text", "value": "1"},
-        {"id": "end_frame", "name": "End Frame", "tab": "Main Settings", "type": "text", "value": "0"},
         {"id": "prompt_points", "name": "Prompt Points", "tab": "Main Settings", "type": "text", "value": "Use AI Bridge to add points"},
         {"id": "mask_layers", "name": "Mask Layers", "tab": "Main Settings", "type": "layer_manager", "value": []},
         
