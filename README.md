@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="V0040/ut_vfx/icons/app_banner.bmp" alt="UTVFX Logo" width="600">
+  <img src="resources/logo.png" alt="UTVFX Logo" width="600">
 
   # 🎬 UTVFX AI & VFX Suit
   
@@ -7,7 +7,7 @@
   > Before doing anything else, you **MUST** run the setup script to download missing massive AI model weights (Gigabytes) and third-party binaries that were excluded from GitHub due to size limits.
   > 
   > ```bash
-  > python first_setup.py
+  > python scripts/first_setup.py
   > ```
 </div>
 
