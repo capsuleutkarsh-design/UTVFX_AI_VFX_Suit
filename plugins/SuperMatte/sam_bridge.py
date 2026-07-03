@@ -61,13 +61,19 @@ class SAM3Predictor:
         self.image = image_rgb
         
     def predict(self, points, labels):
-        input_points = [[points]]
-        input_labels = [[labels]]
-        
+        # SAM 3 in transformers only supports input_boxes and input_boxes_labels
+        # We must convert points to small bounding boxes
+        input_boxes = []
+        box_labels = []
+        for (x, y), label in zip(points, labels):
+            # Create a 2x2 bounding box centered around the point
+            input_boxes.append([max(0, x - 1), max(0, y - 1), x + 1, y + 1])
+            box_labels.append(label)
+            
         inputs = self.processor(
             images=self.image, 
-            input_points=input_points, 
-            input_labels=input_labels, 
+            input_boxes=[[input_boxes]], 
+            input_boxes_labels=[[box_labels]], 
             return_tensors="pt"
         ).to(self.device)
         

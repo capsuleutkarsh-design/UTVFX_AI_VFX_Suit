@@ -7,6 +7,11 @@
     "outputs": ["Dense Depth Map"],
     "parameters": [
         {"id": "model_size", "name": "Model Architecture", "type": "select", "value": "Small (vits)", "options": ["Small (vits)", "Base (vitb)", "Large (vitl)"]},
+        {"id": "input_size", "name": "Resolution Limit", "type": "select", "value": "518 (Fast)", "options": ["518 (Fast)", "742 (Balanced)", "1008 (Detail)"]},
+        {"id": "temporal_smoothing", "name": "Flicker Smoothing", "type": "slider", "value": 0.1, "min": 0.0, "max": 1.0},
+        {"id": "gamma", "name": "Contrast (Gamma)", "type": "slider", "value": 1.0, "min": 0.1, "max": 5.0},
+        {"id": "blur_radius", "name": "Post Blur", "type": "slider", "value": 0, "min": 0, "max": 50},
+        {"id": "colormap", "name": "Preview Colormap", "type": "select", "value": "Grayscale", "options": ["Grayscale", "Inferno", "Turbo", "Magma", "Plasma"]},
         {"id": "invert_depth", "name": "Invert Depth", "type": "checkbox", "value": false}
     ],
     "worker_module": "plugins.DepthEstimator.backend",

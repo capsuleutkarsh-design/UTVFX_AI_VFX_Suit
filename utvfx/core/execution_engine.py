@@ -573,34 +573,31 @@ class ExecutionEngine(QObject):
         params = getattr(node, "params", {})
 
         # --- Smart Cache Validation ---
-        # Don't check cache for the root media_plate since it takes negligible time, 
-        # and checking cache there might break initial resolution logging.
-        if plugin != "media_plate":
-            try:
-                current_hash = self._compute_node_hash(node)
-                hash_file = os.path.join(node_cache, "last_state_hash.txt")
-                
-                # 1. Check for explicit frozen state
-                if getattr(node, 'is_frozen', False):
-                    if self._get_cached_output(node):
-                        self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen. Using cached output.")
-                        self._on_finished(node_id)
-                        return
-                    else:
-                        self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen but has no cache. Re-executing.")
+        try:
+            current_hash = self._compute_node_hash(node)
+            hash_file = os.path.join(node_cache, "last_state_hash.txt")
+            
+            # 1. Check for explicit frozen state
+            if getattr(node, 'is_frozen', False):
+                if self._get_cached_output(node):
+                    self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen. Using cached output.")
+                    self._on_finished(node_id)
+                    return
+                else:
+                    self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen but has no cache. Re-executing.")
 
-                # 2. Regular hash-based caching
-                elif os.path.exists(hash_file):
-                    with open(hash_file, "r", encoding="utf-8") as f:
-                        saved_hash = f.read().strip()
-                        
-                    # If state hashes match perfectly AND the output cache folder isn't empty, skip execution.
-                    if saved_hash == current_hash and self._get_cached_output(node):
-                        self.log_message.emit(node_id, f"[Cached] Output is already generated. Skipping execution for {node.name}.")
-                        self._on_finished(node_id)
-                        return
-            except Exception as e:
-                self.log_message.emit(node_id, f"Cache validation error: {e}. Forcing re-execution.")
+            # 2. Regular hash-based caching
+            elif os.path.exists(hash_file):
+                with open(hash_file, "r", encoding="utf-8") as f:
+                    saved_hash = f.read().strip()
+                    
+                # If state hashes match perfectly AND the output cache folder isn't empty, skip execution.
+                if saved_hash == current_hash and self._get_cached_output(node):
+                    self.log_message.emit(node_id, f"[Cached] Output is already generated. Skipping execution for {node.name}.")
+                    self._on_finished(node_id)
+                    return
+        except Exception as e:
+            self.log_message.emit(node_id, f"Cache validation error: {e}. Forcing re-execution.")
 
         try:
             from utvfx.core.plugin_manager import PluginManager
@@ -679,7 +676,7 @@ class ExecutionEngine(QObject):
         
         # Compute state hash and save to final cache to allow future runs to skip execution
         target_node = self._get_node_by_id(node_id)
-        if target_node and target_node.plugin_type != "media_plate":
+        if target_node:
             try:
                 current_hash = self._compute_node_hash(target_node)
                 node_cache = self._get_node_cache(target_node)

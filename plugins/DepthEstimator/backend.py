@@ -43,12 +43,9 @@ class DepthHelper:
         self.model.load_state_dict(torch.load(weights_path, map_location='cpu', weights_only=True))
         self.model = self.model.to(self.device).eval()
         
-    def infer_depth(self, frame, invert=False):
+    def infer_depth(self, frame, input_size=518, invert=False, blur_radius=0, gamma=1.0, colormap="Grayscale", smoothing=0.1):
         """Returns a normalized uint8 depth map (0-255) for a given OpenCV frame (BGR)."""
-        # Depth Anything takes RGB input, but infer_image expects BGR
-        # wait, run_video.py passes raw_frame (which is BGR from cv2.VideoCapture) to infer_image
-        # so infer_image internally handles BGR to RGB!
-        depth = self.model.infer_image(frame)
+        depth = self.model.infer_image(frame, input_size=input_size)
         
         # Use percentiles to ignore extreme outliers that cause sudden flashes
         d_min = np.percentile(depth, 1)
@@ -58,19 +55,39 @@ class DepthHelper:
             self.d_min_ema = d_min
             self.d_max_ema = d_max
         else:
-            alpha = 0.1
-            self.d_min_ema = alpha * d_min + (1.0 - alpha) * self.d_min_ema
-            self.d_max_ema = alpha * d_max + (1.0 - alpha) * self.d_max_ema
+            weight_new = 1.0 - smoothing
+            self.d_min_ema = weight_new * d_min + smoothing * self.d_min_ema
+            self.d_max_ema = weight_new * d_max + smoothing * self.d_max_ema
             
         if self.d_max_ema - self.d_min_ema > 1e-6:
-            depth = (depth - self.d_min_ema) / (self.d_max_ema - self.d_min_ema) * 255.0
+            depth = (depth - self.d_min_ema) / (self.d_max_ema - self.d_min_ema)
         else:
             depth = np.zeros_like(depth)
             
-        depth = np.clip(depth, 0, 255).astype(np.uint8)
+        depth = np.clip(depth, 0.0, 1.0)
+        
+        if gamma != 1.0:
+            depth = np.power(depth, gamma)
+            
+        depth = (depth * 255.0).astype(np.uint8)
         
         if invert:
             depth = 255 - depth
+            
+        if blur_radius > 0:
+            k = int(blur_radius)
+            if k % 2 == 0: k += 1
+            depth = cv2.GaussianBlur(depth, (k, k), 0)
+            
+        if colormap != "Grayscale":
+            cmap_map = {
+                "Inferno": cv2.COLORMAP_INFERNO,
+                "Turbo": cv2.COLORMAP_TURBO,
+                "Magma": cv2.COLORMAP_MAGMA,
+                "Plasma": cv2.COLORMAP_PLASMA
+            }
+            if colormap in cmap_map:
+                depth = cv2.applyColorMap(depth, cmap_map[colormap])
             
         return depth
 
@@ -92,14 +109,21 @@ class DepthWorker(BaseWorker):
             
         # Map parameters
         model_size_str = self.params.get("model_size", "Small (vits)")
-        if "vits" in model_size_str:
-            model_size = "vits"
-        elif "vitb" in model_size_str:
-            model_size = "vitb"
-        else:
-            model_size = "vitl"
-            
+        if "vits" in model_size_str: model_size = "vits"
+        elif "vitb" in model_size_str: model_size = "vitb"
+        else: model_size = "vitl"
+        
+        input_size_str = self.params.get("input_size", "518 (Fast)")
+        if "742" in input_size_str: input_size = 742
+        elif "1008" in input_size_str: input_size = 1008
+        else: input_size = 518
+        
+        smoothing = float(self.params.get("temporal_smoothing", 0.1))
+        gamma = float(self.params.get("gamma", 1.0))
+        blur_radius = int(self.params.get("blur_radius", 0))
+        colormap = self.params.get("colormap", "Grayscale")
         invert_depth = self.params.get("invert_depth", False)
+        
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         
         self.log_message.emit(self.node_id, f"Using device: {device}")
@@ -162,10 +186,21 @@ class DepthWorker(BaseWorker):
                 self.log_message.emit(self.node_id, "Depth Estimation Cancelled.")
                 break
                 
-            depth_map = helper.infer_depth(frame, invert=invert_depth)
+            depth_map = helper.infer_depth(
+                frame, 
+                input_size=input_size, 
+                invert=invert_depth, 
+                blur_radius=blur_radius, 
+                gamma=gamma, 
+                colormap=colormap, 
+                smoothing=smoothing
+            )
             
             # Save as 3-channel grayscale for compatibility with media players and nodes
-            depth_map_3c = cv2.cvtColor(depth_map, cv2.COLOR_GRAY2BGR)
+            if len(depth_map.shape) == 2:
+                depth_map_3c = cv2.cvtColor(depth_map, cv2.COLOR_GRAY2BGR)
+            else:
+                depth_map_3c = depth_map
             out_path = os.path.join(self.cache_dir, f"depth_{i:05d}.png")
             cv2.imwrite(out_path, depth_map_3c)
             
