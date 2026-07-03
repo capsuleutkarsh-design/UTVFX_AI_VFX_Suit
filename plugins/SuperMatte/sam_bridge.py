@@ -72,8 +72,8 @@ class SAM3Predictor:
             
         inputs = self.processor(
             images=self.image, 
-            input_boxes=[[input_boxes]], 
-            input_boxes_labels=[[box_labels]], 
+            input_boxes=[input_boxes], 
+            input_boxes_labels=[box_labels], 
             return_tensors="pt"
         ).to(self.device)
         
