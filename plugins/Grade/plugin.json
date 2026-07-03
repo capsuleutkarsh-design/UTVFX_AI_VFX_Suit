@@ -1,0 +1,19 @@
+{
+    "name": "Grade",
+    "plugin_type": "grade",
+    "category": "🎨 Color",
+    "color": "#ec4899",
+    "inputs": ["Image"],
+    "outputs": ["Image"],
+    "parameters": [
+        {"id": "blackpoint", "name": "Blackpoint", "type": "slider", "value": 0.0, "min": -1.0, "max": 1.0, "step": 0.01},
+        {"id": "whitepoint", "name": "Whitepoint", "type": "slider", "value": 1.0, "min": 0.0, "max": 2.0, "step": 0.01},
+        {"id": "lift", "name": "Lift", "type": "slider", "value": 0.0, "min": -1.0, "max": 1.0, "step": 0.01},
+        {"id": "gain", "name": "Gain", "type": "slider", "value": 1.0, "min": 0.0, "max": 4.0, "step": 0.01},
+        {"id": "multiply", "name": "Multiply", "type": "slider", "value": 1.0, "min": 0.0, "max": 4.0, "step": 0.01},
+        {"id": "offset", "name": "Offset", "type": "slider", "value": 0.0, "min": -1.0, "max": 1.0, "step": 0.01},
+        {"id": "gamma", "name": "Gamma", "type": "slider", "value": 1.0, "min": 0.1, "max": 4.0, "step": 0.01}
+    ],
+    "worker_module": "plugins.Grade.backend",
+    "worker_class": "GradeWorker"
+}

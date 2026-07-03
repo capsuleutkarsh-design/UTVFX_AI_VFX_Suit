@@ -1,0 +1,22 @@
+{
+    "name": "Super Matte (SAM+ViTMatte)",
+    "plugin_type": "super_matte",
+    "category": "🎭 Matte",
+    "color": "#0ea5e9",
+    "inputs": ["Video Plate"],
+    "outputs": ["Alpha Matte"],
+    "parameters": [
+        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 3 (ViT-B)"]},
+        {"id": "bg_color", "name": "Background Color", "tab": "Main Settings", "type": "color", "value": "#6aff9b"},
+        {"id": "start_frame", "name": "Start Frame", "tab": "Main Settings", "type": "text", "value": "1"},
+        {"id": "end_frame", "name": "End Frame", "tab": "Main Settings", "type": "text", "value": "0"},
+        {"id": "prompt_points", "name": "Prompt Points", "tab": "Main Settings", "type": "text", "value": "Use AI Bridge to add points"},
+        {"id": "mask_layers", "name": "Mask Layers", "tab": "Main Settings", "type": "layer_manager", "value": []},
+        
+        {"id": "trimap_dilate", "name": "Trimap Dilate Size", "tab": "Advanced Processing", "type": "slider", "value": 10, "min": 1, "max": 50, "step": 1},
+        {"id": "trimap_erode", "name": "Trimap Erode Size", "tab": "Advanced Processing", "type": "slider", "value": 10, "min": 1, "max": 50, "step": 1},
+        {"id": "fill_holes", "name": "Fill Holes in SAM Mask", "tab": "Advanced Processing", "type": "checkbox", "value": true}
+    ],
+    "worker_module": "plugins.SuperMatte.backend",
+    "worker_class": "SuperMatteWorker"
+}

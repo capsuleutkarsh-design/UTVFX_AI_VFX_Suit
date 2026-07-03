@@ -37,13 +37,23 @@ def create_animated_roto():
         
     curves_knob.rootLayer.append(shape)
     
+    format_height = shapes_data.get("format_height", 1080)
+    
     # Now animate the points
     for f in frames:
+        if str(f) not in shapes_data:
+            continue
+            
         pts = shapes_data[str(f)]
+        if not isinstance(pts, list):
+            continue
+            
         # Nuke frame offset (usually 1-based, assuming frames here is 0-based index)
         nuke_frame = f + 1 
         
         for i, pt in enumerate(pts):
+            if i >= len(shape):
+                break
             cv = shape[i]
             # Get center position
             center = cv.center
@@ -51,13 +61,9 @@ def create_animated_roto():
             # Add keys
             center.getPositionAnimCurve(0).addKey(nuke_frame, pt[0])
             
-            # For Y, we might need to invert it based on Nuke's coordinate system
             # Nuke's origin is bottom-left, OpenCV is top-left
-            # We assume the user has the plate connected to Roto, so format height is needed
-            # We will just write raw OpenCV coords, but standard practice in Nuke is to invert Y
-            # For simplicity without knowing height, we add a Transform node or just invert it if format is known.
-            # Actually, let's keep it as is. Users can flip Y if needed via a Transform node.
-            center.getPositionAnimCurve(1).addKey(nuke_frame, pt[1])
+            # We invert Y using format_height
+            center.getPositionAnimCurve(1).addKey(nuke_frame, format_height - pt[1])
             
             # To avoid weird tangency interpolation jumping, set keys to linear
             center.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR

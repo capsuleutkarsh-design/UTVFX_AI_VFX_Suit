@@ -1,0 +1,30 @@
+{
+    "name": "Corridor Keyer",
+    "plugin_type": "corridor_keyer",
+    "category": "🔑 Keying",
+    "color": "#10b981",
+    "inputs": ["Video Plate", "Alpha Matte"],
+    "outputs": ["Keyed RGBA"],
+    "parameters": [
+        {"id": "screen_color", "name": "Screen Color", "tab": "Keying & Despill", "type": "select", "value": "green", "options": ["green", "blue", "red"]},
+        {"id": "despill_strength", "name": "Despill Strength", "tab": "Keying & Despill", "type": "slider", "value": 0.5, "min": 0.0, "max": 1.0, "step": 0.01},
+        {"id": "despill_limit_mode", "name": "Despill Limit Mode", "tab": "Keying & Despill", "type": "select", "value": "average", "options": ["average", "max"]},
+        
+        {"id": "clean_islands", "name": "Clean Islands (Auto-Despeckle)", "tab": "Matte Polish", "type": "checkbox", "value": true},
+        {"id": "despeckle_thresh", "name": "Despeckle Threshold", "tab": "Matte Polish", "type": "slider", "value": 400, "min": 0, "max": 1000, "step": 1},
+        {"id": "mask_expansion", "name": "Mask Expansion", "tab": "Matte Polish", "type": "slider", "value": 25, "min": 0, "max": 50, "step": 1},
+        {"id": "despeckle_blur", "name": "Despeckle Blur", "tab": "Matte Polish", "type": "slider", "value": 5, "min": 0, "max": 20, "step": 1},
+        {"id": "feather_radius", "name": "Feather Radius", "tab": "Matte Polish", "type": "slider", "value": 0, "min": 0, "max": 20, "step": 1},
+        {"id": "detail_intensity", "name": "Detail Intensity", "tab": "Matte Polish", "type": "slider", "value": 1, "min": 0, "max": 3, "step": 1},
+        {"id": "temporal_anti_flicker", "name": "Temporal Anti-Flicker", "tab": "Matte Polish", "type": "slider", "value": 0.0, "min": 0.0, "max": 1.0, "step": 0.1},
+        {"id": "sensor_noise", "name": "Sensor Noise Reduction (Chroma)", "tab": "Matte Polish", "type": "slider", "value": 0, "min": 0, "max": 20, "step": 1},
+        
+        {"id": "output_dir", "name": "Output Directory", "tab": "System / I/O", "type": "file", "value": "..\\outputs"},
+        {"id": "foreground_output", "name": "Foreground Output", "tab": "System / I/O", "type": "radio", "value": "Straight RGB", "options": ["Straight RGB", "Premultiplied"]},
+        {"id": "input_linear", "name": "Input is Linear (EXR)", "tab": "System / I/O", "type": "checkbox", "value": false},
+        {"id": "custom_bg", "name": "Custom Background Preview", "tab": "System / I/O", "type": "file", "value": ""},
+        {"id": "proc_res", "name": "Processing Resolution", "tab": "System / I/O", "type": "select", "value": "2048", "options": ["512", "1024", "2048", "4096"]}
+    ],
+    "worker_module": "plugins.CorridorKey.backend",
+    "worker_class": "CorridorKeyWorker"
+}

@@ -1,0 +1,9 @@
+{
+    "plugin_type": "dot_node",
+    "name": "Dot",
+    "category": "Utility",
+    "color": "#888888",
+    "inputs": ["Input"],
+    "outputs": ["Output"],
+    "parameters": []
+}

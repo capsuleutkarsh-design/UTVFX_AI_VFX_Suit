@@ -6,8 +6,8 @@ from PySide6.QtWidgets import QApplication
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core_ui.properties_panel import PropertiesPanel
-from core_ui.execution_engine import ExecutionEngine
+from utvfx.ui.panels.properties_panel import PropertiesPanel
+from utvfx.core.execution_engine import ExecutionEngine
 
 class MockNode:
     def __init__(self):

@@ -1,0 +1,15 @@
+{
+    "name": "Matte to Shape",
+    "plugin_type": "roto_to_shape",
+    "category": "🎭 Matte",
+    "color": "#8b5cf6",
+    "inputs": ["Alpha Matte"],
+    "outputs": ["Shape Data"],
+    "parameters": [
+        {"id": "target_points", "name": "Control Points (Resolution)", "type": "slider", "value": 100, "min": 10, "max": 500, "step": 10},
+        {"id": "min_area", "name": "Minimum Area (px)", "type": "slider", "value": 100, "min": 0, "max": 10000, "step": 100},
+        {"id": "simplify_epsilon", "name": "Simplify Curve Epsilon", "type": "slider", "value": 1.0, "min": 0.0, "max": 10.0, "step": 0.5}
+    ],
+    "worker_module": "plugins.RotoToShape.backend",
+    "worker_class": "RotoToShapeWorker"
+}

@@ -1,0 +1,20 @@
+{
+    "name": "Unified Output",
+    "plugin_type": "composite_output",
+    "category": "📦 Output",
+    "color": "#f43f5e",
+    "inputs": ["Keyed RGBA", "Alpha Matte", "Video Plate", "3D Camera Path", "3D Sparse Points", "Dense Depth Map", "Shape Data"],
+    "outputs": ["Final Presentation", "Export Assets"],
+    "parameters": [
+        {"id": "output_dir", "name": "Output Directory", "type": "folder", "value": "..\\outputs"},
+        {"id": "gamma", "name": "Display LUT Gamma", "type": "slider", "value": 2.2, "min": 1.0, "max": 3.2, "step": 0.1},
+        {"id": "bit_depth", "name": "Target Render Bitrate", "type": "select", "value": "16-bit Float EXR", "options": ["8-bit PNG", "16-bit Float EXR", "32-bit Float EXR"]},
+        
+        {"id": "export_nuke", "name": "Export Nuke Script (.nk)", "tab": "3D Export", "type": "checkbox", "value": true},
+        {"id": "export_blender", "name": "Export Blender Script (.py)", "tab": "3D Export", "type": "checkbox", "value": true},
+        {"id": "export_roto_nuke", "name": "Export Nuke Roto Script (.py)", "tab": "2D Export", "type": "checkbox", "value": true},
+        {"id": "scene_scale", "name": "Scene Scale Multiplier", "tab": "3D Export", "type": "slider", "value": 10.0, "min": 0.1, "max": 100.0, "step": 0.1}
+    ],
+    "worker_module": "plugins.CompositeOutput.backend",
+    "worker_class": "CompositeOutputWorker"
+}

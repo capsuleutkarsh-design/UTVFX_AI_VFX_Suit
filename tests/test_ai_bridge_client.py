@@ -9,7 +9,7 @@ import uuid
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core_ui.ai_bridge_client import AIBridgeClient
+from utvfx.bridge.ai_bridge_client import AIBridgeClient
 from PySide6.QtWidgets import QApplication
 
 class TestAIBridgeClient(unittest.TestCase):

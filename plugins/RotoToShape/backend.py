@@ -4,21 +4,13 @@ import numpy as np
 import json
 from PySide6.QtCore import QThread, Signal
 
-class RotoToShapeWorker(QThread):
-    progress_update = Signal(int, int)
-    log_message = Signal(str)
-    error_occurred = Signal(str)
-    finished_processing = Signal()
+from utvfx.bridge.base_worker import BaseWorker
 
-    def __init__(self, mask_path, cache_dir, params):
-        super().__init__()
-        self.mask_path = mask_path
-        self.cache_dir = cache_dir
-        self.params = params
-        self.is_cancelled = False
-        
-    def cancel(self):
-        self.is_cancelled = True
+class RotoToShapeWorker(BaseWorker):
+    def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
+        super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
+        self.mask_path = inputs.get("Alpha Matte")
+
 
     def _resample_polygon(self, polygon, num_points):
         # polygon: shape (N, 1, 2)
@@ -63,108 +55,128 @@ class RotoToShapeWorker(QThread):
                 
         return np.roll(current, best_shift, axis=0)
 
-    def run(self):
-        try:
-            self.log_message.emit("Initializing Roto to Shape processing...")
+    def run_task(self):
+        self.log_message.emit(self.node_id, "Initializing Roto to Shape processing...")
+        
+        target_points = int(self.params.get("target_points", 100))
+        min_area = float(self.params.get("min_area", 100.0))
+        epsilon = float(self.params.get("simplify_epsilon", 1.0))
+        
+        if not os.path.exists(self.mask_path):
+            raise FileNotFoundError(f"Mask path not found: {self.mask_path}")
             
-            target_points = int(self.params.get("target_points", 100))
-            min_area = float(self.params.get("min_area", 100.0))
-            epsilon = float(self.params.get("simplify_epsilon", 1.0))
-            
-            if not os.path.exists(self.mask_path):
-                raise FileNotFoundError(f"Mask path not found: {self.mask_path}")
-                
-            out_dir = os.path.join(self.cache_dir, "roto_shapes")
-            os.makedirs(out_dir, exist_ok=True)
-            
-            # Gather frames
-            frames = []
-            if os.path.isdir(self.mask_path):
-                frames = sorted([f for f in os.listdir(self.mask_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
-            else:
-                self.log_message.emit("Expected a directory of alpha masks.")
-                return
+        out_dir = os.path.join(self.cache_dir, "roto_shapes")
+        os.makedirs(out_dir, exist_ok=True)
+        
+        # Gather frames
+        frames = []
+        if os.path.isdir(self.mask_path):
+            frames = sorted([f for f in os.listdir(self.mask_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
+        else:
+            raise Exception("Expected a directory of alpha masks.")
 
-            total_frames = len(frames)
-            if total_frames == 0:
-                raise ValueError("No mask frames found.")
-                
-            reference_polygon = None
+        total_frames = len(frames)
+        if total_frames == 0:
+            raise ValueError("No mask frames found.")
             
-            self.log_message.emit(f"Extracting contours across {total_frames} frames...")
+        reference_polygon = None
+        
+        self.log_message.emit(self.node_id, f"Extracting contours across {total_frames} frames...")
+        
+        all_shapes = {}
+        
+        for i, f_name in enumerate(frames):
+            if self.is_cancelled:
+                self.log_message.emit(self.node_id, "Roto extraction cancelled.")
+                return
+                
+            frame_path = os.path.join(self.mask_path, f_name)
             
-            all_shapes = {}
-            
-            for i, f_name in enumerate(frames):
-                if self.is_cancelled:
-                    self.log_message.emit("Roto extraction cancelled.")
-                    return
-                    
-                frame_path = os.path.join(self.mask_path, f_name)
+            # Use IMREAD_UNCHANGED to read potential 16-bit or alpha channels
+            img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
+            if img is None:
+                continue
                 
-                # Use IMREAD_UNCHANGED to read potential 16-bit or alpha channels
-                img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-                if img is None:
-                    continue
-                    
-                # If 3 or 4 channels, grab alpha or average
-                if len(img.shape) == 3:
-                    if img.shape[2] == 4:
-                        img = img[:, :, 3]
-                    else:
-                        img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                
-                # Ensure 8-bit
-                if img.dtype != np.uint8:
-                    if img.dtype == np.uint16:
-                        img = (img / 256).astype(np.uint8)
-                    else:
-                        img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
-                    
-                # Threshold to ensure binary
-                _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
-                
-                # Find contours
-                contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                
-                # Filter by area
-                valid_contours = [c for c in contours if cv2.contourArea(c) >= min_area]
-                
-                if valid_contours:
-                    # Take the largest contour
-                    largest_contour = max(valid_contours, key=cv2.contourArea)
-                    
-                    # Simplify
-                    if epsilon > 0:
-                        largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
-                        
-                    # Resample to target points
-                    resampled = self._resample_polygon(largest_contour, target_points)
-                    
-                    # Align with reference
-                    if reference_polygon is not None:
-                        resampled = self._align_polygon(resampled, reference_polygon)
-                        
-                    reference_polygon = resampled
-                    
-                    # Store (y-axis inverted for Nuke compatibility usually done in exporter, so we keep raw pixel coords here)
-                    all_shapes[i] = resampled.tolist()
+            # If 3 or 4 channels, grab alpha or average
+            if len(img.shape) == 3:
+                if img.shape[2] == 4:
+                    img = img[:, :, 3]
                 else:
-                    # No shape found, repeat last frame to maintain shape existence
-                    if reference_polygon is not None:
-                        all_shapes[i] = reference_polygon.tolist()
-                        
-                self.progress_update.emit(i + 1, total_frames)
-                
-            # Save to JSON
-            out_file = os.path.join(out_dir, "shapes.json")
-            with open(out_file, "w") as f:
-                json.dump(all_shapes, f)
-                
-            self.log_message.emit(f"Successfully generated animated shape data.")
-            self.finished_processing.emit()
+                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            self.error_occurred.emit(str(e))
+            # Ensure 8-bit
+            if img.dtype != np.uint8:
+                if img.dtype == np.uint16:
+                    img = (img / 256).astype(np.uint8)
+                else:
+                    img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+                
+            # Threshold to ensure binary
+            _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+            
+            # Find contours
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            # Filter by area
+            valid_contours = [c for c in contours if cv2.contourArea(c) >= min_area]
+            
+            if valid_contours:
+                # Take the largest contour
+                largest_contour = max(valid_contours, key=cv2.contourArea)
+                
+                # Simplify
+                if epsilon > 0:
+                    largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
+                    
+                # Resample to target points
+                resampled = self._resample_polygon(largest_contour, target_points)
+                
+                # Align with reference
+                if reference_polygon is not None:
+                    resampled = self._align_polygon(resampled, reference_polygon)
+                    
+                reference_polygon = resampled
+                
+                # Store (y-axis inverted for Nuke compatibility usually done in exporter, so we keep raw pixel coords here)
+                all_shapes[i] = resampled.tolist()
+                
+                # Draw preview
+                preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+                pts_int = resampled.astype(np.int32).reshape((-1, 1, 2))
+                cv2.polylines(preview, [pts_int], isClosed=True, color=(0, 255, 0), thickness=2)
+                
+                # Optional: blend with original mask
+                mask_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+                preview = cv2.addWeighted(mask_bgr, 0.3, preview, 0.7, 0)
+                
+                cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+            else:
+                # No shape found, repeat last frame to maintain shape existence
+                if reference_polygon is not None:
+                    all_shapes[i] = reference_polygon.tolist()
+                    
+                    # Draw preview of repeated shape
+                    preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+                    pts_int = reference_polygon.astype(np.int32).reshape((-1, 1, 2))
+                    cv2.polylines(preview, [pts_int], isClosed=True, color=(0, 255, 0), thickness=2)
+                    cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+                else:
+                    preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+                    cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+                    
+            self.progress_update.emit(self.node_id, i + 1, total_frames)
+            
+        # Save format dims for Nuke exporter
+        if frames:
+            first_frame_path = os.path.join(self.mask_path, frames[0])
+            first_img = cv2.imread(first_frame_path, cv2.IMREAD_UNCHANGED)
+            if first_img is not None:
+                all_shapes["format_width"] = int(first_img.shape[1])
+                all_shapes["format_height"] = int(first_img.shape[0])
+            
+        # Save to JSON
+        out_file = os.path.join(out_dir, "shapes.json")
+        with open(out_file, "w") as f:
+            json.dump(all_shapes, f)
+            
+        self.log_message.emit(self.node_id, f"Successfully generated animated shape data.")

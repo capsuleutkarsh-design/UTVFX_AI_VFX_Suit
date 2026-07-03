@@ -1,0 +1,14 @@
+{
+    "name": "Media Plate",
+    "plugin_type": "media_plate",
+    "category": "🎬 Media",
+    "color": "#64748b",
+    "inputs": [],
+    "outputs": ["Video Plate"],
+    "parameters": [
+        {"id": "plate_file", "name": "Media File", "type": "file", "value": ""},
+        {"id": "is_sequence", "name": "Load as Image Sequence", "type": "checkbox", "value": false}
+    ],
+    "worker_module": "plugins.MediaPlate.backend",
+    "worker_class": "MediaWorker"
+}

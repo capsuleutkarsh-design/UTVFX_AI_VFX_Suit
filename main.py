@@ -8,28 +8,29 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QSplitter, QFrame, QLabel, QPushButton, QMessageBox, QFileDialog
 )
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Slot
 from PySide6.QtGui import QIcon, QFontDatabase, QColor, QShortcut, QKeySequence
 
 # Add current dir to path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from core_ui.media_panel import MediaPanel
-from core_ui.viewport import Viewport
-from core_ui.node_graph import NodeScene, NodeView
-from core_ui.properties_panel import PropertiesPanel
-from core_ui.data_model import NODES_REGISTRY
-from core_ui.execution_engine import ExecutionEngine
-from core_ui.render_queue import RenderQueueDialog
-from core_ui.commands import create_undo_stack
-from core_ui.model_downloader_ui import ModelDownloaderDialog
+from utvfx.ui.panels.media_panel import MediaPanel
+from utvfx.ui.viewport import Viewport
+from utvfx.ui.node_graph import NodeScene, NodeView
+from utvfx.ui.panels.properties_panel import PropertiesPanel
+from utvfx.core.data_model import NODES_REGISTRY
+from utvfx.core.execution_engine import ExecutionEngine
+from utvfx.ui.windows.render_queue import RenderQueueDialog
+from utvfx.core.commands import create_undo_stack
+from utvfx.ui.windows.model_downloader_ui import ModelDownloaderDialog
 
 class VFXCoreWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VFX . CORE / workspace")
-        self.setMinimumSize(1280, 800)
-        
+        # Main Setup
+        self.setWindowTitle("UTVFX AI & VFX TOOL // v1.2")
+        self.setMinimumSize(800, 600)
+        self.resize(1280, 800)
         # Apply the icon
         icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "app_icon.ico")
         if os.path.exists(icon_path):
@@ -70,7 +71,46 @@ class VFXCoreWindow(QMainWindow):
         
         self.setup_connections()
         
+        # Validate that heavy AI model weights exist
+        self.check_models()
+        
         # The graph will start empty. Users can add nodes via the Media Panel.
+
+    def check_models(self):
+        try:
+            from scripts.first_setup import MODELS
+            missing = []
+            for item in MODELS:
+                if item["type"] == "file":
+                    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["path"])
+                    if not os.path.exists(path):
+                        missing.append(item["name"])
+                elif item["type"] == "zip_extract":
+                    if item["path"].endswith(".exe"):
+                        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["path"])
+                        if not os.path.exists(path):
+                            missing.append(item["name"])
+                    else:
+                        # Users often manually extract zip files, creating nested folders.
+                        # Do a recursive search in the plugin's base folder to find the final_name.
+                        plugin_parts = os.path.normpath(item["path"]).split(os.sep)
+                        # e.g., "plugins/3DTracker/..." -> check inside "plugins/3DTracker"
+                        plugin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), *plugin_parts[:2])
+                        
+                        found = False
+                        if os.path.exists(plugin_dir):
+                            for root, _, files in os.walk(plugin_dir):
+                                if item["final_name"] in files:
+                                    found = True
+                                    break
+                        if not found:
+                            missing.append(item["name"])
+                        
+            if missing:
+                QMessageBox.warning(self, "Missing AI Models", 
+                    f"The following required AI models/binaries are missing:\n\n{chr(10).join(missing)}\n\nPlease run 'python first_setup.py' or open Settings to download them to avoid crashes.")
+        except Exception as e:
+            print(f"Failed to validate models on startup: {e}")
 
     def setup_ui(self):
         central = QWidget()
@@ -84,7 +124,7 @@ class VFXCoreWindow(QMainWindow):
         nav.setFixedHeight(56)
         nav.setStyleSheet("background-color: #0d0d0f; border-bottom: 1px solid #27272a;")
         nav_layout = QHBoxLayout(nav)
-        nav_layout.setContentsMargins(20, 0, 20, 0)
+        nav_layout.setContentsMargins(10, 5, 10, 5)
         
         self.logo = QLabel("VFX.CORE — untitled.utvfx")
         self.logo.setStyleSheet("font-family: 'Space Grotesk'; font-size: 16px; font-weight: bold; color: #fafafa; letter-spacing: 2px;")
@@ -99,7 +139,7 @@ class VFXCoreWindow(QMainWindow):
                 background-color: #18181b;
                 color: #a1a1aa;
                 border: 1px solid #3f3f46;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -116,7 +156,7 @@ class VFXCoreWindow(QMainWindow):
                 background-color: #18181b;
                 color: #a1a1aa;
                 border: 1px solid #3f3f46;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -127,15 +167,15 @@ class VFXCoreWindow(QMainWindow):
         self.btn_redo.clicked.connect(self.undo_stack.redo)
         nav_layout.addWidget(self.btn_redo)
         
-        nav_layout.addSpacing(20)
+        nav_layout.addSpacing(10)
         
-        self.btn_save = QPushButton("💾 Save Project")
+        self.btn_save = QPushButton("💾 Save")
         self.btn_save.setStyleSheet("""
             QPushButton {
                 background-color: #27272a;
                 color: #fafafa;
                 border: 1px solid #3f3f46;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -145,13 +185,13 @@ class VFXCoreWindow(QMainWindow):
         self.btn_save.clicked.connect(self.save_project)
         nav_layout.addWidget(self.btn_save)
         
-        self.btn_load = QPushButton("📂 Load Project")
+        self.btn_load = QPushButton("📂 Load")
         self.btn_load.setStyleSheet("""
             QPushButton {
                 background-color: #27272a;
                 color: #fafafa;
                 border: 1px solid #3f3f46;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -167,7 +207,7 @@ class VFXCoreWindow(QMainWindow):
                 background-color: #3b82f6;
                 color: #ffffff;
                 border: 1px solid #2563eb;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -177,13 +217,13 @@ class VFXCoreWindow(QMainWindow):
         self.btn_settings.clicked.connect(self.open_settings)
         nav_layout.addWidget(self.btn_settings)
         
-        self.btn_queue = QPushButton("▶ Render Queue")
+        self.btn_queue = QPushButton("▶ Render")
         self.btn_queue.setStyleSheet("""
             QPushButton {
                 background-color: #f59e0b;
                 color: #ffffff;
                 border: 1px solid #d97706;
-                padding: 10px 16px;
+                padding: 6px 12px;
                 border-radius: 4px;
                 font-family: 'Inter';
                 font-weight: bold;
@@ -200,7 +240,8 @@ class VFXCoreWindow(QMainWindow):
         
         # 1. Left Dock
         self.media_panel = MediaPanel()
-        self.media_panel.setMinimumWidth(280)
+        self.media_panel.setMinimumWidth(200)
+        self.media_panel.setMaximumWidth(350)
         self.main_splitter.addWidget(self.media_panel)
         
         # 2. Center Splitter
@@ -224,8 +265,8 @@ class VFXCoreWindow(QMainWindow):
         gt_layout = QHBoxLayout(g_toolbar)
         gt_layout.setContentsMargins(20,0,20,0)
         
-        lbl_graph = QLabel("⚙ PIPELINE FLOW GRAPH //")
-        lbl_graph.setStyleSheet("font-family: 'Space Grotesk'; font-size: 11px; font-weight: bold; color: #f59e0b; letter-spacing: 2px;")
+        lbl_graph = QLabel("⚙ PIPELINE FLOW GRAPH")
+        lbl_graph.setStyleSheet("font-family: 'Space Grotesk'; font-size: 11px; font-weight: bold; color: #f59e0b; letter-spacing: 1px;")
         gt_layout.addWidget(lbl_graph)
         gt_layout.addStretch()
         
@@ -246,11 +287,15 @@ class VFXCoreWindow(QMainWindow):
         
         # 3. Right Dock
         self.properties_panel = PropertiesPanel()
-        self.properties_panel.setMinimumWidth(320)
+        self.properties_panel.setMinimumWidth(250)
+        self.properties_panel.setMaximumWidth(400)
         self.main_splitter.addWidget(self.properties_panel)
         
-        # Set Splitter Sizes (approx: 300px, 1fr, 350px)
-        self.main_splitter.setSizes([300, 800, 350])
+        # Set Splitter Sizes (approx: 250px, 1fr, 300px)
+        self.main_splitter.setSizes([250, 600, 300])
+        self.main_splitter.setStretchFactor(0, 0)
+        self.main_splitter.setStretchFactor(1, 1)
+        self.main_splitter.setStretchFactor(2, 0)
         self.center_splitter.setSizes([400, 400])
         
         main_layout.addWidget(self.main_splitter)
@@ -305,20 +350,32 @@ class VFXCoreWindow(QMainWindow):
         self.media_panel.add_node_requested.connect(self.spawn_node)
         self.node_scene.signals.nodeSelected.connect(self.properties_panel.set_node)
         self.node_scene.signals.nodeSelected.connect(self.viewport.connect_to_node)
+        self.node_scene.signals.viewerHotkey.connect(self._on_viewer_hotkey)
         self.properties_panel.execute_node_requested.connect(self._on_execute_node_requested)
         self.properties_panel.cancel_execution_requested.connect(self.execution_engine.cancel_execution)
         self.execution_engine.log_message.connect(self.properties_panel.append_console_log)
+        self.execution_engine.node_execution_started.connect(self._on_node_execution_started)
         self.execution_engine.node_execution_progress.connect(self.properties_panel.update_progress)
+        self.execution_engine.node_execution_progress.connect(self._on_node_execution_progress)
+        self.execution_engine.node_execution_finished.connect(self._on_node_execution_finished)
+        
         self.undo_stack.indexChanged.connect(self.properties_panel.refresh_ui)
         self.node_scene.signals.queueNodeRequested.connect(self.render_queue.add_node)
+        self.node_scene.signals.fileDropped.connect(self._on_file_dropped)
         self.btn_queue.clicked.connect(self.render_queue.show)
         
         # Interactive Live Preview Routing
         self.viewport.interaction_requested.connect(self.execution_engine.handle_interaction)
         self.execution_engine.interactive_mask_ready.connect(self.viewport.receive_interactive_mask)
 
+    @Slot(object, int)
+    def _on_viewer_hotkey(self, node, key_num):
+        # In a multi-input viewer, we'd map key_num to a specific input.
+        # For now, any number 1-9 just connects the node to the main viewport.
+        self.viewport.connect_to_node(node)
+
     def open_settings(self):
-        from core_ui.settings_ui import SettingsDialog
+        from utvfx.ui.windows.settings_ui import SettingsDialog
         dialog = SettingsDialog(self, download_callback=self.open_model_downloader)
         dialog.exec()
 
@@ -335,8 +392,34 @@ class VFXCoreWindow(QMainWindow):
                 node.params["end_frame"] = str(self.viewport.timeline._out_frame + 1)
             self.properties_panel.refresh_ui()
         self.execution_engine.execute_node(node_id)
+        
+    def _on_node_execution_started(self, node_id):
+        for n in self.node_scene.nodes:
+            if n.node_id == node_id:
+                if hasattr(n, 'set_execution_state'):
+                    n.set_execution_state(True, 0)
+                break
+                
+    def _on_node_execution_progress(self, node_id, percentage):
+        for n in self.node_scene.nodes:
+            if n.node_id == node_id:
+                if hasattr(n, 'set_execution_state'):
+                    n.set_execution_state(True, percentage)
+                break
+                
+    def _on_node_execution_finished(self, node_id):
+        for n in self.node_scene.nodes:
+            if n.node_id == node_id:
+                if hasattr(n, 'set_execution_state'):
+                    n.set_execution_state(False, 0)
+                break
+        
+    def _on_file_dropped(self, file_path, pos):
+        params = {"plate_file": file_path}
+        # Call spawn_node directly, mapping the position to where it was dropped
+        self.spawn_node("media_plate", params=params, override_pos=(pos["x"], pos["y"]))
 
-    def spawn_node(self, plugin_type, params=None):
+    def spawn_node(self, plugin_type, params=None, override_pos=None):
         if params is None:
             params = {}
             
@@ -351,12 +434,15 @@ class VFXCoreWindow(QMainWindow):
         # Merge with any passed parameters (e.g. plate_file)
         default_params.update(params)
             
-        # Spawn at center of view
-        center = self.node_view.mapToScene(self.node_view.viewport().rect().center())
-        
-        # Offset to prevent perfect overlap
-        offset = len(self.node_scene.nodes) * 20
-        pos = center.x() + offset, center.y() + offset
+        if override_pos is not None:
+            pos = override_pos
+        else:
+            # Spawn at center of view
+            center = self.node_view.mapToScene(self.node_view.viewport().rect().center())
+            
+            # Offset to prevent perfect overlap
+            offset = len(self.node_scene.nodes) * 20
+            pos = center.x() + offset, center.y() + offset
         
         node_data = {
             "name": p_def["name"],
@@ -368,7 +454,7 @@ class VFXCoreWindow(QMainWindow):
         }
         
         if self.undo_stack:
-            from core_ui.commands import AddNodeCommand
+            from utvfx.core.commands import AddNodeCommand
             cmd = AddNodeCommand(self.node_scene, node_data)
             self.undo_stack.push(cmd)
         else:
@@ -377,7 +463,7 @@ class VFXCoreWindow(QMainWindow):
                 name=p_def["name"],
                 plugin_type=plugin_type,
                 inputs=p_def.get("inputs", []),
-                outputs=p_def.get("outputs", []),
+                outputs=p_def.get("workspace", "outputs", []),
                 color=p_def.get("color", "#f59e0b"),
                 pos=pos
             )
@@ -415,7 +501,7 @@ class VFXCoreWindow(QMainWindow):
                 
         # Shut down AI Bridge if running
         try:
-            from core_ui.ai_bridge_client import AIBridgeClient
+            from utvfx.bridge.ai_bridge_client import AIBridgeClient
             bridge = AIBridgeClient._instance
             if bridge: bridge.shutdown()
         except Exception:
@@ -425,6 +511,18 @@ class VFXCoreWindow(QMainWindow):
         for thread in threading.enumerate():
             if thread.__class__.__name__ == 'GradioThread':
                 if hasattr(thread, 'stop'): thread.stop()
+                
+        # Clean up temporary interactive files
+        try:
+            import glob
+            temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace", "temp")
+            for f in glob.glob(os.path.join(temp_dir, "utvfx_*")):
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        except Exception:
+            pass
                     
         event.accept()
 
@@ -465,11 +563,12 @@ class VFXCoreWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet("* { outline: none; }")
     
     # Optional: Load font families if they exist locally
     # QFontDatabase.addApplicationFont("fonts/Inter-Regular.ttf")
     # QFontDatabase.addApplicationFont("fonts/SpaceGrotesk-Bold.ttf")
     
     window = VFXCoreWindow()
-    window.show()
+    window.showMaximized()
     sys.exit(app.exec())

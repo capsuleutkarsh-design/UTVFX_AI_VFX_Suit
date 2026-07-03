@@ -1,0 +1,14 @@
+{
+    "name": "Depth Anything V2",
+    "plugin_type": "ai_depth_estimator",
+    "category": "🌊 Depth",
+    "color": "#8b5cf6",
+    "inputs": ["Video Plate"],
+    "outputs": ["Dense Depth Map"],
+    "parameters": [
+        {"id": "model_size", "name": "Model Architecture", "type": "select", "value": "Small (vits)", "options": ["Small (vits)", "Base (vitb)", "Large (vitl)"]},
+        {"id": "invert_depth", "name": "Invert Depth", "type": "checkbox", "value": false}
+    ],
+    "worker_module": "plugins.DepthEstimator.backend",
+    "worker_class": "DepthWorker"
+}

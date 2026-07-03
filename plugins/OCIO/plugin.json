@@ -1,0 +1,14 @@
+{
+    "name": "OCIO ColorSpace",
+    "plugin_type": "ocio_colorspace",
+    "category": "🎨 Color",
+    "color": "#ec4899",
+    "inputs": ["Image"],
+    "outputs": ["Image"],
+    "parameters": [
+        {"id": "in_space", "name": "Input Color Space", "type": "select", "value": "linear", "options": ["linear", "sRGB", "Rec709", "ACEScg"]},
+        {"id": "out_space", "name": "Output Color Space", "type": "select", "value": "sRGB", "options": ["linear", "sRGB", "Rec709", "ACEScg"]}
+    ],
+    "worker_module": "plugins.OCIO.backend",
+    "worker_class": "OCIOWorker"
+}

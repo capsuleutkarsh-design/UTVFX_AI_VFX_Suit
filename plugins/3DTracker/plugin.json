@@ -1,0 +1,18 @@
+{
+    "name": "3D Camera Tracker",
+    "plugin_type": "sfm_tracker",
+    "category": "📍 Tracking",
+    "color": "#eab308",
+    "inputs": ["Video Plate"],
+    "outputs": ["3D Camera Path", "3D Sparse Points"],
+    "parameters": [
+        {"id": "mapper_engine", "name": "Mapping Engine", "type": "radio", "value": "GLOMAP (Fast)", "options": ["COLMAP (Incremental)", "GLOMAP (Fast)"]},
+        {"id": "feature_type", "name": "Feature Extractor Algo", "type": "select", "value": "SIFT (GPU)", "options": ["SIFT (GPU)", "DSP-SIFT", "SuperPoint AI"]},
+        {"id": "max_features", "name": "Max Features Per Frame", "type": "slider", "value": 2000, "min": 500, "max": 10000, "step": 500},
+        {"id": "match_type", "name": "Vocab Tree Match Mode", "type": "select", "value": "Sequential", "options": ["Sequential", "Exhaustive", "Spatial Neighbors"]},
+        {"id": "min_tri_angle", "name": "Min Triangulation Angle", "type": "slider", "value": 1.5, "min": 0.5, "max": 5.0, "step": 0.1},
+        {"id": "ba_iterations", "name": "Bundle Adjuster Steps", "type": "slider", "value": 100, "min": 20, "max": 300, "step": 10}
+    ],
+    "worker_module": "plugins.3DTracker.backend",
+    "worker_class": "TrackerWorker"
+}

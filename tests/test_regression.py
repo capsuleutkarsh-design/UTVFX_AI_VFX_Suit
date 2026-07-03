@@ -47,7 +47,7 @@ class TestRegression(unittest.TestCase):
         self.assertEqual(mask_keyframes[5], [(0.5, 0.5, True)])
 
     def test_playhead_clamping(self):
-        from core_ui.viewport import VideoPlayerThread
+        from utvfx.ui.viewport import VideoPlayerThread
         thread = VideoPlayerThread(os.path.dirname(__file__))
         thread.total_frames = 5
         thread.read_and_emit(20)
