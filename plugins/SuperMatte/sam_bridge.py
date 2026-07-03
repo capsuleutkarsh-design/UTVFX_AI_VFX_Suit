@@ -80,33 +80,20 @@ class SAM3Predictor:
         with torch.no_grad():
             outputs = self.model(**inputs)
             
-        reshaped_sizes = inputs.get("reshaped_input_sizes", inputs.get("reshaped_input_size"))
-        if reshaped_sizes is None:
-            reshaped_sizes = torch.tensor([inputs["pixel_values"].shape[-2:]], device="cpu")
-        else:
-            reshaped_sizes = reshaped_sizes.cpu()
-            
-        # outputs.pred_masks could be (B, N, H, W). post_process_masks expects (B, N, C, H, W) or masks[i] to be 4D
-        pred_masks = outputs.pred_masks.cpu()
-        if pred_masks.dim() == 4:
-            # (B, N, H, W) -> (B, N, 1, H, W)
-            pred_masks = pred_masks.unsqueeze(2)
-            
-        try:
-            masks = self.processor.image_processor.post_process_masks(
-                pred_masks,
-                inputs["original_sizes"].cpu(),
-                reshaped_input_sizes=reshaped_sizes
-            )
-        except TypeError:
-            masks = self.processor.image_processor.post_process_masks(
-                pred_masks,
-                inputs["original_sizes"].cpu()
-            )
+        original_size = inputs["original_sizes"][0].tolist() # (H, W)
+        results = self.processor.image_processor.post_process_instance_segmentation(
+            outputs, 
+            threshold=0.0, # Get all masks to pick best
+            target_sizes=[(original_size[0], original_size[1])]
+        )
         
-        mask_tensor = masks[0][0]
-        mask_np = mask_tensor[0].numpy()
-        return mask_np
+        result = results[0]
+        if len(result["scores"]) == 0:
+            return np.zeros((original_size[0], original_size[1]), dtype=bool)
+            
+        best_mask_idx = torch.argmax(result["scores"]).item()
+        mask_tensor = result["masks"][best_mask_idx].cpu().detach().numpy()
+        return mask_tensor.astype(bool)
 
 
 def main():
