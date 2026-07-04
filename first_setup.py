@@ -219,7 +219,7 @@ def download_models():
         {"name": "UV Package Manager", "type": "zip_extract", "url": "https://github.com/astral-sh/uv/releases/download/0.1.39/uv-x86_64-pc-windows-msvc.zip", "extract_target": "uv.exe", "final_name": "tools/uv.exe"},
         
         # Additional HuggingFace Repos (SAM 3, GroundingDINO)
-        {"name": "SAM 3 Weights", "type": "hf_repo", "repo_id": "meta-llama/Llama-3.2-11B-Vision-Instruct", "local_dir": "models/SAM3"},
+        {"name": "SAM 3 Weights", "type": "hf_repo", "repo_id": "1038lab/sam3", "local_dir": "models/SAM3"},
         {"name": "GroundingDINO Weights", "type": "hf_repo", "repo_id": "IDEA-Research/grounding-dino-base", "local_dir": "models/GroundingDINO"}
     ]
     
