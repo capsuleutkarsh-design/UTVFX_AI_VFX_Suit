@@ -6,14 +6,22 @@
     "inputs": ["Video Plate"],
     "outputs": ["Alpha Matte"],
     "parameters": [
-        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 3 (ViT-B)"]},
+        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 2 (Hiera Large)", "SAM 3 (ViT-B)"]},
+        {"id": "refiner_model", "name": "Refiner Model", "tab": "Main Settings", "type": "select", "value": "ViTMatte", "options": ["ViTMatte", "MEMatte"]},
+        {"id": "text_prompt", "name": "Text Prompt (GroundingDINO)", "tab": "Main Settings", "type": "text", "value": ""},
         {"id": "bg_color", "name": "Background Color", "tab": "Main Settings", "type": "color", "value": "#6aff9b"},
         {"id": "prompt_points", "name": "Prompt Points", "tab": "Main Settings", "type": "text", "value": "Use AI Bridge to add points"},
         {"id": "mask_layers", "name": "Mask Layers", "tab": "Main Settings", "type": "layer_manager", "value": []},
         
         {"id": "trimap_dilate", "name": "Trimap Dilate Size", "tab": "Advanced Processing", "type": "slider", "value": 10, "min": 1, "max": 50, "step": 1},
         {"id": "trimap_erode", "name": "Trimap Erode Size", "tab": "Advanced Processing", "type": "slider", "value": 10, "min": 1, "max": 50, "step": 1},
-        {"id": "fill_holes", "name": "Fill Holes in SAM Mask", "tab": "Advanced Processing", "type": "checkbox", "value": true}
+        {"id": "fill_holes", "name": "Fill Holes in SAM Mask", "tab": "Advanced Processing", "type": "checkbox", "value": true},
+        
+        {"id": "feathering", "name": "Feathering", "tab": "Edge Controls", "type": "slider", "value": 0, "min": 0, "max": 50, "step": 1},
+        {"id": "shrink_grow", "name": "Alpha Shrink/Grow", "tab": "Edge Controls", "type": "slider", "value": 0, "min": -20, "max": 20, "step": 1},
+        {"id": "threshold", "name": "Threshold", "tab": "Edge Controls", "type": "slider", "value": 128, "min": 0, "max": 255, "step": 1},
+        {"id": "contrast", "name": "Contrast", "tab": "Edge Controls", "type": "slider", "value": 100, "min": 50, "max": 300, "step": 1},
+        {"id": "temporal_smoothing", "name": "Temporal Stabilization", "tab": "Edge Controls", "type": "checkbox", "value": false}
     ],
     "worker_module": "plugins.SuperMatte.backend",
     "worker_class": "SuperMatteWorker"

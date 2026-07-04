@@ -399,6 +399,17 @@ class InteractiveVideoCanvas(QWidget):
                     norm_x = click_x / drawn_w
                     norm_y = click_y / drawn_h
                     
+                    tool_mode = "Point"
+                    if self.parent() and hasattr(self.parent(), "current_node") and self.parent().current_node:
+                        tool_mode = self.parent().current_node.params.get("tool_mode", "Point")
+                        
+                    if tool_mode == "Box":
+                        self.drag_start_pos = (norm_x, norm_y)
+                        self.drag_current_pos = (norm_x, norm_y)
+                        self.is_drawing_box = True
+                        self.update()
+                        return
+                    
                     is_positive = (event.modifiers() != Qt.ShiftModifier)
                     
                     active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
@@ -418,6 +429,28 @@ class InteractiveVideoCanvas(QWidget):
         super().mousePressEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if getattr(self, 'is_drawing_box', False):
+            self.is_drawing_box = False
+            
+            x1 = min(self.drag_start_pos[0], self.drag_current_pos[0])
+            y1 = min(self.drag_start_pos[1], self.drag_current_pos[1])
+            x2 = max(self.drag_start_pos[0], self.drag_current_pos[0])
+            y2 = max(self.drag_start_pos[1], self.drag_current_pos[1])
+            
+            if x2 - x1 > 0.01 and y2 - y1 > 0.01:
+                active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
+                if active_layer:
+                    if "keyframes" not in active_layer:
+                        active_layer["keyframes"] = {}
+                    if self.current_frame not in active_layer["keyframes"]:
+                        active_layer["keyframes"][self.current_frame] = []
+                        
+                    active_layer["keyframes"][self.current_frame].append((x1, y1, x2, y2, "box"))
+                    self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
+                    self.interaction_requested.emit(self.current_frame, active_layer["keyframes"][self.current_frame])
+            self.update()
+            return
+            
         self.is_dragging_wipe = False
         if event.button() in (Qt.MiddleButton, Qt.RightButton):
             self.last_mouse_pos = None
@@ -498,6 +531,11 @@ class InteractiveVideoCanvas(QWidget):
         if self.is_interactive:
             for layer in self.mask_layers:
                 is_active = (layer["id"] == self.active_layer_id)
+                
+                # Hide points from inactive layers
+                if not is_active:
+                    continue
+                    
                 points = layer.get("keyframes", {}).get(self.current_frame, [])
                 layer_color = QColor(layer.get("color", "#ffffff"))
                 

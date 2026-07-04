@@ -73,7 +73,7 @@ class AIBridgeClient:
                 
         return False
         
-    def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None, sam_version="SAM 1 (ViT-H)"):
+    def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None, sam_version="SAM 1 (ViT-H)", boxes=None, text_prompt=""):
         """
         Sends coordinates to the persistent server and returns a QImage overlay mask.
         """
@@ -90,6 +90,10 @@ class AIBridgeClient:
                 "labels": labels,
                 "mask_out_path": temp_mask
             }
+            if boxes is not None:
+                payload["boxes"] = boxes
+            if text_prompt:
+                payload["text_prompt"] = text_prompt
             
             try:
                 self.process.stdin.write(json.dumps(payload) + "\n")
@@ -108,6 +112,47 @@ class AIBridgeClient:
                         resp = json.loads(resp_line)
                         if resp.get("status") == "ok":
                             return self._process_mask_to_qimage(temp_mask, fill_color_hex)
+                        else:
+                            print(f"[AI Bridge Error] {resp.get('error')}")
+                            print(f"[AI Bridge Traceback] {resp.get('traceback')}")
+                            return None
+                    else:
+                        print(f"[AI Bridge Debug] {resp_line}")
+                        
+            except Exception as e:
+                print(f"[AI Bridge Exception] {str(e)}")
+                return None
+                
+    def auto_scan(self, image_path, sam_version="SAM 3 (ViT-B)"):
+        """
+        Requests the backend to auto-scan the image and return a list of top object points.
+        Returns: list of (x_norm, y_norm, score)
+        """
+        with self.lock:
+            if not self._start_server_if_needed(sam_version):
+                return None
+                
+            payload = {
+                "action": "auto_scan",
+                "image_path": image_path
+            }
+            
+            try:
+                self.process.stdin.write(json.dumps(payload) + "\n")
+                self.process.stdin.flush()
+                
+                while True:
+                    resp_line = self.process.stdout.readline()
+                    if not resp_line:
+                        return None
+                        
+                    resp_line = resp_line.strip()
+                    if not resp_line: continue
+                    
+                    if resp_line.startswith("{"):
+                        resp = json.loads(resp_line)
+                        if resp.get("status") == "ok":
+                            return resp.get("objects", [])
                         else:
                             print(f"[AI Bridge Error] {resp.get('error')}")
                             print(f"[AI Bridge Traceback] {resp.get('traceback')}")
