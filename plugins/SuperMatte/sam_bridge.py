@@ -43,7 +43,7 @@ class SAM1Predictor:
             
         sam = sam_model_registry[sam_model_type](checkpoint=expected_path)
         
-        onnx_encoder_path = os.path.join(ROOT_DIR, "models", "sam_vit_h_encoder.onnx")
+        onnx_encoder_path = os.path.join(ROOT_DIR, "models", "ONNX_Exports", "sam_vit_h_encoder.onnx")
         if os.path.exists(onnx_encoder_path):
             print("Using ONNX Image Encoder for SAM 1...")
             sam.image_encoder = ONNXImageEncoder(onnx_encoder_path)

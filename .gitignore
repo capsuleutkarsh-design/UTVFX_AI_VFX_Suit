@@ -11,7 +11,7 @@ build/UTVFX_AI_VFX_Tool/
 logs/
 outputs/
 cache/
-models/
+models/ONNX_Exports/
 .DS_Store
 Thumbs.db
 .agents/

@@ -72,7 +72,7 @@ class SuperMatteWorker(BaseWorker):
                 model.eval()
                 use_mematte = True
             elif refiner_mode == "ViTMatte (ONNX/TensorRT)":
-                onnx_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "vitmatte_base.onnx")
+                onnx_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "ONNX_Exports", "vitmatte_base.onnx")
                 if os.path.exists(onnx_path):
                     import onnxruntime as ort
                     providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']

@@ -2,7 +2,7 @@ import os
 import torch
 from transformers import VitMatteForImageMatting
 
-def export_vitmatte(model_id="hustvl/vitmatte-base-composition-1k", output_path="models/vitmatte_base.onnx"):
+def export_vitmatte(model_id="hustvl/vitmatte-base-composition-1k", output_path="models/ONNX_Exports/vitmatte_base.onnx"):
     print(f"Loading {model_id}...")
     model = VitMatteForImageMatting.from_pretrained(model_id, use_safetensors=True)
     model.eval()

@@ -11,7 +11,7 @@ sys.path.insert(0, SEGMENT_ANYTHING_DIR)
 
 from segment_anything import sam_model_registry
 
-def export_sam_encoder(model_type="vit_h", output_path="models/sam_vit_h_encoder.onnx"):
+def export_sam_encoder(model_type="vit_h", output_path="models/ONNX_Exports/sam_vit_h_encoder.onnx"):
     checkpoint = os.path.join(ROOT_DIR, "models", "SAM", "sam_vit_h_4b8939.pth")
     if not os.path.exists(checkpoint):
         print(f"Checkpoint not found at {checkpoint}")
