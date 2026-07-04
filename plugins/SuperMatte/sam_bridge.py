@@ -114,8 +114,8 @@ class SAM3Predictor:
                 best_mask_idx = i
                 
         if best_mask_idx == -1:
-            # Fallback if no mask perfectly matches points, just take the highest scoring mask overall
-            best_mask_idx = torch.argmax(result["scores"]).item()
+            # Fallback if no mask perfectly matches points: return empty mask instead of spilling everywhere
+            return np.zeros((original_size[0], original_size[1]), dtype=bool)
             
         mask_tensor = result["masks"][best_mask_idx].cpu().detach().numpy()
         return mask_tensor.astype(bool)
