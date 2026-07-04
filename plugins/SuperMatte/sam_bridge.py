@@ -60,21 +60,14 @@ class SAM3Predictor:
     def set_image(self, image_rgb):
         self.image = image_rgb
         
-    def predict(self, points, labels):
-        # SAM 3 in transformers only supports input_boxes and input_boxes_labels
-        # We must convert points to small bounding boxes
-        input_boxes = []
-        box_labels = []
-        for (x, y), label in zip(points, labels):
-            x, y, label = int(x), int(y), int(label)
-            # Create a 2x2 bounding box centered around the point
-            input_boxes.append([max(0, x - 1), max(0, y - 1), x + 1, y + 1])
-            box_labels.append(label)
-            
+        H, W = self.image.shape[:2]
+        
+        # SAM 3 (Transformers) does not support point prompts natively, and tiny bounding boxes 
+        # return empty masks. We pass a full-image bounding box so it segments all objects in the image.
         inputs = self.processor(
             images=self.image, 
-            input_boxes=[input_boxes], 
-            input_boxes_labels=[box_labels], 
+            input_boxes=[[[0, 0, W, H]]],
+            input_boxes_labels=[[1]], 
             return_tensors="pt"
         ).to(self.device)
         
@@ -84,7 +77,7 @@ class SAM3Predictor:
         original_size = inputs["original_sizes"][0].tolist() # (H, W)
         results = self.processor.image_processor.post_process_instance_segmentation(
             outputs, 
-            threshold=0.0, # Get all masks to pick best
+            threshold=0.0, # Get all masks to filter manually
             target_sizes=[(original_size[0], original_size[1])]
         )
         
@@ -92,7 +85,37 @@ class SAM3Predictor:
         if len(result["scores"]) == 0:
             return np.zeros((original_size[0], original_size[1]), dtype=bool)
             
-        best_mask_idx = torch.argmax(result["scores"]).item()
+        # Post-filter: find highest scoring mask that satisfies the point clicks
+        best_mask_idx = -1
+        best_score = -1.0
+        
+        for i in range(len(result["scores"])):
+            mask = result["masks"][i].cpu().detach().numpy()
+            score = result["scores"][i].item()
+            
+            # Check if mask satisfies points
+            valid = True
+            for (px, py), label in zip(points, labels):
+                px, py, label = int(px), int(py), int(label)
+                if px < 0 or px >= W or py < 0 or py >= H:
+                    continue
+                
+                # Check point condition
+                if label == 1 and mask[py, px] == 0:
+                    valid = False
+                    break
+                if label == 0 and mask[py, px] == 1:
+                    valid = False
+                    break
+                    
+            if valid and score > best_score:
+                best_score = score
+                best_mask_idx = i
+                
+        if best_mask_idx == -1:
+            # Fallback if no mask perfectly matches points, just take the highest scoring mask overall
+            best_mask_idx = torch.argmax(result["scores"]).item()
+            
         mask_tensor = result["masks"][best_mask_idx].cpu().detach().numpy()
         return mask_tensor.astype(bool)
 
