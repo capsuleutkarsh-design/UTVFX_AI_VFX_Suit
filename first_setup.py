@@ -11,33 +11,67 @@ def print_header(title):
     print(f" {title}")
     print("=" * 60)
 
-def setup_virtualenv():
-    print_header("Step 1: Setting up Virtual Environment")
-    venv_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "venv")
-    if not os.path.exists(venv_dir):
-        print("Creating virtual environment 'venv'...")
-        try:
-            subprocess.check_call([sys.executable, "-m", "venv", "venv"])
-            print("[OK] Virtual environment created successfully.")
-        except Exception as e:
-            print(f"[ERROR] Failed to create virtual environment: {e}")
-            sys.exit(1)
-    else:
-        print("[OK] Virtual environment 'venv' already exists.")
+def setup_python_base():
+    print_header("Step 1: Setting up Portable Python (python_base)")
+    base_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "python_base")
+    python_exe = os.path.join(base_dir, "python.exe")
+    
+    if os.path.exists(python_exe):
+        print("[OK] Portable Python 'python_base' already exists.")
+        return python_exe
 
-def install_requirements():
+    print("Downloading Python 3.10.11 Embeddable...")
+    python_zip = "python-3.10.11-embed.zip"
+    url = "https://www.python.org/ftp/python/3.10.11/python-3.10.11-embed-amd64.zip"
+    
+    try:
+        urllib.request.urlretrieve(url, python_zip)
+        print("[OK] Downloaded Python zip.")
+        
+        print("Extracting Python to python_base...")
+        with zipfile.ZipFile(python_zip, 'r') as zip_ref:
+            zip_ref.extractall(base_dir)
+        os.remove(python_zip)
+        
+        # Uncomment 'import site' in python310._pth to enable pip
+        pth_file = os.path.join(base_dir, "python310._pth")
+        if os.path.exists(pth_file):
+            with open(pth_file, "r") as f:
+                lines = f.readlines()
+            with open(pth_file, "w") as f:
+                for line in lines:
+                    if line.strip() == "#import site":
+                        f.write("import site\n")
+                    else:
+                        f.write(line)
+        print("[OK] Portable Python extracted and configured.")
+        
+        # Install pip
+        print("Downloading get-pip.py...")
+        get_pip_path = os.path.join(base_dir, "get-pip.py")
+        urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip_path)
+        
+        print("Installing pip...")
+        subprocess.check_call([python_exe, get_pip_path])
+        os.remove(get_pip_path)
+        print("[OK] Pip installed successfully.")
+        
+        return python_exe
+    except Exception as e:
+        print(f"[ERROR] Failed to setup python_base: {e}")
+        sys.exit(1)
+
+def install_requirements(python_exe):
     print_header("Step 2: Installing Dependencies")
-    venv_python = os.path.join("venv", "Scripts", "python.exe") if os.name == 'nt' else os.path.join("venv", "bin", "python")
     req_file = "requirements.txt"
     if not os.path.exists(req_file):
         print(f"[WARNING] {req_file} not found. Skipping dependency installation.")
         return
 
-    print("Installing required Python packages...")
+    print("Installing required Python packages into python_base...")
     try:
-        subprocess.check_call([venv_python, "-m", "pip", "install", "-r", req_file])
-        # Also ensure huggingface_hub is installed for model downloads
-        subprocess.check_call([venv_python, "-m", "pip", "install", "huggingface_hub"])
+        subprocess.check_call([python_exe, "-m", "pip", "install", "-r", req_file])
+        subprocess.check_call([python_exe, "-m", "pip", "install", "huggingface_hub"])
         print("[OK] Dependencies installed successfully.")
     except Exception as e:
         print(f"[ERROR] Failed to install dependencies: {e}")
@@ -143,7 +177,7 @@ snapshot_download(repo_id='{repo_id}', local_dir=r'{local_dir}')
 print('Download complete.')
 """
     try:
-        subprocess.check_call([venv_python, "-c", script])
+        subprocess.check_call([python_exe, "-c", script])
         print(f"[OK] Successfully downloaded {repo_id} to {local_dir}")
         return True
     except Exception as e:
@@ -204,8 +238,8 @@ def main():
     print(" UTVFX AI & VFX Suit - Universal Setup Script")
     print("=" * 60 + "\n")
     
-    setup_virtualenv()
-    install_requirements()
+    python_exe = setup_python_base()
+    install_requirements(python_exe)
     failed = download_models()
     
     print_header("Setup Complete")
@@ -213,11 +247,11 @@ def main():
         print("[ERROR] The following items failed to download correctly. You may need to run this script again or download them manually:")
         for f in failed:
             print(f"   - {f}")
-        print("\nOnce everything is resolved, you can start the software by running: `run.bat` or `venv\\Scripts\\python main.py`")
+        print("\nOnce everything is resolved, you can start the software by running: `run.bat`")
         sys.exit(1)
     else:
         print("[SUCCESS] Setup finished successfully! Everything is up to date.")
-        print("[RUN] You can now start the software by running: `run.bat` or `venv\\Scripts\\python main.py`")
+        print("[RUN] You can now start the software by running: `run.bat`")
 
 if __name__ == "__main__":
     main()
