@@ -13,6 +13,19 @@ PLUGINS_DIR = os.path.dirname(CURRENT_DIR)
 ROOT_DIR = os.path.dirname(PLUGINS_DIR)
 SEGMENT_ANYTHING_DIR = os.path.join(PLUGINS_DIR, "third_party", "segment-anything")
 
+class ONNXImageEncoder(torch.nn.Module):
+    def __init__(self, onnx_path):
+        super().__init__()
+        import onnxruntime as ort
+        providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+        self.session = ort.InferenceSession(onnx_path, providers=providers)
+        self.img_size = 1024
+        
+    def forward(self, x):
+        ort_inputs = {self.session.get_inputs()[0].name: x.cpu().numpy()}
+        ort_outs = self.session.run(None, ort_inputs)
+        return torch.from_numpy(ort_outs[0]).to(x.device)
+
 class SAM1Predictor:
     def __init__(self, device):
         sys.path.insert(0, SEGMENT_ANYTHING_DIR)
@@ -29,6 +42,12 @@ class SAM1Predictor:
             raise FileNotFoundError(f"Model checkpoint missing at '{expected_path}'.")
             
         sam = sam_model_registry[sam_model_type](checkpoint=expected_path)
+        
+        onnx_encoder_path = os.path.join(ROOT_DIR, "models", "sam_vit_h_encoder.onnx")
+        if os.path.exists(onnx_encoder_path):
+            print("Using ONNX Image Encoder for SAM 1...")
+            sam.image_encoder = ONNXImageEncoder(onnx_encoder_path)
+            
         sam.to(device=device)
         self.predictor = SamPredictor(sam)
         self.image = None
