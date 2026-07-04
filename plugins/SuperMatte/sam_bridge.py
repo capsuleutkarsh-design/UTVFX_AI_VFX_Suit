@@ -66,6 +66,7 @@ class SAM3Predictor:
         input_boxes = []
         box_labels = []
         for (x, y), label in zip(points, labels):
+            x, y, label = int(x), int(y), int(label)
             # Create a 2x2 bounding box centered around the point
             input_boxes.append([max(0, x - 1), max(0, y - 1), x + 1, y + 1])
             box_labels.append(label)
