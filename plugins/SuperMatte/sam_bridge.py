@@ -60,6 +60,7 @@ class SAM3Predictor:
     def set_image(self, image_rgb):
         self.image = image_rgb
         
+    def predict(self, points, labels):
         H, W = self.image.shape[:2]
         
         # SAM 3 (Transformers) does not support point prompts natively, and tiny bounding boxes 
