@@ -5,13 +5,14 @@ from PySide6.QtCore import Qt, QSize, Slot, QThread, Signal
 
 class ScanWorker(QThread):
     finished = Signal(object, int)
-    def __init__(self, client, f_path, frame_idx):
+    def __init__(self, client, f_path, frame_idx, text_prompt=""):
         super().__init__()
         self.client = client
         self.f_path = f_path
         self.frame_idx = frame_idx
+        self.text_prompt = text_prompt
     def run(self):
-        res = self.client.auto_scan(self.f_path)
+        res = self.client.auto_scan(self.f_path, self.text_prompt)
         self.finished.emit(res, self.frame_idx)
 
 class LayerItemWidget(QWidget):
@@ -202,7 +203,8 @@ class LayerManagerWidget(QWidget):
         self.btn_auto_scan.setEnabled(False)
         self.btn_auto_scan.setText("Scanning... (May take a few minutes)")
         
-        self.scan_thread = ScanWorker(client, f_path, frame_idx)
+        text_prompt = self.node.params.get("text_prompt", "")
+        self.scan_thread = ScanWorker(client, f_path, frame_idx, text_prompt)
         self.scan_thread.finished.connect(self.on_scan_finished)
         # Keep a strong reference on the persistent node object so the thread 
         # doesn't get destroyed if the user clicks away and this widget dies.
@@ -224,13 +226,23 @@ class LayerManagerWidget(QWidget):
         colors = ["#ef4444", "#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4"]
         layers = self.node.params.get(self.pid, [])
         new_layers_count = 0
-        for i, (nx, ny, score) in enumerate(objects):
+        for i, obj_data in enumerate(objects):
+            if len(obj_data) >= 4:
+                nx, ny, score, box = obj_data[0], obj_data[1], obj_data[2], obj_data[3]
+            else:
+                nx, ny, score = obj_data[0], obj_data[1], obj_data[2]
+                box = None
+                
             layer_id = f"layer_{uuid.uuid4().hex[:8]}"
             c = colors[i % len(colors)]
             name = f"Auto Object {len(layers)+1} ({(score*100):.1f}%)"
             
             # Create a keyframe at the current frame with the object's center point
-            keyframes = {frame_idx: [[nx, ny, 1]]}
+            kf_data = [[nx, ny, 1]]
+            if box:
+                kf_data.append([box[0], box[1], box[2], box[3], "box"])
+                
+            keyframes = {frame_idx: kf_data}
             layers.append({"id": layer_id, "name": name, "color": c, "keyframes": keyframes, "enabled": True})
             new_layers_count += 1
             

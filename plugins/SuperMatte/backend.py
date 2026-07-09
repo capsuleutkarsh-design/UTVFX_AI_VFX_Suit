@@ -254,6 +254,9 @@ class SuperMatteWorker(BaseWorker):
                             nx1, ny1, nx2, ny2, _ = pt_data
                             boxes_list.append([nx1 * w, ny1 * h, nx2 * w, ny2 * h])
                             
+                    if not pts_list and not boxes_list:
+                        continue
+                        
                     prompts.append({
                         "frame": f_idx,
                         "obj_id": i,
@@ -261,6 +264,9 @@ class SuperMatteWorker(BaseWorker):
                         "labels": lbls_list if lbls_list else None,
                         "box": boxes_list[0] if boxes_list else None
                     })
+                    
+            if not prompts:
+                raise Exception("No points or boxes found. Please add points or use Auto-Scan first.")
                     
             self.log_message.emit(self.node_id, "Running SAMURAI Memory Video Tracking...")
             if not client.track_video(frames_dir, start_frame, prompts, alpha_dir, sam_version):
@@ -298,6 +304,8 @@ class SuperMatteWorker(BaseWorker):
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             else:
                 frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.png")
+                if not os.path.exists(frame_path):
+                    frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.jpg")
                 frame = cv2.imread(frame_path)
                 gray = None
             

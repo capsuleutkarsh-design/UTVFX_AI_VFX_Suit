@@ -277,6 +277,8 @@ class SamuraiVideoPredictor:
                 pts_np = np.array(points, dtype=np.float32) if points else None
                 lbls_np = np.array(labels, dtype=np.int32) if labels else None
                 
+                clear_pts = True if box is not None else False
+                
                 self.predictor.add_new_points_or_box(
                     self.state,
                     frame_idx=f_idx,
@@ -284,7 +286,7 @@ class SamuraiVideoPredictor:
                     points=pts_np,
                     labels=lbls_np,
                     box=box_np,
-                    clear_old_points=False
+                    clear_old_points=clear_pts
                 )
                 
             for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
@@ -482,7 +484,48 @@ def main():
             predictor.set_image(image)
             
             if req.get("action") == "auto_scan":
-                objects = predictor.auto_scan()
+                text_prompt = req.get("text_prompt", "")
+                if text_prompt:
+                    from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+                    global_gdino = getattr(sys.modules[__name__], "gdino", None)
+                    if global_gdino is None:
+                        model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
+                        if os.path.exists(model_dir):
+                            model_id = model_dir
+                        else:
+                            model_id = "IDEA-Research/grounding-dino-base"
+                        gdino_processor = AutoProcessor.from_pretrained(model_id)
+                        gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+                        global_gdino = (gdino_processor, gdino_model)
+                        setattr(sys.modules[__name__], "gdino", global_gdino)
+                    
+                    gd_proc, gd_mod = global_gdino
+                    
+                    if not text_prompt.endswith("."):
+                        text_prompt += "."
+                        
+                    inputs = gd_proc(images=image, text=text_prompt, return_tensors="pt").to(device)
+                    with torch.no_grad():
+                        outputs = gd_mod(**inputs)
+                    results = gd_proc.post_process_grounded_object_detection(
+                        outputs,
+                        inputs.input_ids,
+                        threshold=0.3,
+                        text_threshold=0.3,
+                        target_sizes=[image.shape[:2]]
+                    )
+                    pred_boxes = results[0]["boxes"].cpu().numpy()
+                    pred_scores = results[0]["scores"].cpu().numpy()
+                    
+                    objects = []
+                    H, W = image.shape[:2]
+                    for box, score in zip(pred_boxes, pred_scores):
+                        cx = (box[0] + box[2]) / 2.0 / W
+                        cy = (box[1] + box[3]) / 2.0 / H
+                        nx1, ny1, nx2, ny2 = float(box[0]/W), float(box[1]/H), float(box[2]/W), float(box[3]/H)
+                        objects.append([float(cx), float(cy), float(score), [nx1, ny1, nx2, ny2]])
+                else:
+                    objects = predictor.auto_scan()
                 print(json.dumps({"status": "ok", "objects": objects}), flush=True)
                 continue
                 
@@ -509,6 +552,10 @@ def main():
                     setattr(sys.modules[__name__], "gdino", global_gdino)
                 
                 gd_proc, gd_mod = global_gdino
+                
+                if not text_prompt.endswith("."):
+                    text_prompt += "."
+                    
                 inputs = gd_proc(images=image, text=text_prompt, return_tensors="pt").to(device)
                 with torch.no_grad():
                     outputs = gd_mod(**inputs)

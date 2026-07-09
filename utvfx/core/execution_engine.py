@@ -182,6 +182,18 @@ class ExecutionEngine(QObject):
         self.log_message.emit(node_id, error_msg)
 
     def _get_node_cache(self, node):
+        if getattr(node, "plugin_type", "") == "media_plate":
+            plate_file = getattr(node, "params", {}).get("plate_file")
+            if plate_file and os.path.exists(plate_file):
+                import hashlib
+                hasher = hashlib.md5()
+                hasher.update(plate_file.encode('utf-8'))
+                try:
+                    hasher.update(str(os.path.getmtime(plate_file)).encode('utf-8'))
+                except Exception:
+                    pass
+                media_hash = hasher.hexdigest()
+                return os.path.join(self.cache_dir, "MediaCache", media_hash)
         return os.path.join(self.cache_dir, node.node_id)
 
     def _get_upstream_nodes(self, node):

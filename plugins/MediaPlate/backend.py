@@ -20,25 +20,17 @@ class MediaWorker(BaseWorker):
         self.is_cancelled = True
 
     def run_task(self):
+        import json
+        import glob
+        
         if not self.plate_file or not os.path.exists(self.plate_file):
             raise FileNotFoundError("Media Plate has no valid file selected.")
 
         self.log_message.emit(self.node_id, f"Initializing Proxy Sequence Generation for: {self.plate_file}")
         
-        # We save inside `Video Plate` folder for PNGs, and `Video Plate JPG` for JPEGs
-        out_folder = os.path.join(self.cache_dir, "Video Plate")
-        out_folder_jpg = os.path.join(self.cache_dir, "Video Plate JPG")
-        
-        if os.path.exists(out_folder):
-            shutil.rmtree(out_folder)
-        os.makedirs(out_folder, exist_ok=True)
-        
-        if os.path.exists(out_folder_jpg):
-            shutil.rmtree(out_folder_jpg)
-        os.makedirs(out_folder_jpg, exist_ok=True)
-
+        # Determine shot name and expected frames early
+        shot_name = os.path.basename(self.plate_file.rstrip('/\\'))
         if self.is_sequence and os.path.isfile(self.plate_file):
-            # Process as an image sequence
             media_dir = os.path.dirname(self.plate_file)
             files = sorted([f for f in os.listdir(media_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx', '.hdr'))])
             total_frames = len(files)
@@ -52,17 +44,14 @@ class MediaWorker(BaseWorker):
         else:
             ext = os.path.splitext(self.plate_file)[1].lower()
             if ext in [".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"]:
-                # Single image, not a sequence
                 total_frames = 1
                 def frame_generator():
                     from utvfx.core.image_utils import load_frame
                     yield load_frame(self.plate_file)
                 generator = frame_generator()
             else:
-                # Process as a video
                 cap = cv2.VideoCapture(self.plate_file)
                 if not cap.isOpened():
-                    # Fallback to imageio
                     import imageio
                     try:
                         reader = imageio.get_reader(self.plate_file)
@@ -88,6 +77,39 @@ class MediaWorker(BaseWorker):
 
         if total_frames <= 0:
             raise Exception("No readable frames found in media.")
+            
+        out_folder = os.path.join(self.cache_dir, "Video Plate")
+        out_folder_jpg = os.path.join(self.cache_dir, "Video Plate JPG")
+        info_file = os.path.join(self.cache_dir, "info.json")
+        
+        # Check cache
+        if os.path.exists(info_file) and os.path.exists(out_folder) and os.path.exists(out_folder_jpg):
+            try:
+                with open(info_file, 'r') as f:
+                    info = json.load(f)
+                if info.get("plate_file") == self.plate_file and info.get("total_frames") == total_frames:
+                    png_count = len(glob.glob(os.path.join(out_folder, "*.png")))
+                    jpg_count = len(glob.glob(os.path.join(out_folder_jpg, "*.jpg")))
+                    if png_count == total_frames and jpg_count == total_frames:
+                        self.log_message.emit(self.node_id, f"Valid cache found for shot '{shot_name}'. Skipping generation.")
+                        self.progress_update.emit(self.node_id, 100, 100)
+                        return
+            except Exception as e:
+                self.log_message.emit(self.node_id, f"Cache check failed, regenerating: {e}")
+                
+        # Cache invalid or missing, proceed with generation
+        if os.path.exists(out_folder):
+            shutil.rmtree(out_folder)
+        os.makedirs(out_folder, exist_ok=True)
+        
+        if os.path.exists(out_folder_jpg):
+            shutil.rmtree(out_folder_jpg)
+        os.makedirs(out_folder_jpg, exist_ok=True)
+        
+        with open(info_file, 'w') as f:
+            json.dump({"plate_file": self.plate_file, "shot_name": shot_name, "total_frames": total_frames}, f)
+            
+
 
         for i, frame in enumerate(generator):
             if self.is_cancelled:

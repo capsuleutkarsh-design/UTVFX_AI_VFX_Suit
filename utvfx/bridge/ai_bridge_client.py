@@ -198,6 +198,11 @@ class AIBridgeClient:
                             # We could emit a progress signal here if we wanted
                             pass
                         else:
+                            import tempfile
+                            import os
+                            with open(os.path.join(tempfile.gettempdir(), 'ai_bridge_error.log'), 'w') as f:
+                                f.write(f"Error: {resp.get('error')}\n")
+                                f.write(f"Traceback: {resp.get('traceback')}\n")
                             print(f"[AI Bridge Error] {resp.get('error')}")
                             print(f"[AI Bridge Traceback] {resp.get('traceback')}")
                             return False
@@ -208,7 +213,7 @@ class AIBridgeClient:
                 print(f"[AI Bridge Exception] {str(e)}")
                 return False
                 
-    def auto_scan(self, image_path, sam_version="SAM 3 (ViT-B)"):
+    def auto_scan(self, image_path, text_prompt="", sam_version="SAM 3 (ViT-B)"):
         """
         Requests the backend to auto-scan the image and return a list of top object points.
         Returns: list of (x_norm, y_norm, score)
@@ -219,7 +224,8 @@ class AIBridgeClient:
                 
             payload = {
                 "action": "auto_scan",
-                "image_path": image_path
+                "image_path": image_path,
+                "text_prompt": text_prompt
             }
             
             try:
