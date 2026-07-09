@@ -40,6 +40,20 @@ class Layers:
                 x = self.activation(x)
             return x
 
+    class ChannelFirstLayerNorm(nn.Module):
+        def __init__(self, normalized_shape, eps=1e-5):
+            super().__init__()
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.bias = nn.Parameter(torch.zeros(normalized_shape))
+            self.eps = eps
+
+        def forward(self, x):
+            u = x.mean(1, keepdim=True)
+            s = (x - u).pow(2).mean(1, keepdim=True)
+            x = (x - u) / torch.sqrt(s + self.eps)
+            x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            return x
+
     def get_norm(norm, out_channels):
         if norm is None:
             return None
@@ -53,7 +67,7 @@ class Layers:
             if norm == "GN":
                 return nn.GroupNorm(32, out_channels)
             if norm == "LN":
-                return nn.LayerNorm(out_channels)
+                return Layers.ChannelFirstLayerNorm(out_channels)
             raise ValueError(f"unknown norm: {norm}")
         return norm(out_channels)
 
