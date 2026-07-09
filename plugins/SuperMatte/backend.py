@@ -395,10 +395,31 @@ class SuperMatteWorker(BaseWorker):
                     infer_trimap = trimap
 
                 if use_mematte:
-                    img_t = torch.from_numpy(infer_frame).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
+                    rgb_frame = cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB)
+                    img_t = torch.from_numpy(rgb_frame).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
                     trimap_t = torch.from_numpy(infer_trimap).unsqueeze(0).unsqueeze(0).float().to(device) / 255.0
+                    
+                    batched_inputs = {
+                        "image": img_t,
+                        "trimap": trimap_t
+                    }
+                    
                     with torch.no_grad():
-                        alpha_pred = model(img_t, trimap_t)
+                        raw_out = model(batched_inputs)
+                        def find_phas(obj):
+                            if isinstance(obj, dict) and 'phas' in obj:
+                                return obj['phas']
+                            if isinstance(obj, (list, tuple)):
+                                for item in obj:
+                                    res = find_phas(item)
+                                    if res is not None:
+                                        return res
+                            return None
+                        
+                        alpha_pred = find_phas(raw_out)
+                        if alpha_pred is None:
+                            raise RuntimeError(f"Could not find 'phas' in model output")
+                        
                     alpha = alpha_pred[0, 0].cpu().numpy()
                 elif use_onnx:
                     image_pil = Image.fromarray(cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB))
