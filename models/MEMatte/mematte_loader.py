@@ -5,9 +5,9 @@ import torch.nn as nn
 from functools import partial
 
 # Ensure the mock is loaded BEFORE importing MEMatte modeling
-import detectron2_mock
+from . import detectron2_mock
 
-from modeling import MEMatte, MattingCriterion, Detail_Capture, ViT
+from .modeling import MEMatte, MattingCriterion, Detail_Capture, ViT
 
 def load_mematte(device="cuda"):
     embed_dim = 768

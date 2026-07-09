@@ -55,8 +55,8 @@ class PropertiesPanel(QWidget):
         self.content_widget = QWidget()
         self.content_widget.setStyleSheet("background-color: #0a0a0a;")
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(12, 16, 12, 16)
-        self.content_layout.setSpacing(10)
+        self.content_layout.setContentsMargins(12, 12, 12, 12)
+        self.content_layout.setSpacing(4)
         self.content_layout.setAlignment(Qt.AlignTop)
         
         self.scroll.setWidget(self.content_widget)
@@ -127,12 +127,12 @@ class PropertiesPanel(QWidget):
         self.console_widget.setStyleSheet("""
             QTextEdit {
                 background-color: #09090b;
-                color: #22c55e;
+                color: #e4e4e7;
                 font-family: 'JetBrains Mono';
                 font-size: 11px;
-                border: 1px solid #27272a;
+                border: 1px solid #1f1f22;
                 border-radius: 6px;
-                padding: 8px;
+                padding: 12px;
             }
         """)
         self.console_widget.setPlaceholderText(">> Node logs will stream here during execution...")
@@ -153,7 +153,7 @@ class PropertiesPanel(QWidget):
 
     @Slot()
     def refresh_ui(self):
-        if self.current_node:
+        if getattr(self, "current_node", None):
             self.set_node(self.current_node)
 
 
@@ -190,9 +190,10 @@ class PropertiesPanel(QWidget):
         if has_tabs:
             tabs = QTabWidget()
             tabs.setStyleSheet("""
-                QTabWidget::pane { border: 1px solid #27272a; border-radius: 4px; top: -1px; }
-                QTabBar::tab { background-color: #121212; color: #a1a1aa; border: 1px solid #27272a; padding: 6px 12px; font-family: 'Inter'; font-weight: bold; font-size: 11px; }
-                QTabBar::tab:selected { background-color: #18181b; color: #fafafa; border-bottom: 2px solid """ + color + """; }
+                QTabWidget::pane { border: none; top: 0px; }
+                QTabBar::tab { background-color: transparent; color: #a1a1aa; border: none; border-bottom: 2px solid transparent; padding: 8px 16px; font-family: 'Inter'; font-weight: bold; font-size: 12px; margin-right: 4px; }
+                QTabBar::tab:selected { color: #fafafa; border-bottom: 2px solid """ + color + """; }
+                QTabBar::tab:hover:!selected { color: #e4e4e7; border-bottom: 2px solid #3f3f46; }
             """)
             tab_dict = {}
             for param in params:
@@ -202,8 +203,9 @@ class PropertiesPanel(QWidget):
                 
             for t_name, t_params in tab_dict.items():
                 w = QWidget()
+                w.setStyleSheet("background: transparent;")
                 l = QVBoxLayout(w)
-                l.setContentsMargins(12,12,12,12)
+                l.setContentsMargins(0,16,0,16)
                 l.setSpacing(12)
                 l.setAlignment(Qt.AlignTop)
                 for p in t_params:
@@ -220,18 +222,43 @@ class PropertiesPanel(QWidget):
         self._build_execution_section(color)
             
     def _build_param_widget(self, param, color):
+        ptype = param["type"]
+        pid = param["id"]
+        
+        is_complex = ptype in ["layer_manager", "roto_layers"]
+
         container = QWidget()
-        layout = QVBoxLayout(container)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        container.setObjectName("CardWidget")
+        
+        if is_complex:
+            container.setStyleSheet("""
+                #CardWidget {
+                    background-color: #121212;
+                    border: 1px solid #1f1f22;
+                    border-radius: 8px;
+                }
+            """)
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(10, 10, 10, 10)
+            layout.setSpacing(8)
+        else:
+            container.setStyleSheet("""
+                #CardWidget {
+                    background-color: transparent;
+                }
+            """)
+            layout = QHBoxLayout(container)
+            layout.setContentsMargins(0, 4, 0, 4)
+            layout.setSpacing(12)
         
         # Label
         lbl = QLabel(param["name"].upper())
-        lbl.setStyleSheet("font-family: 'Inter'; font-size: 10px; font-weight: bold; color: #a1a1aa; letter-spacing: 1px;")
-        layout.addWidget(lbl)
+        lbl.setStyleSheet("font-family: 'Inter'; font-size: 10px; font-weight: 800; color: #a1a1aa; letter-spacing: 1px; background: transparent; border: none;")
         
-        ptype = param["type"]
-        pid = param["id"]
+        if not is_complex:
+            lbl.setFixedWidth(140)
+            
+        layout.addWidget(lbl)
         
         # Get value from node params, fallback to default
         if not hasattr(self.current_node, "params"):
@@ -249,10 +276,15 @@ class PropertiesPanel(QWidget):
             
             slider.setRange(int(param["min"] * mult), int(param["max"] * mult))
             slider.setValue(int(val * mult))
-            slider.setStyleSheet(f"QSlider::sub-page:horizontal {{ background: {color}; }}")
+            slider.setStyleSheet(f"""
+                QSlider::groove:horizontal {{ height: 6px; background: #27272a; border-radius: 3px; }}
+                QSlider::sub-page:horizontal {{ background: {color}; border-radius: 3px; }}
+                QSlider::handle:horizontal {{ background: #fafafa; border: 2px solid {color}; width: 14px; margin: -5px 0; border-radius: 7px; }}
+                QSlider::handle:horizontal:hover {{ background: {color}; }}
+            """)
             
             val_lbl = QLabel(str(val))
-            val_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono'; font-weight: bold; font-size: 12px; min-width: 50px;")
+            val_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono'; font-weight: bold; font-size: 12px; min-width: 50px; background: transparent; border: none;")
             val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             
             def on_change(v, l=val_lbl, m=mult, p=pid):
@@ -282,7 +314,20 @@ class PropertiesPanel(QWidget):
             
         elif ptype == "text" or ptype == "file" or ptype == "folder":
             line = QLineEdit(str(val))
-            line.setStyleSheet(f"background-color: #18181b; border: 1px solid #27272a; border-radius: 6px; padding: 10px; color: #fafafa; font-size: 12px;")
+            line.setStyleSheet(f"""
+                QLineEdit {{
+                    background-color: #09090b; 
+                    border: 1px solid #27272a; 
+                    border-radius: 6px; 
+                    padding: 8px 12px; 
+                    color: #fafafa; 
+                    font-size: 12px;
+                }}
+                QLineEdit:focus {{
+                    border: 1px solid {color};
+                    background-color: #09090b;
+                }}
+            """)
             
             def text_changed(t, p=pid):
                 old_val = self.current_node.params.get(p, param["value"])
@@ -326,7 +371,31 @@ class PropertiesPanel(QWidget):
             combo = QComboBox()
             combo.addItems(param["options"])
             combo.setCurrentText(str(val))
-            combo.setStyleSheet(f"background-color: #18181b; border: 1px solid #27272a; border-radius: 6px; padding: 8px; color: #fafafa; font-size: 12px;")
+            combo.setStyleSheet(f"""
+                QComboBox {{
+                    background-color: #09090b; 
+                    border: 1px solid #27272a; 
+                    border-radius: 6px; 
+                    padding: 8px 12px; 
+                    color: #fafafa; 
+                    font-size: 12px;
+                }}
+                QComboBox:hover, QComboBox:focus {{
+                    border: 1px solid {color};
+                }}
+                QComboBox::drop-down {{
+                    border: none;
+                    width: 24px;
+                }}
+                QComboBox QAbstractItemView {{
+                    background-color: #18181b;
+                    color: #fafafa;
+                    selection-background-color: {color};
+                    selection-color: #000000;
+                    border: 1px solid #27272a;
+                    outline: none;
+                }}
+            """)
             
             def combo_changed(t, p=pid):
                 old_val = self.current_node.params.get(p, param["value"])
@@ -345,8 +414,8 @@ class PropertiesPanel(QWidget):
             chk = QCheckBox("Enabled")
             chk.setChecked(bool(val))
             chk.setStyleSheet(f"""
-                QCheckBox {{ color: {color}; font-weight: bold; font-size: 12px; }}
-                QCheckBox::indicator {{ width: 14px; height: 14px; background: #27272a; border: 1px solid #52525b; border-radius: 3px; }}
+                QCheckBox {{ color: #fafafa; font-size: 12px; }}
+                QCheckBox::indicator {{ width: 16px; height: 16px; background: #09090b; border: 1px solid #27272a; border-radius: 4px; }}
                 QCheckBox::indicator:hover {{ border: 1px solid {color}; }}
                 QCheckBox::indicator:checked {{ background: {color}; border: 1px solid {color}; }}
             """)
@@ -443,14 +512,18 @@ class PropertiesPanel(QWidget):
                 background-color: {color};
                 color: #000000;
                 font-family: 'Inter';
-                font-weight: bold;
-                font-size: 12px;
+                font-weight: 800;
+                font-size: 13px;
+                letter-spacing: 0.5px;
                 border: none;
                 border-radius: 6px;
-                padding: 12px;
+                padding: 14px;
             }}
             QPushButton:hover {{
                 background-color: {color}dd;
+            }}
+            QPushButton:pressed {{
+                background-color: {color}bb;
             }}
         """)
         self.btn_run.clicked.connect(self._on_execute_clicked)

@@ -6,6 +6,7 @@ import threading
 import tempfile
 import cv2
 import numpy as np
+import uuid
 from PySide6.QtGui import QImage, QColor
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -48,30 +49,67 @@ class AIBridgeClient:
             
         self.current_sam_version = sam_version
         print(f"Starting AI Bridge Server (loading {sam_version} to VRAM)...")
+        env = os.environ.copy()
+        env["HYDRA_FULL_ERROR"] = "1"
         self.process = subprocess.Popen(
             [self.python_exe, self.bridge_script, "--model", sam_version],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1 # Line buffered
+            bufsize=1, # Line buffered
+            env=env
         )
         
         # Wait for "READY" and "INITIALIZED"
-        while True:
-            line = self.process.stdout.readline()
-            if not line:
-                break
-            line = line.strip()
-            print(f"[AI Bridge] {line}")
-            if line == "INITIALIZED":
-                self.is_ready = True
+        init_event = threading.Event()
+        error_msg = [""]
+        
+        def read_init():
+            while True:
+                line = self.process.stdout.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if not line:
+                    continue
+                print(f"[AI Bridge] {line}")
+                if line == "INITIALIZED":
+                    self.is_ready = True
+                    init_event.set()
+                    break
+                elif line.startswith("ERROR"):
+                    error_msg[0] = line
+                    init_event.set()
+                    break
+
+        init_thread = threading.Thread(target=read_init, daemon=True)
+        init_thread.start()
+        
+        def read_stderr():
+            while True:
+                try:
+                    line = self.process.stderr.readline()
+                    if not line: break
+                    line = line.strip()
+                    if line: print(f"[AI Bridge STDERR] {line}")
+                except:
+                    break
+                    
+        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
+        stderr_thread.start()
+        
+        # Wait with timeout
+        if init_event.wait(timeout=120.0):
+            if self.is_ready:
                 return True
-            elif line.startswith("ERROR"):
-                print(f"Failed to initialize AI Bridge: {line}")
+            else:
+                print(f"Failed to initialize AI Bridge: {error_msg[0]}")
                 return False
-                
-        return False
+        else:
+            print("[AI Bridge] Timeout waiting for initialization. Subprocess may have hung.")
+            self.shutdown()
+            return False
         
     def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None, sam_version="SAM 1 (ViT-H)", boxes=None, text_prompt=""):
         """
@@ -81,7 +119,6 @@ class AIBridgeClient:
             if not self._start_server_if_needed(sam_version):
                 return None
                 
-            import uuid
             temp_mask = out_mask_path or os.path.join(TEMP_DIR, f"utvfx_bridge_mask_{uuid.uuid4().hex}.png")
             
             payload = {
@@ -122,6 +159,54 @@ class AIBridgeClient:
             except Exception as e:
                 print(f"[AI Bridge Exception] {str(e)}")
                 return None
+                
+    def track_video(self, frames_dir, start_frame_idx, prompts, out_dir, sam_version="SAM 2 (SAMURAI)"):
+        """
+        Requests the backend to track a video sequence using SAMURAI.
+        prompts: list of { "frame": int, "obj_id": int, "points": [], "labels": [], "box": [] }
+        """
+        with self.lock:
+            if not self._start_server_if_needed(sam_version):
+                return False
+                
+            payload = {
+                "action": "track_video",
+                "frames_dir": frames_dir,
+                "start_frame_idx": start_frame_idx,
+                "prompts": prompts,
+                "out_dir": out_dir
+            }
+            
+            try:
+                self.process.stdin.write(json.dumps(payload) + "\n")
+                self.process.stdin.flush()
+                
+                # Wait for response
+                while True:
+                    resp_line = self.process.stdout.readline()
+                    if not resp_line:
+                        return False
+                        
+                    resp_line = resp_line.strip()
+                    if not resp_line: continue
+                    
+                    if resp_line.startswith("{"):
+                        resp = json.loads(resp_line)
+                        if resp.get("status") == "ok":
+                            return True
+                        elif resp.get("status") == "progress":
+                            # We could emit a progress signal here if we wanted
+                            pass
+                        else:
+                            print(f"[AI Bridge Error] {resp.get('error')}")
+                            print(f"[AI Bridge Traceback] {resp.get('traceback')}")
+                            return False
+                    else:
+                        print(f"[AI Bridge Debug] {resp_line}")
+                        
+            except Exception as e:
+                print(f"[AI Bridge Exception] {str(e)}")
+                return False
                 
     def auto_scan(self, image_path, sam_version="SAM 3 (ViT-B)"):
         """
@@ -192,16 +277,14 @@ class AIBridgeClient:
         rgba[active_pixels] = [b, g, r, 160] # BGRA
         
         # The safest way is to use QImage from buffer
-        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format_ARGB32).copy()
+        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
         
-        import uuid
-        debug_path = os.path.join(TEMP_DIR, f"utvfx_debug_mask_{uuid.uuid4().hex}.png")
-        qimg.save(debug_path)
-        print(f"[AI Bridge] QImage created and saved to {debug_path}. isNull: {qimg.isNull()}")
+        print(f"[AI Bridge] QImage created. isNull: {qimg.isNull()}")
         
         return qimg
 
     def shutdown(self):
+        self.is_ready = False
         if self.process:
             try:
                 self.process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")

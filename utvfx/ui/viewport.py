@@ -114,13 +114,12 @@ class VideoPlayerThread(QThread):
             frame_idx = min(max(frame_idx, 0), len(self.sequence_files) - 1)
             path = self.sequence_files[frame_idx]
             frame = None
-            ext = os.path.splitext(path)[1].lower()
             
             from utvfx.core.image_utils import load_frame
             frame = load_frame(path)
             
             if frame is not None:
-                if getattr(self, 'view_mode', 'COMPOSITE') == "ALPHA MATTE":
+                if getattr(self, 'view_mode', 'COMP') == "MATTE":
                     if len(frame.shape) == 3 and frame.shape[2] == 4:
                         alpha = frame[:, :, 3]
                         frame = cv2.cvtColor(alpha, cv2.COLOR_GRAY2RGB)
@@ -532,28 +531,41 @@ class InteractiveVideoCanvas(QWidget):
             for layer in self.mask_layers:
                 is_active = (layer["id"] == self.active_layer_id)
                 
-                # Hide points from inactive layers
-                if not is_active:
-                    continue
-                    
+                # (Points from inactive layers will be drawn dimmed/smaller below)
                 points = layer.get("keyframes", {}).get(self.current_frame, [])
                 layer_color = QColor(layer.get("color", "#ffffff"))
                 
-                for nx, ny, is_pos in points:
-                    px = x_offset + (nx * drawn_w)
-                    py = y_offset + (ny * drawn_h)
-                    
-                    # Fill color: Green for positive, Red for negative
-                    fill_color = QColor(34, 197, 94) if is_pos else QColor(239, 68, 68)
-                    painter.setBrush(QBrush(fill_color))
-                    
-                    # Pen (outline): Layer color if active, otherwise dimmed
-                    if is_active:
-                        painter.setPen(QPen(layer_color, 3))
-                        painter.drawEllipse(QPointF(px, py), 7, 7)
+                for pt in points:
+                    if len(pt) == 5:
+                        x1, y1, x2, y2, prompt_type = pt
+                        px1 = x_offset + (x1 * drawn_w)
+                        py1 = y_offset + (y1 * drawn_h)
+                        px2 = x_offset + (x2 * drawn_w)
+                        py2 = y_offset + (y2 * drawn_h)
+                        
+                        painter.setBrush(Qt.BrushStyle.NoBrush)
+                        if is_active:
+                            painter.setPen(QPen(layer_color, 3, Qt.PenStyle.DashLine))
+                        else:
+                            painter.setPen(QPen(layer_color, 1, Qt.PenStyle.DashLine))
+                        
+                        painter.drawRect(QRectF(QPointF(px1, py1), QPointF(px2, py2)))
                     else:
-                        painter.setPen(QPen(layer_color, 1))
-                        painter.drawEllipse(QPointF(px, py), 5, 5)
+                        nx, ny, is_pos = pt
+                        px = x_offset + (nx * drawn_w)
+                        py = y_offset + (ny * drawn_h)
+                        
+                        # Fill color: Green for positive, Red for negative
+                        fill_color = QColor(34, 197, 94) if is_pos else QColor(239, 68, 68)
+                        painter.setBrush(QBrush(fill_color))
+                        
+                        # Pen (outline): Layer color if active, otherwise dimmed
+                        if is_active:
+                            painter.setPen(QPen(layer_color, 3))
+                            painter.drawEllipse(QPointF(px, py), 7, 7)
+                        else:
+                            painter.setPen(QPen(layer_color, 1))
+                            painter.drawEllipse(QPointF(px, py), 5, 5)
                 
         # Draw camera tracking points
         if getattr(self, "show_tracking", False) and self.current_frame in self.tracking_points:
@@ -807,7 +819,7 @@ class Viewport(QWidget):
         
         main_layout.addWidget(timeline)
         
-        self.set_view_mode("COMPOSITE")
+        self.set_view_mode("COMP")
 
     def set_view_mode(self, mode):
         for m, btn in self.view_modes.items():
@@ -819,7 +831,7 @@ class Viewport(QWidget):
         self.current_view_mode = mode
         if self.current_node:
             # Check if we should switch to 3D Viewer
-            if mode == "3D VIEWER" and getattr(self.current_node, "plugin_type", "") == "sfm_tracker":
+            if mode == "3D" and getattr(self.current_node, "plugin_type", "") == "sfm_tracker":
                 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 sparse_dir = os.path.join(project_root, "cache", getattr(self.current_node, "node_id", ""), "sparse")
                 if os.path.exists(os.path.join(sparse_dir, "points3D.txt")):
@@ -861,7 +873,7 @@ class Viewport(QWidget):
                 if was_paused:
                     self.seek_frame(curr_frame)
 
-    def _get_node_media_path(self, node, visited=None, view_mode="COMPOSITE"):
+    def _get_node_media_path(self, node, visited=None, view_mode="COMP"):
         """Finds media associated with a node, generated cache, or upstream inputs."""
         if visited is None:
             visited = set()
@@ -873,6 +885,11 @@ class Viewport(QWidget):
         params = getattr(node, "params", {})
         plate_file = params.get("plate_file")
         if getattr(node, "plugin_type", "") == "media_plate" and plate_file and os.path.exists(plate_file):
+            from utvfx.core.settings_manager import SettingsManager
+            node_cache = SettingsManager().get_cache_dir(getattr(node, "node_id", ""))
+            candidate = os.path.join(node_cache, "Video Plate")
+            if os.path.isdir(candidate) and os.listdir(candidate):
+                return candidate
             if params.get("is_sequence", False) and os.path.isfile(plate_file):
                 return os.path.dirname(plate_file)
             return plate_file
@@ -881,9 +898,9 @@ class Viewport(QWidget):
         node_cache = SettingsManager().get_cache_dir(getattr(node, "node_id", ""))
 
         if os.path.exists(node_cache):
-            if view_mode == "ALPHA MATTE":
+            if view_mode == "MATTE":
                 preferred = ("pha", "Output/Matte", "Matte", "AlphaHint")
-            elif view_mode == "COMPOSITE" or view_mode == "3D VIEWER":
+            elif view_mode == "COMP" or view_mode == "3D":
                 preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG")
             else:
                 preferred = ()
@@ -893,7 +910,7 @@ class Viewport(QWidget):
                 if os.path.isdir(candidate) and os.listdir(candidate):
                     return candidate
             
-            if view_mode != "SOURCE BGR":
+            if view_mode != "SRC":
                 files = glob.glob(os.path.join(node_cache, "*"))
                 files = [f for f in files if os.path.isfile(f)]
                 if files:
@@ -909,8 +926,8 @@ class Viewport(QWidget):
                         return upstream_path
         return None
 
-    def _sync_mask_keyframes(self, _=None):
-        pass # Now handled by reference
+    def _sync_mask_keyframes(self, kfs=None):
+        pass # UI updates handled elsewhere
 
     def _on_canvas_interaction(self, frame_idx, points):
         if self.current_node:
@@ -944,6 +961,20 @@ class Viewport(QWidget):
 
     def connect_to_node(self, node):
         """Connect viewport to a media provider node"""
+        if node and "mask_keyframes" in getattr(node, "params", {}):
+            legacy = node.params.pop("mask_keyframes")
+            migrated = {int(k): v for k, v in legacy.items()}
+            new_layer = {
+                "id": "layer_legacy", 
+                "name": "Migrated Mask", 
+                "color": "#ff0000", 
+                "visible": True, 
+                "locked": False, 
+                "keyframes": migrated
+            }
+            node.params["mask_layers"] = [new_layer]
+            node.params["active_layer_id"] = "layer_legacy"
+
         # Save the current mask keyframes and overlays to the node before switching
         if self.current_node and self.img_display.is_interactive:
             if not hasattr(self.current_node, "params"):
@@ -1001,7 +1032,7 @@ class Viewport(QWidget):
         if hasattr(node, "_mask_overlays_cache"):
             self.img_display.mask_overlays = node._mask_overlays_cache.copy()
             
-        self.img_display.current_mask_overlay = self.img_display.mask_overlays.get(self.img_display.current_frame, None)
+        self.img_display.current_mask_overlay = self.img_display.mask_overlays.get((self.img_display.active_layer_id, self.img_display.current_frame), None)
         
         active_layer = next((l for l in self.img_display.mask_layers if l["id"] == self.img_display.active_layer_id), None)
         kfs = list(active_layer["keyframes"].keys()) if active_layer and "keyframes" in active_layer else []
@@ -1044,7 +1075,7 @@ class Viewport(QWidget):
                 except Exception as e:
                     print(f"Failed to read tracking points: {e}")
                     
-        if node.plugin_type in ["sam3_rotoscope", "matte_anyone"]:
+        if node.plugin_type in ["sam3_rotoscope", "matte_anyone", "super_matte"]:
             self.btn_clear_pts.show()
         else:
             self.btn_clear_pts.hide()

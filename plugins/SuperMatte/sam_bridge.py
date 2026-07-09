@@ -57,7 +57,6 @@ class SAM1Predictor:
         self.predictor.set_image(image_rgb)
         
     def predict(self, points, labels, boxes=None):
-        self.predictor.set_image(self.image)
         
         # Meta's SAM takes boxes as a separate array [x1, y1, x2, y2]
         box_input = np.array(boxes[0]) if boxes else None
@@ -79,7 +78,7 @@ class SAM3Predictor:
     def __init__(self, device):
         from transformers import Sam3Model, Sam3Processor
         self.device = device
-        model_dir = os.path.join(ROOT_DIR, "models", "SAM")
+        model_dir = os.path.join(ROOT_DIR, "models", "SAM3")
         
         if not os.path.exists(model_dir):
             raise FileNotFoundError(f"SAM3 Model directory missing at '{model_dir}'.")
@@ -94,19 +93,29 @@ class SAM3Predictor:
     def predict(self, points, labels, boxes=None):
         H, W = self.image.shape[:2]
         
-        if boxes:
-            input_boxes = [boxes]
-            input_boxes_labels = [[1] * len(boxes)]
-        else:
-            input_boxes = [[[0, 0, W, H]]]
-            input_boxes_labels = [[1]]
+        kwargs = {"images": self.image, "return_tensors": "pt"}
         
-        inputs = self.processor(
-            images=self.image, 
-            input_boxes=input_boxes,
-            input_boxes_labels=input_boxes_labels, 
-            return_tensors="pt"
-        ).to(self.device)
+        all_boxes = []
+        all_labels = []
+        
+        if boxes:
+            all_boxes.extend(boxes)
+            all_labels.extend([1] * len(boxes))
+            
+        if len(points) > 0:
+            for p, l in zip(points, labels):
+                # Represent points as 1x1 boxes for SAM3 since it lacks input_points
+                all_boxes.append([p[0], p[1], p[0]+1.0, p[1]+1.0])
+                all_labels.append(int(l))
+                
+        if not all_boxes:
+            all_boxes = [[0.0, 0.0, float(W), float(H)]]
+            all_labels = [1]
+            
+        kwargs["input_boxes"] = [[all_boxes]]
+        kwargs["input_boxes_labels"] = [[all_labels]]
+            
+        inputs = self.processor(**kwargs).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**inputs)
@@ -163,8 +172,7 @@ class SAM3Predictor:
         H, W = self.image.shape[:2]
         inputs = self.processor(
             images=self.image, 
-            input_boxes=[[[0, 0, W, H]]],
-            input_boxes_labels=[[1]], 
+            input_boxes=[[[0.0, 0.0, float(W), float(H)]]],
             return_tensors="pt"
         ).to(self.device)
         
@@ -206,6 +214,89 @@ class SAM3Predictor:
             
         return objects
 
+class SamuraiVideoPredictor:
+    def __init__(self, device):
+        import sys
+        import os
+        
+        samurai_path = os.path.join(ROOT_DIR, "models", "SAMURAI")
+        if samurai_path not in sys.path:
+            sys.path.append(samurai_path)
+            sys.path.append(os.path.join(samurai_path, "sam2"))
+            
+        from sam2.build_sam import build_sam2_video_predictor
+        
+        self.device = device
+        
+        # Load weights and config
+        model_path = os.path.join(ROOT_DIR, "models", "SAM2", "sam2.1_hiera_large.pt")
+        model_cfg = "configs/samurai/sam2.1_hiera_l.yaml"
+        
+        if not os.path.exists(model_path):
+            raise FileNotFoundError(f"SAM 2.1 weights not found at {model_path}")
+            
+        self.predictor = build_sam2_video_predictor(model_cfg, model_path, device=self.device)
+        self.state = None
+        self.image = None # unused for track_video
+        
+    def set_image(self, image_rgb):
+        self.image = image_rgb
+        if hasattr(self, "_fallback_predictor"):
+            self._fallback_predictor.set_image(image_rgb)
+            
+    def _get_fallback(self):
+        if not hasattr(self, "_fallback_predictor"):
+            self._fallback_predictor = SAM2Predictor(self.device)
+            if self.image is not None:
+                self._fallback_predictor.set_image(self.image)
+        return self._fallback_predictor
+        
+    def auto_scan(self):
+        return self._get_fallback().auto_scan()
+        
+    def predict(self, points, labels, boxes=None):
+        return self._get_fallback().predict(points, labels, boxes)
+
+    def track_video(self, frames_dir, start_frame_idx, prompts, out_dir):
+        import torch
+        import cv2
+        import numpy as np
+        
+        with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+            self.state = self.predictor.init_state(frames_dir, offload_video_to_cpu=True)
+            
+            for p in prompts:
+                f_idx = p.get("frame", 0)
+                obj_id = p.get("obj_id", 0)
+                
+                points = p.get("points")
+                labels = p.get("labels")
+                box = p.get("box")
+                
+                box_np = np.array(box, dtype=np.float32) if box else None
+                pts_np = np.array(points, dtype=np.float32) if points else None
+                lbls_np = np.array(labels, dtype=np.int32) if labels else None
+                
+                self.predictor.add_new_points_or_box(
+                    self.state,
+                    frame_idx=f_idx,
+                    obj_id=obj_id,
+                    points=pts_np,
+                    labels=lbls_np,
+                    box=box_np,
+                    clear_old_points=False
+                )
+                
+            for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
+                for obj_id, mask in zip(object_ids, masks):
+                    mask_np = mask[0].cpu().numpy()
+                    mask_uint8 = (mask_np > 0.0).astype(np.uint8) * 255
+                    
+                    out_path = os.path.join(out_dir, f"sam_mask_{obj_id}_{frame_idx:06d}.png")
+                    cv2.imwrite(out_path, mask_uint8)
+                    
+        return True
+
 class SAM2Predictor:
     def __init__(self, device):
         from transformers import Sam2Model, Sam2Processor
@@ -225,12 +316,12 @@ class SAM2Predictor:
     def predict(self, points, labels, boxes=None):
         # Format points and labels for transformers SAM2
         # input_points: [[[ [x, y], ... ]]] (batch, num_queries, num_points, 2)
-        pts = [[[list(p) for p in points]]] if len(points) > 0 else None
+        pts = [[[[float(c) for c in p] for p in points]]] if len(points) > 0 else None
         lbls = [[[int(l) for l in labels]]] if len(labels) > 0 else None
         
         # For SAM2 via transformers, input_boxes must be a batched list of boxes
         # e.g., [[[xmin, ymin, xmax, ymax]]]
-        box_inputs = [[[list(boxes[0])]]] if boxes else None
+        box_inputs = [[[list(float(c) for c in boxes[0])]]] if boxes else None
         
         inputs = self.processor(
             images=self.image, 
@@ -304,23 +395,24 @@ class SAM2Predictor:
         query_masks = masks[0][0].numpy()
         scores = outputs.iou_scores[0][0].cpu().numpy()
         
-        # We can just return the center of the best mask for auto_scan
-        # For a full scan, since we passed a single box, it will just segment the main object
-        # Better: get the best mask
-        best_idx = np.argmax(scores)
-        best_mask = query_masks[best_idx] > 0
+        top_indices = np.argsort(scores)[::-1][:10]
         
-        if not np.any(best_mask):
-            return []
+        objects = []
+        for idx in top_indices:
+            mask = query_masks[idx] > 0
+            if not np.any(mask):
+                continue
+                
+            y_indices, x_indices = np.where(mask)
+            cy = int(np.mean(y_indices))
+            cx = int(np.mean(x_indices))
             
-        y_indices, x_indices = np.where(best_mask)
-        cy = int(np.mean(y_indices))
-        cx = int(np.mean(x_indices))
-        
-        if not best_mask[cy, cx]:
-            cy, cx = y_indices[len(y_indices)//2], x_indices[len(x_indices)//2]
+            if not mask[cy, cx]:
+                cy, cx = y_indices[len(y_indices)//2], x_indices[len(x_indices)//2]
+                
+            objects.append([cx / W, cy / H, float(scores[idx])])
             
-        return [[cx / W, cy / H, float(scores[best_idx])]]
+        return objects
 
 
 def main():
@@ -331,15 +423,14 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     try:
-        print("READY", flush=True)
-        
         if "SAM 3" in args.model:
             predictor = SAM3Predictor(device)
-        elif "SAM 2" in args.model:
-            predictor = SAM2Predictor(device)
+        elif "SAM 2 (SAMURAI)" in args.model or "SAM 2" in args.model:
+            predictor = SamuraiVideoPredictor(device)
         else:
             predictor = SAM1Predictor(device)
             
+        print("READY", flush=True)
         print("INITIALIZED", flush=True)
     except Exception as e:
         print(f"ERROR_INIT: {str(e)}", flush=True)
@@ -364,6 +455,19 @@ def main():
                     torch.cuda.empty_cache()
                 sys.exit(0)
                 
+            if req.get("action") == "track_video":
+                frames_dir = req.get("frames_dir")
+                start_frame_idx = req.get("start_frame_idx")
+                prompts = req.get("prompts")
+                out_dir = req.get("out_dir")
+                
+                try:
+                    predictor.track_video(frames_dir, start_frame_idx, prompts, out_dir)
+                    print(json.dumps({"status": "ok"}), flush=True)
+                except Exception as e:
+                    print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), flush=True)
+                continue
+                
             image_path = req.get("image_path")
             
             if not image_path or not os.path.exists(image_path):
@@ -371,6 +475,9 @@ def main():
                 continue
                 
             image = cv2.imread(image_path)
+            if image is None:
+                print(json.dumps({"error": f"Failed to read image at {image_path}"}), flush=True)
+                continue
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             predictor.set_image(image)
             
@@ -383,13 +490,7 @@ def main():
             labels = req.get("labels", [])
             boxes = req.get("boxes", None)
             text_prompt = req.get("text_prompt", "")
-            
-            if not image_path or not os.path.exists(image_path):
-                print(json.dumps({"error": "Invalid image path"}), flush=True)
-                continue
-                
-            image = cv2.imread(image_path)
-            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            mask_out_path = req.get("mask_out_path", "")
             
             # Use GroundingDINO if text_prompt is given and no points/boxes are provided
             if text_prompt and not boxes and not points:
@@ -397,7 +498,11 @@ def main():
                 global_gdino = getattr(sys.modules[__name__], "gdino", None)
                 if global_gdino is None:
                     # Initialize on first use
-                    model_id = "IDEA-Research/grounding-dino-base"
+                    model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
+                    if os.path.exists(model_dir):
+                        model_id = model_dir
+                    else:
+                        model_id = "IDEA-Research/grounding-dino-base"
                     gdino_processor = AutoProcessor.from_pretrained(model_id)
                     gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
                     global_gdino = (gdino_processor, gdino_model)
@@ -416,8 +521,7 @@ def main():
                 )
                 pred_boxes = results[0]["boxes"]
                 if len(pred_boxes) > 0:
-                    box = pred_boxes[0].cpu().numpy().tolist()
-                    boxes = [box]
+                    boxes = pred_boxes.cpu().numpy().tolist()
 
             pts = np.array(points) if points else np.array([])
             lbls = np.array(labels) if labels else np.array([])

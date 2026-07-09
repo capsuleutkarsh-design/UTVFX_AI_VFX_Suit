@@ -1,6 +1,11 @@
 import os
 import shutil
 import importlib
+import cv2
+import uuid
+import json
+import hashlib
+import threading
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from PySide6.QtGui import QImage
 import numpy as np
@@ -26,11 +31,7 @@ class InteractionWorker(QThread):
         self.temp_dir = temp_dir
         
     def run(self):
-        import cv2
-        import os
         import tempfile
-        import uuid
-        import numpy as np
         
         try:
             # Extract the exact frame requested
@@ -87,7 +88,7 @@ class InteractionWorker(QThread):
             try:
                 if os.path.exists(temp_frame_path):
                     os.remove(temp_frame_path)
-            except:
+            except Exception:
                 pass
                 
         except Exception as e:
@@ -127,10 +128,9 @@ class ExecutionEngine(QObject):
         return sorted_nodes
 
     def _get_node_by_id(self, node_id):
-        for node in self.scene.nodes:
-            if node.node_id == node_id:
-                return node
-        return None
+        if not hasattr(self, "_node_index") or len(getattr(self, "_node_index", {})) != len(self.scene.nodes):
+            self._node_index = {n.node_id: n for n in self.scene.nodes}
+        return self._node_index.get(node_id)
 
     @Slot(str, int, list)
     def handle_interaction(self, node_id, frame_idx, points):
@@ -155,13 +155,22 @@ class ExecutionEngine(QObject):
         worker.finished.connect(self._on_interaction_success)
         worker.error.connect(self._on_interaction_error)
         
-        self._interaction_workers = getattr(self, "_interaction_workers", [])
-        self._interaction_workers.append(worker)
-        
-        worker.finished.connect(lambda *args, w=worker: self._interaction_workers.remove(w) if w in self._interaction_workers else None)
-        worker.error.connect(lambda *args, w=worker: self._interaction_workers.remove(w) if w in self._interaction_workers else None)
-        
+        if not hasattr(self, "_interaction_workers_lock"):
+            self._interaction_workers_lock = threading.Lock()
+            
+        with self._interaction_workers_lock:
+            self._interaction_workers = getattr(self, "_interaction_workers", [])
+            self._interaction_workers.append(worker)
+            
+            worker.finished.connect(lambda *args, w=worker: self._remove_interaction_worker(w))
+            worker.error.connect(lambda *args, w=worker: self._remove_interaction_worker(w))
+            
         worker.start()
+
+    def _remove_interaction_worker(self, w):
+        with getattr(self, "_interaction_workers_lock", threading.Lock()):
+            if hasattr(self, "_interaction_workers") and w in self._interaction_workers:
+                self._interaction_workers.remove(w)
 
     @Slot(str, str, int, object)
     def _on_interaction_success(self, node_id, layer_id, frame_idx, mask_qimage):
@@ -184,9 +193,13 @@ class ExecutionEngine(QObject):
                     upstream_nodes.append(upstream_port.node)
         return upstream_nodes
 
-    def _compute_node_hash(self, node):
-        import hashlib, json
-        hasher = hashlib.md5()
+    def _compute_node_hash(self, node, memo=None):
+        if memo is None:
+            memo = {}
+        if node.node_id in memo:
+            return memo[node.node_id]
+            
+        hasher = hashlib.sha256()
         hasher.update(str(node.plugin_type).encode('utf-8'))
         
         # Serialize node parameters
@@ -210,21 +223,23 @@ class ExecutionEngine(QObject):
         # Incorporate hashes of all upstream dependencies so downstream nodes invalidate
         # if any upstream input changes.
         for upstream in self._get_upstream_nodes(node):
-            hasher.update(self._compute_node_hash(upstream).encode('utf-8'))
+            hasher.update(self._compute_node_hash(upstream, memo).encode('utf-8'))
             
-        return hasher.hexdigest()
+        result = hasher.hexdigest()
+        memo[node.node_id] = result
+        return result
 
 
-    def _get_cached_output(self, node, preferred_dirs=None):
+    def _get_cached_output(self, node, preferred_dirs=None, allow_fallback=True):
         node_cache = self._get_node_cache(node)
-        preferred_dirs = preferred_dirs or ["fgr", "pha", "Comp", "FG", "Matte", "AlphaHint"]
+        preferred_dirs = preferred_dirs or ["fgr", "pha", "Comp", "FG", "Matte", "AlphaHint", "sam_masks"]
 
         for dirname in preferred_dirs:
             candidate = os.path.join(node_cache, dirname)
             if os.path.isdir(candidate) and os.listdir(candidate):
                 return candidate
 
-        if os.path.isdir(node_cache):
+        if allow_fallback and os.path.isdir(node_cache):
             files = [
                 os.path.join(node_cache, name)
                 for name in os.listdir(node_cache)
@@ -271,7 +286,7 @@ class ExecutionEngine(QObject):
         visited.add(node)
 
         if not is_start_node and not getattr(node, "is_disabled", False):
-            cached_alpha = self._get_cached_output(node, ["pha", "Matte", "AlphaHint"])
+            cached_alpha = self._get_cached_output(node, ["pha", "Matte", "AlphaHint", "sam_masks"], allow_fallback=False)
             if cached_alpha:
                 return cached_alpha
 

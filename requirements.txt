@@ -16,3 +16,9 @@ requests
 psutil
 OpenImageIO
 pyqtgraph
+onnxruntime
+hydra-core
+loguru
+scipy
+iopath
+transformers

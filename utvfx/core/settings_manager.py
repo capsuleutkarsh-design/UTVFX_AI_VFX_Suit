@@ -31,8 +31,7 @@ class SettingsManager:
                 with open(self.settings_file, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
                     for k, v in loaded.items():
-                        if k in self.settings:
-                            self.settings[k] = v
+                        self.settings[k] = v
             except Exception as e:
                 print(f"Failed to load settings: {e}")
         
@@ -42,7 +41,7 @@ class SettingsManager:
             if path and not os.path.exists(path):
                 try:
                     os.makedirs(path, exist_ok=True)
-                except:
+                except Exception:
                     pass
 
     def save_settings(self):

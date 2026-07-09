@@ -6,11 +6,10 @@
     "inputs": ["Video Plate"],
     "outputs": ["Alpha Matte"],
     "parameters": [
-        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 2 (Hiera Large)", "SAM 3 (ViT-B)"]},
+        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 2 (SAMURAI)", "SAM 3 (ViT-B)"]},
         {"id": "refiner_model", "name": "Refiner Model", "tab": "Main Settings", "type": "select", "value": "ViTMatte", "options": ["ViTMatte", "MEMatte"]},
         {"id": "text_prompt", "name": "Text Prompt (GroundingDINO)", "tab": "Main Settings", "type": "text", "value": ""},
         {"id": "bg_color", "name": "Background Color", "tab": "Main Settings", "type": "color", "value": "#6aff9b"},
-        {"id": "prompt_points", "name": "Prompt Points", "tab": "Main Settings", "type": "text", "value": "Use AI Bridge to add points"},
         {"id": "mask_layers", "name": "Mask Layers", "tab": "Main Settings", "type": "layer_manager", "value": []},
         
         {"id": "trimap_dilate", "name": "Trimap Dilate Size", "tab": "Advanced Processing", "type": "slider", "value": 10, "min": 1, "max": 50, "step": 1},

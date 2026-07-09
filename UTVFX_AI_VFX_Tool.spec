@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('core_ui', 'core_ui/'), ('plugins', 'plugins/'), ('CorridorKeyModule', 'CorridorKeyModule/')],
+    datas=[('plugins', 'plugins/'), ('CorridorKeyModule', 'CorridorKeyModule/')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

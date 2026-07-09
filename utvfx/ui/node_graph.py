@@ -792,9 +792,6 @@ class NodeScene(QGraphicsScene):
         self.undo_stack = None
         
         self.selectionChanged.connect(self._on_selection_changed)
-        
-        self.shortcut_disable = QShortcut(QKeySequence("D"), self.parent() if self.parent() else None)
-        self.shortcut_disable.activated.connect(self.toggle_selected_nodes_disable)
 
     def toggle_selected_nodes_disable(self):
         for item in self.selectedItems():
@@ -1113,6 +1110,10 @@ class NodeView(QGraphicsView):
         self.search_menu.hide()
         self.search_menu.node_selected.connect(self._on_search_node_selected)
         self._last_search_pos = QPointF(0, 0)
+        
+        from PySide6.QtGui import QShortcut, QKeySequence
+        self.shortcut_disable = QShortcut(QKeySequence("D"), self)
+        self.shortcut_disable.activated.connect(self.scene().toggle_selected_nodes_disable)
         
         # Styling
         self.setStyleSheet("border: none; background-color: #09090b;")

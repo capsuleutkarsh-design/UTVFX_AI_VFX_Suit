@@ -26,6 +26,9 @@ class TestSignals(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication(sys.argv)
 
     def setUp(self):
+        from utvfx.core.plugin_manager import PluginManager
+        PluginManager() # Initialize registry
+        
         self.scene = MockScene()
         self.engine = ExecutionEngine(self.scene)
         self.panel = PropertiesPanel()
@@ -38,13 +41,21 @@ class TestSignals(unittest.TestCase):
         initial_text = self.panel.console_widget.toPlainText()
         self.assertEqual(initial_text, "")
         
+        from PySide6.QtCore import QEventLoop, QTimer
+        loop = QEventLoop()
+        
+        # Connect to finished or error signal to exit loop
+        self.engine.node_execution_finished.connect(loop.quit)
+        
+        # Add a timeout just in case
+        QTimer.singleShot(2000, loop.quit)
+        
         self.panel._on_execute_clicked()
+        loop.exec()
         
         after_text = self.panel.console_widget.toPlainText()
-        # The execution engine should log some error or start message
-        # We just test that clicking execute triggers some text output via the connected signals
         self.assertNotEqual(initial_text, after_text)
-        self.assertIn("ERROR: Media Plate has no valid file selected.", after_text)
+        self.assertIn("Media Plate has no valid file selected.", after_text)
 
 if __name__ == "__main__":
     unittest.main()

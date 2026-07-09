@@ -7,7 +7,7 @@
   > Before doing anything else, you **MUST** run the setup script to download missing massive AI model weights (Gigabytes) and third-party binaries that were excluded from GitHub due to size limits.
   > 
   > ```bash
-  > python scripts/first_setup.py
+  > python first_setup.py
   > ```
 </div>
 

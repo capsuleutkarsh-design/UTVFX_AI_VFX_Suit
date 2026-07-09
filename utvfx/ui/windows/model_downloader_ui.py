@@ -17,50 +17,29 @@ except ImportError:
 # Define the base directory of the software
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-MODELS = [
-    {
-        "name": "BiRefNet (General)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "BiRefNet (Matting)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet-matting",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet-matting"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "BiRefNet (Portrait)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet-portrait",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet-portrait"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "MatAnyone 2",
-        "type": "url",
-        "url": "https://github.com/pq-yang/MatAnyone2/releases/download/v1.0.0/matanyone2.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "MatAnyone2", "pretrained_models"),
-        "check_file": "matanyone2.pth"
-    },
-    {
-        "name": "Segment Anything (SAM)",
-        "type": "url",
-        "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "MatAnyone2", "pretrained_models"),
-        "check_file": "sam_vit_h_4b8939.pth"
-    },
-    {
-        "name": "Depth Anything V2 (Large)",
-        "type": "url",
-        "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "Depth-Anything-V2", "checkpoints"),
-        "check_file": "depth_anything_v2_vitl.pth"
-    }
-]
+try:
+    from first_setup import MODELS as SETUP_MODELS
+except ImportError:
+    SETUP_MODELS = []
+
+MODELS = []
+for sm in SETUP_MODELS:
+    if sm.get("type") == "hf_repo":
+        MODELS.append({
+            "name": sm["name"],
+            "type": "huggingface",
+            "repo_id": sm["repo_id"],
+            "path": os.path.join(BASE_DIR, sm.get("local_dir", "")),
+            "check_file": "config.json"
+        })
+    elif sm.get("type") == "file":
+        MODELS.append({
+            "name": sm["name"],
+            "type": "url",
+            "url": sm["url"],
+            "path": os.path.dirname(os.path.join(BASE_DIR, sm["path"])),
+            "check_file": os.path.basename(sm["path"])
+        })
 
 class DownloadWorker(QThread):
     progress = Signal(int, int) # downloaded, total

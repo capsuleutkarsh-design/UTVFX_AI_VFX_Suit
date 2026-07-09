@@ -10,5 +10,5 @@ if not exist "%PYTHON_EXE%" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -u "%BASE_DIR%main.py"
+"%PYTHON_EXE%" -u "%BASE_DIR%main.py" > "%BASE_DIR%crash.log" 2>&1
 pause

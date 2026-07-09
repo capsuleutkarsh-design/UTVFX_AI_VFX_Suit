@@ -35,16 +35,17 @@ class TestRegression(unittest.TestCase):
         self.assertEqual(len(self.window.node_scene.nodes), 1)
 
     def test_project_loading_keyframe_conversion(self):
-        self.window.spawn_node("sam3_rotoscope")
-        sam_node = [n for n in self.window.node_scene.nodes if n.plugin_type == "sam3_rotoscope"][0]
+        self.window.spawn_node("super_matte")
+        sam_node = [n for n in self.window.node_scene.nodes if n.plugin_type == "super_matte"][0]
         
-        sam_node.params["mask_keyframes"] = {"5": [(0.5, 0.5, True)]}
+        sam_node.params["mask_layers"] = [{"id": "layer1", "keyframes": {5: [(0.5, 0.5, True)]}}]
+        sam_node.params["active_layer_id"] = "layer1"
         self.window.viewport.connect_to_node(sam_node)
         
-        mask_keyframes = self.window.viewport.img_display.mask_keyframes
-        self.assertIn(5, mask_keyframes)
-        self.assertNotIn("5", mask_keyframes)
-        self.assertEqual(mask_keyframes[5], [(0.5, 0.5, True)])
+        mask_layers = self.window.viewport.img_display.mask_layers
+        self.assertEqual(len(mask_layers), 1)
+        self.assertIn(5, mask_layers[0]["keyframes"])
+        self.assertEqual(mask_layers[0]["keyframes"][5], [(0.5, 0.5, True)])
 
     def test_playhead_clamping(self):
         from utvfx.ui.viewport import VideoPlayerThread

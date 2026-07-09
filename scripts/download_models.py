@@ -42,13 +42,6 @@ MODELS = [
         "check_file": "model.safetensors"
     },
     {
-        "name": "MatAnyone 2",
-        "type": "url",
-        "url": "https://github.com/pq-yang/MatAnyone2/releases/download/v1.0.0/matanyone2.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "MatAnyone2", "pretrained_models"),
-        "check_file": "matanyone2.pth"
-    },
-    {
         "name": "Segment Anything (SAM)",
         "type": "url",
         "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",

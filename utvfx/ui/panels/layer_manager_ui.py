@@ -1,7 +1,61 @@
 import uuid
 import random
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem, QInputDialog, QMessageBox, QDialog, QComboBox, QLabel
-from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem, QInputDialog, QMessageBox, QDialog, QComboBox, QLabel, QFrame
+from PySide6.QtCore import Qt, QSize, Slot, QThread, Signal
+
+class ScanWorker(QThread):
+    finished = Signal(object, int)
+    def __init__(self, client, f_path, frame_idx):
+        super().__init__()
+        self.client = client
+        self.f_path = f_path
+        self.frame_idx = frame_idx
+    def run(self):
+        res = self.client.auto_scan(self.f_path)
+        self.finished.emit(res, self.frame_idx)
+
+class LayerItemWidget(QWidget):
+    def __init__(self, layer_id, name, color_hex, is_enabled, parent_manager):
+        super().__init__()
+        self.layer_id = layer_id
+        self.parent_manager = parent_manager
+        
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(6, 4, 6, 4)
+        layout.setSpacing(8)
+        
+        self.btn_vis = QPushButton("👁" if is_enabled else "◡")
+        self.btn_vis.setFixedSize(24, 24)
+        self.btn_vis.setStyleSheet("background: transparent; border: none; color: #a1a1aa; font-size: 14px;")
+        self.btn_vis.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_vis.clicked.connect(self.toggle_vis)
+        layout.addWidget(self.btn_vis)
+        
+        self.swatch = QFrame()
+        self.swatch.setFixedSize(12, 12)
+        self.swatch.setStyleSheet(f"background-color: {color_hex}; border-radius: 6px;")
+        self.swatch.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.swatch)
+        
+        self.lbl_name = QLabel(name)
+        self.lbl_name.setStyleSheet("color: #fafafa; font-size: 12px; font-family: 'Inter';")
+        self.lbl_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        layout.addWidget(self.lbl_name)
+        
+        layout.addStretch()
+        
+    def toggle_vis(self):
+        layers = self.parent_manager.node.params[self.parent_manager.pid]
+        layer = next((l for l in layers if l["id"] == self.layer_id), None)
+        if layer:
+            new_state = not layer.get("enabled", True)
+            layer["enabled"] = new_state
+            self.btn_vis.setText("👁" if new_state else "◡")
+            scene = self.parent_manager.node.scene()
+            if scene and hasattr(scene.views()[0], "window"):
+                main_window = scene.views()[0].window()
+                if main_window and hasattr(main_window, "viewport"):
+                    main_window.viewport.connect_to_node(self.parent_manager.node)
 
 class LayerManagerWidget(QWidget):
     def __init__(self, node, pid, color, parent=None):
@@ -59,12 +113,11 @@ class LayerManagerWidget(QWidget):
                 outline: none;
             }}
             QListWidget::item {{
-                padding: 6px;
                 border-bottom: 1px solid #27272a;
             }}
             QListWidget::item:selected {{
-                background-color: {self.color}40;
-                border-left: 3px solid {self.color};
+                background-color: #27272a;
+                border-left: 3px solid #71717a;
             }}
         """)
         self.list_widget.itemSelectionChanged.connect(self.on_selection_changed)
@@ -111,11 +164,13 @@ class LayerManagerWidget(QWidget):
         scene = self.node.scene()
         if not scene: return
         view = scene.views()[0]
-        timeline = view.window().timeline if hasattr(view, "window") and view.window() else None
+        main_window = view.window() if hasattr(view, "window") else None
+        viewport = getattr(main_window, "viewport", None) if main_window else None
+        timeline = getattr(viewport, "timeline", None) if viewport else None
         if not timeline: return
         
-        frame_idx = timeline.current_frame
-        media_path = self.node.inputs.get("Video Plate")
+        frame_idx = timeline._current_frame
+        media_path = viewport._get_node_media_path(self.node) if viewport else None
         if not media_path:
             QMessageBox.warning(self, "Warning", "Please connect a Video Plate first.")
             return
@@ -131,33 +186,60 @@ class LayerManagerWidget(QWidget):
             if frame_idx >= len(files): frame_idx = len(files) - 1
             f_path = files[frame_idx]
         else:
-            f_path = media_path
-            
-        QMessageBox.information(self, "Auto-Scan", "Scanning image for top objects... (this may take a few seconds)")
+            if viewport and hasattr(viewport.img_display, "last_raw_image") and viewport.img_display.last_raw_image:
+                import tempfile
+                f_path = os.path.join(tempfile.gettempdir(), f"utvfx_autoscan_{frame_idx}.jpg")
+                viewport.img_display.last_raw_image.save(f_path)
+            else:
+                f_path = media_path
+
+        # Show status in the window's status bar instead of a blocking dialog
+        if main_window and hasattr(main_window, "statusBar"):
+            main_window.statusBar().showMessage("Auto-Scan: Scanning image for objects...", 10000)
         
         client = AIBridgeClient.get_instance()
-        objects = client.auto_scan(f_path)
+        
+        self.btn_auto_scan.setEnabled(False)
+        self.btn_auto_scan.setText("Scanning... (May take a few minutes)")
+        
+        self.scan_thread = ScanWorker(client, f_path, frame_idx)
+        self.scan_thread.finished.connect(self.on_scan_finished)
+        # Keep a strong reference on the persistent node object so the thread 
+        # doesn't get destroyed if the user clicks away and this widget dies.
+        self.node._active_scan_thread = self.scan_thread
+        self.scan_thread.setParent(None)
+        self.scan_thread.start()
+        
+    @Slot(object, int)
+    def on_scan_finished(self, objects, frame_idx):
+        self.btn_auto_scan.setEnabled(True)
+        self.btn_auto_scan.setText("Auto-Scan (SAM 3)")
+        
         if not objects:
             QMessageBox.warning(self, "Scan Failed", "No objects detected or model failed.")
             return
             
+        import uuid
         # Create a layer for each object
         colors = ["#ef4444", "#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4"]
-        layers = []
+        layers = self.node.params.get(self.pid, [])
+        new_layers_count = 0
         for i, (nx, ny, score) in enumerate(objects):
             layer_id = f"layer_{uuid.uuid4().hex[:8]}"
             c = colors[i % len(colors)]
-            name = f"Auto Object {i+1} ({(score*100):.1f}%)"
+            name = f"Auto Object {len(layers)+1} ({(score*100):.1f}%)"
             
             # Create a keyframe at the current frame with the object's center point
-            keyframes = {str(frame_idx): [[nx, ny, 1]]}
+            keyframes = {frame_idx: [[nx, ny, 1]]}
             layers.append({"id": layer_id, "name": name, "color": c, "keyframes": keyframes, "enabled": True})
+            new_layers_count += 1
             
         self.node.params[self.pid] = layers
-        self.node.params["active_layer_id"] = layers[0]["id"]
+        if new_layers_count > 0:
+            self.node.params["active_layer_id"] = layers[-new_layers_count]["id"]
         self.refresh_list()
         self.on_selection_changed()
-        QMessageBox.information(self, "Success", f"Created {len(layers)} object layers!")
+        QMessageBox.information(self, "Success", f"Created {new_layers_count} object layers!")
         
     def refresh_list(self):
         self.list_widget.blockSignals(True)
@@ -166,28 +248,53 @@ class LayerManagerWidget(QWidget):
         active_id = self.node.params.get("active_layer_id")
         
         for layer in layers:
-            item = QListWidgetItem(f" {layer['name']}")
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            is_enabled = layer.get("enabled", True)
-            item.setCheckState(Qt.Checked if is_enabled else Qt.Unchecked)
-            
-            item.setData(Qt.UserRole, layer["id"])
+            item = QListWidgetItem()
+            item.setData(Qt.ItemDataRole.UserRole, layer["id"])
+            item.setSizeHint(QSize(0, 36))
             self.list_widget.addItem(item)
+            
+            is_enabled = layer.get("enabled", True)
+            widget = LayerItemWidget(layer["id"], layer["name"], layer["color"], is_enabled, self)
+            widget.setParent(self.list_widget)
+            self.list_widget.setItemWidget(item, widget)
+            
             if layer["id"] == active_id:
                 item.setSelected(True)
         self.list_widget.blockSignals(False)
+        self.update_list_style()
         
-    def on_item_changed(self, item):
-        layer_id = item.data(Qt.UserRole)
+    def update_list_style(self):
+        active_id = self.node.params.get("active_layer_id")
         layers = self.node.params[self.pid]
-        layer = next((l for l in layers if l["id"] == layer_id), None)
-        if layer:
-            layer["enabled"] = (item.checkState() == Qt.Checked)
+        active_layer = next((l for l in layers if l["id"] == active_id), None)
+        
+        color = active_layer["color"] if active_layer else "#71717a"
+        
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background-color: #18181b;
+                border: 1px solid #27272a;
+                border-radius: 6px;
+                color: #fafafa;
+                font-family: 'Inter';
+                font-size: 12px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 0px;
+                border-bottom: 1px solid #27272a;
+            }}
+            QListWidget::item:selected {{
+                background-color: {color}20;
+                border-left: 3px solid {color};
+            }}
+        """)
             
     def on_selection_changed(self):
         selected = self.list_widget.selectedItems()
         if selected:
-            self.node.params["active_layer_id"] = selected[0].data(Qt.UserRole)
+            self.node.params["active_layer_id"] = selected[0].data(Qt.ItemDataRole.UserRole)
+            self.update_list_style()
             # Force the viewport to refresh its display for the new active layer
             scene = self.node.scene()
             if scene and hasattr(scene.views()[0], "window"):
@@ -196,7 +303,7 @@ class LayerManagerWidget(QWidget):
                     main_window.viewport.connect_to_node(self.node)
             
     def on_item_double_clicked(self, item):
-        layer_id = item.data(Qt.UserRole)
+        layer_id = item.data(Qt.ItemDataRole.UserRole)
         layers = self.node.params[self.pid]
         layer = next((l for l in layers if l["id"] == layer_id), None)
         if layer:
@@ -224,7 +331,7 @@ class LayerManagerWidget(QWidget):
             
         selected = self.list_widget.selectedItems()
         if selected:
-            layer_id = selected[0].data(Qt.UserRole)
+            layer_id = selected[0].data(Qt.ItemDataRole.UserRole)
             self.node.params[self.pid] = [l for l in layers if l["id"] != layer_id]
             self.node.params["active_layer_id"] = self.node.params[self.pid][-1]["id"]
             self.refresh_list()
@@ -242,6 +349,6 @@ class LayerManagerWidget(QWidget):
             QPushButton { background-color: #27272a; color: #fafafa; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 12px; }
             QPushButton:hover { background-color: #3f3f46; }
         """)
-        if dialog.exec() == QDialog.Accepted:
+        if dialog.exec() == QDialog.DialogCode.Accepted:
             return dialog.textValue(), True
         return "", False

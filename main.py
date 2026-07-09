@@ -50,6 +50,24 @@ class VFXCoreWindow(QMainWindow):
             QSplitter::handle:vertical {
                 height: 2px;
             }
+            QMessageBox {
+                background-color: #18181b;
+            }
+            QMessageBox QLabel {
+                color: #fafafa;
+                font-family: 'Inter';
+            }
+            QMessageBox QPushButton {
+                background-color: #3b82f6;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-weight: bold;
+            }
+            QMessageBox QPushButton:hover {
+                background-color: #2563eb;
+            }
         """)
         
         # Undo/Redo Setup
@@ -71,14 +89,15 @@ class VFXCoreWindow(QMainWindow):
         
         self.setup_connections()
         
-        # Validate that heavy AI model weights exist
-        self.check_models()
+        # Validate that heavy AI model weights exist after UI is visible
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(500, self.check_models)
         
         # The graph will start empty. Users can add nodes via the Media Panel.
 
     def check_models(self):
         try:
-            from scripts.first_setup import MODELS
+            from first_setup import MODELS
             missing = []
             for item in MODELS:
                 if item["type"] == "file":
@@ -86,25 +105,26 @@ class VFXCoreWindow(QMainWindow):
                     if not os.path.exists(path):
                         missing.append(item["name"])
                 elif item["type"] == "zip_extract":
-                    if item["path"].endswith(".exe"):
-                        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["path"])
+                    target_path = item.get("final_name", item.get("path", ""))
+                    if target_path.endswith(".exe"):
+                        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), target_path)
                         if not os.path.exists(path):
                             missing.append(item["name"])
                     else:
-                        # Users often manually extract zip files, creating nested folders.
-                        # Do a recursive search in the plugin's base folder to find the final_name.
-                        plugin_parts = os.path.normpath(item["path"]).split(os.sep)
-                        # e.g., "plugins/3DTracker/..." -> check inside "plugins/3DTracker"
+                        plugin_parts = os.path.normpath(target_path).split(os.sep)
                         plugin_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), *plugin_parts[:2])
-                        
                         found = False
                         if os.path.exists(plugin_dir):
                             for root, _, files in os.walk(plugin_dir):
-                                if item["final_name"] in files:
+                                if os.path.basename(target_path) in files:
                                     found = True
                                     break
                         if not found:
                             missing.append(item["name"])
+                elif item["type"] == "hf_repo":
+                    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["local_dir"])
+                    if not os.path.exists(path):
+                        missing.append(item["name"])
                         
             if missing:
                 QMessageBox.warning(self, "Missing AI Models", 
@@ -387,9 +407,9 @@ class VFXCoreWindow(QMainWindow):
                 break
         if node:
             if hasattr(self.viewport.timeline, "_in_frame") and self.viewport.timeline._in_frame is not None:
-                node.params["start_frame"] = str(self.viewport.timeline._in_frame + 1)
+                node.params["start_frame"] = self.viewport.timeline._in_frame + 1
             if hasattr(self.viewport.timeline, "_out_frame") and self.viewport.timeline._out_frame is not None:
-                node.params["end_frame"] = str(self.viewport.timeline._out_frame + 1)
+                node.params["end_frame"] = self.viewport.timeline._out_frame + 1
             self.properties_panel.refresh_ui()
         self.execution_engine.execute_node(node_id)
         
@@ -463,7 +483,7 @@ class VFXCoreWindow(QMainWindow):
                 name=p_def["name"],
                 plugin_type=plugin_type,
                 inputs=p_def.get("inputs", []),
-                outputs=p_def.get("workspace", "outputs", []),
+                outputs=p_def.get("outputs", []),
                 color=p_def.get("color", "#f59e0b"),
                 pos=pos
             )
@@ -509,8 +529,11 @@ class VFXCoreWindow(QMainWindow):
                     
         import threading
         for thread in threading.enumerate():
-            if thread.__class__.__name__ == 'GradioThread':
-                if hasattr(thread, 'stop'): thread.stop()
+            if thread is not threading.main_thread() and hasattr(thread, 'stop'):
+                try:
+                    thread.stop()
+                except Exception:
+                    pass
                 
         # Clean up temporary interactive files
         try:
