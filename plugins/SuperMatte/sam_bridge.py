@@ -350,13 +350,14 @@ class SamuraiVideoPredictor:
                         clear_old_points=clear_pts
                     )
                 
-            for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
-                for obj_id, mask in zip(object_ids, masks):
-                    mask_np = mask[0].cpu().numpy()
-                    mask_uint8 = (mask_np > 0.0).astype(np.uint8) * 255
+                for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
+                    for out_obj_id, mask in zip(object_ids, masks):
+                        mask_np = mask[0].cpu().numpy()
+                        mask_uint8 = (mask_np > 0.0).astype(np.uint8) * 255
+                        
+                        out_path = os.path.join(out_dir, f"sam_mask_{out_obj_id}_{frame_idx:06d}.png")
+                        cv2.imwrite(out_path, mask_uint8)
                     
-                    out_path = os.path.join(out_dir, f"sam_mask_{obj_id}_{frame_idx:06d}.png")
-                    cv2.imwrite(out_path, mask_uint8)
                     
         return True
 
