@@ -112,8 +112,8 @@ class SAM3Predictor:
             all_boxes = [[0.0, 0.0, float(W), float(H)]]
             all_labels = [1]
             
-        kwargs["input_boxes"] = [[all_boxes]]
-        kwargs["input_boxes_labels"] = [[all_labels]]
+        kwargs["input_boxes"] = [all_boxes]
+        kwargs["input_boxes_labels"] = [all_labels]
             
         inputs = self.processor(**kwargs).to(self.device)
         
@@ -170,48 +170,85 @@ class SAM3Predictor:
             return []
             
         H, W = self.image.shape[:2]
+        
+        points = []
+        for y in np.linspace(H*0.1, H*0.9, 5):
+            for x in np.linspace(W*0.1, W*0.9, 5):
+                points.append([[float(x), float(y)]])
+                
         inputs = self.processor(
             images=self.image, 
-            input_boxes=[[[0.0, 0.0, float(W), float(H)]]],
+            input_points=[points],
             return_tensors="pt"
         ).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**inputs)
             
-        original_size = inputs["original_sizes"][0].tolist()
-        results = self.processor.image_processor.post_process_instance_segmentation(
-            outputs, 
-            threshold=0.0,
-            target_sizes=[(original_size[0], original_size[1])]
-        )
+        # Try both post_process functions depending on the transformers version
+        if hasattr(self.processor.image_processor, "post_process_masks"):
+            masks = self.processor.image_processor.post_process_masks(
+                outputs.pred_masks.cpu(), 
+                inputs["original_sizes"].cpu(),
+                inputs["reshaped_input_sizes"].cpu()
+            )
+            all_masks = masks[0].reshape(-1, H, W).numpy()
+            all_scores = outputs.iou_scores[0].reshape(-1).cpu().numpy()
+        else:
+            # Fallback for older transformers API
+            original_size = inputs["original_sizes"][0].tolist()
+            results = self.processor.image_processor.post_process_instance_segmentation(
+                outputs, 
+                threshold=0.0,
+                target_sizes=[(original_size[0], original_size[1])]
+            )
+            all_masks = results[0]["masks"].cpu().numpy()
+            all_scores = results[0]["scores"].cpu().numpy()
         
-        result = results[0]
-        if len(result["scores"]) == 0:
-            return []
-            
-        scores = result["scores"].cpu().detach().numpy()
-        masks = result["masks"].cpu().detach().numpy()
-        
-        # Get top 10 masks
-        top_indices = np.argsort(scores)[::-1][:10]
+        top_indices = np.argsort(all_scores)[::-1]
         
         objects = []
+        selected_masks = []
+        
         for idx in top_indices:
-            mask = masks[idx] > 0
+            score = float(all_scores[idx])
+            if score < 0.8:
+                continue
+                
+            mask = all_masks[idx] > 0
             if not np.any(mask):
                 continue
                 
+            overlap = False
+            for s_mask in selected_masks:
+                intersection = np.logical_and(mask, s_mask).sum()
+                union = np.logical_or(mask, s_mask).sum()
+                if union > 0 and (intersection / union) > 0.6:
+                    overlap = True
+                    break
+            
+            if overlap:
+                continue
+                
+            selected_masks.append(mask)
+            
             y_indices, x_indices = np.where(mask)
             cy = int(np.mean(y_indices))
             cx = int(np.mean(x_indices))
             
-            # Fallback if the center of mass isn't actually on the object (e.g. donut shape)
             if not mask[cy, cx]:
                 cy, cx = y_indices[len(y_indices)//2], x_indices[len(x_indices)//2]
                 
-            objects.append([cx / W, cy / H, float(scores[idx])])
+            ymin, ymax = int(np.min(y_indices)), int(np.max(y_indices))
+            xmin, xmax = int(np.min(x_indices)), int(np.max(x_indices))
+            nx1, ny1 = xmin / W, ymin / H
+            nx2, ny2 = xmax / W, ymax / H
+                
+            objects.append([cx / W, cy / H, score, [nx1, ny1, nx2, ny2]])
             
+            if len(objects) >= 15:
+                break
+                
         return objects
 
 class SamuraiVideoPredictor:
@@ -263,31 +300,45 @@ class SamuraiVideoPredictor:
         import numpy as np
         
         with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
-            self.state = self.predictor.init_state(frames_dir, offload_video_to_cpu=True)
-            
+            # Group prompts by obj_id to avoid SAMURAI's batching bug
+            prompts_by_obj = {}
             for p in prompts:
-                f_idx = p.get("frame", 0)
                 obj_id = p.get("obj_id", 0)
+                if obj_id not in prompts_by_obj:
+                    prompts_by_obj[obj_id] = []
+                prompts_by_obj[obj_id].append(p)
                 
-                points = p.get("points")
-                labels = p.get("labels")
-                box = p.get("box")
+            for obj_id, obj_prompts in prompts_by_obj.items():
+                self.state = self.predictor.init_state(frames_dir, offload_video_to_cpu=True)
                 
-                box_np = np.array(box, dtype=np.float32) if box else None
-                pts_np = np.array(points, dtype=np.float32) if points else None
-                lbls_np = np.array(labels, dtype=np.int32) if labels else None
-                
-                clear_pts = True if box is not None else False
-                
-                self.predictor.add_new_points_or_box(
-                    self.state,
-                    frame_idx=f_idx,
-                    obj_id=obj_id,
-                    points=pts_np,
-                    labels=lbls_np,
-                    box=box_np,
-                    clear_old_points=clear_pts
-                )
+                # Reset SAMURAI's internal Kalman filter which doesn't support batching properly
+                if hasattr(self.predictor, 'kf_mean'):
+                    self.predictor.kf_mean = None
+                    self.predictor.kf_covariance = None
+                    self.predictor.stable_frames = 0
+                    
+                for p in obj_prompts:
+                    f_idx = p.get("frame", 0)
+                    
+                    points = p.get("points")
+                    labels = p.get("labels")
+                    box = p.get("box")
+                    
+                    box_np = np.array(box, dtype=np.float32) if box else None
+                    pts_np = np.array(points, dtype=np.float32) if points else None
+                    lbls_np = np.array(labels, dtype=np.int32) if labels else None
+                    
+                    clear_pts = True if box is not None else False
+                    
+                    self.predictor.add_new_points_or_box(
+                        self.state,
+                        frame_idx=f_idx,
+                        obj_id=obj_id,
+                        points=pts_np,
+                        labels=lbls_np,
+                        box=box_np,
+                        clear_old_points=clear_pts
+                    )
                 
             for frame_idx, object_ids, masks in self.predictor.propagate_in_video(self.state):
                 for obj_id, mask in zip(object_ids, masks):
@@ -323,7 +374,7 @@ class SAM2Predictor:
         
         # For SAM2 via transformers, input_boxes must be a batched list of boxes
         # e.g., [[[xmin, ymin, xmax, ymax]]]
-        box_inputs = [[[list(float(c) for c in boxes[0])]]] if boxes else None
+        box_inputs = [[[float(c) for c in box] for box in boxes]] if boxes else None
         
         inputs = self.processor(
             images=self.image, 
@@ -380,9 +431,15 @@ class SAM2Predictor:
             return []
             
         H, W = self.image.shape[:2]
+        
+        points = []
+        for y in np.linspace(H*0.1, H*0.9, 5):
+            for x in np.linspace(W*0.1, W*0.9, 5):
+                points.append([[float(x), float(y)]])
+                
         inputs = self.processor(
             images=self.image, 
-            input_boxes=[[[0, 0, W, H]]],
+            input_points=[points],
             return_tensors="pt"
         ).to(self.device)
         
@@ -391,20 +448,40 @@ class SAM2Predictor:
             
         masks = self.processor.image_processor.post_process_masks(
             outputs.pred_masks.cpu(), 
-            inputs["original_sizes"].cpu()
+            inputs["original_sizes"].cpu(),
+            inputs["reshaped_input_sizes"].cpu()
         )
         
-        query_masks = masks[0][0].numpy()
-        scores = outputs.iou_scores[0][0].cpu().numpy()
+        all_masks = masks[0].reshape(-1, H, W).numpy()
+        all_scores = outputs.iou_scores[0].reshape(-1).cpu().numpy()
         
-        top_indices = np.argsort(scores)[::-1][:10]
+        top_indices = np.argsort(all_scores)[::-1]
         
         objects = []
+        selected_masks = []
+        
         for idx in top_indices:
-            mask = query_masks[idx] > 0
+            score = float(all_scores[idx])
+            if score < 0.8:
+                continue
+                
+            mask = all_masks[idx] > 0
             if not np.any(mask):
                 continue
                 
+            overlap = False
+            for s_mask in selected_masks:
+                intersection = np.logical_and(mask, s_mask).sum()
+                union = np.logical_or(mask, s_mask).sum()
+                if union > 0 and (intersection / union) > 0.6:
+                    overlap = True
+                    break
+            
+            if overlap:
+                continue
+                
+            selected_masks.append(mask)
+            
             y_indices, x_indices = np.where(mask)
             cy = int(np.mean(y_indices))
             cx = int(np.mean(x_indices))
@@ -412,8 +489,16 @@ class SAM2Predictor:
             if not mask[cy, cx]:
                 cy, cx = y_indices[len(y_indices)//2], x_indices[len(x_indices)//2]
                 
-            objects.append([cx / W, cy / H, float(scores[idx])])
+            ymin, ymax = int(np.min(y_indices)), int(np.max(y_indices))
+            xmin, xmax = int(np.min(x_indices)), int(np.max(x_indices))
+            nx1, ny1 = xmin / W, ymin / H
+            nx2, ny2 = xmax / W, ymax / H
+                
+            objects.append([cx / W, cy / H, score, [nx1, ny1, nx2, ny2]])
             
+            if len(objects) >= 15:
+                break
+                
         return objects
 
 

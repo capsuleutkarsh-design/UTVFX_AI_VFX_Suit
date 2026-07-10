@@ -10,8 +10,7 @@ import uuid
 from PySide6.QtGui import QImage, QColor
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMP_DIR = os.path.join(BASE_DIR, "workspace", "temp")
-os.makedirs(TEMP_DIR, exist_ok=True)
+from utvfx.core.settings_manager import SettingsManager
 
 class AIBridgeClient:
     """Manages the persistent AI Bridge Server subprocess for real-time inference."""
@@ -119,7 +118,9 @@ class AIBridgeClient:
             if not self._start_server_if_needed(sam_version):
                 return None
                 
-            temp_mask = out_mask_path or os.path.join(TEMP_DIR, f"utvfx_bridge_mask_{uuid.uuid4().hex}.png")
+            temp_dir = SettingsManager().get("temp_dir")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_mask = out_mask_path or os.path.join(temp_dir, f"utvfx_bridge_mask_{uuid.uuid4().hex}.png")
             
             payload = {
                 "image_path": image_path,

@@ -171,7 +171,8 @@ class LayerManagerWidget(QWidget):
         if not timeline: return
         
         frame_idx = timeline._current_frame
-        media_path = viewport._get_node_media_path(self.node) if viewport else None
+        from utvfx.core.media_resolver import get_node_media_path
+        media_path = get_node_media_path(self.node) if viewport else None
         if not media_path:
             QMessageBox.warning(self, "Warning", "Please connect a Video Plate first.")
             return

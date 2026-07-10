@@ -23,6 +23,7 @@ from utvfx.core.execution_engine import ExecutionEngine
 from utvfx.ui.windows.render_queue import RenderQueueDialog
 from utvfx.core.commands import create_undo_stack
 from utvfx.ui.windows.model_downloader_ui import ModelDownloaderDialog
+from utvfx.core.settings_manager import SettingsManager
 
 class VFXCoreWindow(QMainWindow):
     def __init__(self):
@@ -36,39 +37,10 @@ class VFXCoreWindow(QMainWindow):
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
         
+        from utvfx.ui.styles import MAIN_WINDOW_STYLE
+        
         # Load custom fonts if needed (assuming system fonts for now)
-        self.setStyleSheet("""
-            QMainWindow {
-                background-color: #050505;
-            }
-            QSplitter::handle {
-                background-color: #27272a;
-            }
-            QSplitter::handle:horizontal {
-                width: 2px;
-            }
-            QSplitter::handle:vertical {
-                height: 2px;
-            }
-            QMessageBox {
-                background-color: #18181b;
-            }
-            QMessageBox QLabel {
-                color: #fafafa;
-                font-family: 'Inter';
-            }
-            QMessageBox QPushButton {
-                background-color: #3b82f6;
-                color: white;
-                border: none;
-                border-radius: 4px;
-                padding: 6px 16px;
-                font-weight: bold;
-            }
-            QMessageBox QPushButton:hover {
-                background-color: #2563eb;
-            }
-        """)
+        self.setStyleSheet(MAIN_WINDOW_STYLE)
         
         # Undo/Redo Setup
         self.undo_stack = create_undo_stack(self)
@@ -146,6 +118,8 @@ class VFXCoreWindow(QMainWindow):
         nav_layout = QHBoxLayout(nav)
         nav_layout.setContentsMargins(10, 5, 10, 5)
         
+        from utvfx.ui.styles import BTN_DEFAULT, BTN_DARK, BTN_PRIMARY, BTN_WARNING, get_label_style
+        
         self.logo = QLabel("VFX.CORE — untitled.utvfx")
         self.logo.setStyleSheet("font-family: 'Space Grotesk'; font-size: 16px; font-weight: bold; color: #fafafa; letter-spacing: 2px;")
         nav_layout.addWidget(self.logo)
@@ -154,102 +128,34 @@ class VFXCoreWindow(QMainWindow):
         
         # Undo/Redo Buttons
         self.btn_undo = QPushButton("↩️ Undo")
-        self.btn_undo.setStyleSheet("""
-            QPushButton {
-                background-color: #18181b;
-                color: #a1a1aa;
-                border: 1px solid #3f3f46;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #27272a; color: #fafafa; }
-            QPushButton:disabled { color: #3f3f46; border-color: #27272a; }
-        """)
+        self.btn_undo.setStyleSheet(BTN_DEFAULT)
         self.btn_undo.clicked.connect(self.undo_stack.undo)
         nav_layout.addWidget(self.btn_undo)
         
         self.btn_redo = QPushButton("↪️ Redo")
-        self.btn_redo.setStyleSheet("""
-            QPushButton {
-                background-color: #18181b;
-                color: #a1a1aa;
-                border: 1px solid #3f3f46;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #27272a; color: #fafafa; }
-            QPushButton:disabled { color: #3f3f46; border-color: #27272a; }
-        """)
+        self.btn_redo.setStyleSheet(BTN_DEFAULT)
         self.btn_redo.clicked.connect(self.undo_stack.redo)
         nav_layout.addWidget(self.btn_redo)
         
         nav_layout.addSpacing(10)
         
         self.btn_save = QPushButton("💾 Save")
-        self.btn_save.setStyleSheet("""
-            QPushButton {
-                background-color: #27272a;
-                color: #fafafa;
-                border: 1px solid #3f3f46;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #3f3f46; }
-        """)
+        self.btn_save.setStyleSheet(BTN_DARK)
         self.btn_save.clicked.connect(self.save_project)
         nav_layout.addWidget(self.btn_save)
         
         self.btn_load = QPushButton("📂 Load")
-        self.btn_load.setStyleSheet("""
-            QPushButton {
-                background-color: #27272a;
-                color: #fafafa;
-                border: 1px solid #3f3f46;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #3f3f46; }
-        """)
+        self.btn_load.setStyleSheet(BTN_DARK)
         self.btn_load.clicked.connect(self.load_project)
         nav_layout.addWidget(self.btn_load)
         
         self.btn_settings = QPushButton("⚙️ Settings")
-        self.btn_settings.setStyleSheet("""
-            QPushButton {
-                background-color: #3b82f6;
-                color: #ffffff;
-                border: 1px solid #2563eb;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #2563eb; }
-        """)
+        self.btn_settings.setStyleSheet(BTN_PRIMARY)
         self.btn_settings.clicked.connect(self.open_settings)
         nav_layout.addWidget(self.btn_settings)
         
         self.btn_queue = QPushButton("▶ Render")
-        self.btn_queue.setStyleSheet("""
-            QPushButton {
-                background-color: #f59e0b;
-                color: #ffffff;
-                border: 1px solid #d97706;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-family: 'Inter';
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #d97706; }
-        """)
+        self.btn_queue.setStyleSheet(BTN_WARNING)
         nav_layout.addWidget(self.btn_queue)
         
         main_layout.addWidget(nav)
@@ -307,12 +213,12 @@ class VFXCoreWindow(QMainWindow):
         
         # 3. Right Dock
         self.properties_panel = PropertiesPanel()
-        self.properties_panel.setMinimumWidth(250)
-        self.properties_panel.setMaximumWidth(400)
+        self.properties_panel.setMinimumWidth(350)
+        self.properties_panel.setMaximumWidth(550)
         self.main_splitter.addWidget(self.properties_panel)
         
-        # Set Splitter Sizes (approx: 250px, 1fr, 300px)
-        self.main_splitter.setSizes([250, 600, 300])
+        # Set Splitter Sizes (approx: 250px, 1fr, 350px)
+        self.main_splitter.setSizes([250, 600, 350])
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
@@ -447,6 +353,27 @@ class VFXCoreWindow(QMainWindow):
         if not p_def:
             return
             
+        if plugin_type == "media_plate" and "plate_file" in params:
+            sm = SettingsManager()
+            if sm.current_project_name == "Untitled":
+                import re
+                file_path = params["plate_file"]
+                basename = os.path.basename(file_path)
+                name, ext = os.path.splitext(basename)
+                shot_name = name
+                
+                if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
+                    clean_name = re.sub(r'[\._-]?\d+$', '', name)
+                    if clean_name:
+                        shot_name = clean_name
+                    else:
+                        folder_name = os.path.basename(os.path.dirname(file_path))
+                        if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
+                            shot_name = folder_name
+                            
+                sm.set_project_name(shot_name)
+                self.logo.setText(f"VFX.CORE — {shot_name}.utvfx")
+            
         # Populate default parameters from registry
         default_params = {}
         for p in p_def.get("parameters", []):
@@ -558,6 +485,8 @@ class VFXCoreWindow(QMainWindow):
                     json.dump(data, f, indent=4)
                 
                 filename = os.path.basename(file_path)
+                project_name = os.path.splitext(filename)[0]
+                SettingsManager().set_project_name(project_name)
                 self.logo.setText(f"VFX.CORE — {filename}")
                 
                 QMessageBox.information(self, "Saved", f"Project saved to {file_path}")
@@ -574,6 +503,8 @@ class VFXCoreWindow(QMainWindow):
                 self.node_scene.from_dict(data)
                 
                 filename = os.path.basename(file_path)
+                project_name = os.path.splitext(filename)[0]
+                SettingsManager().set_project_name(project_name)
                 self.logo.setText(f"VFX.CORE — {filename}")
                 
                 QMessageBox.information(self, "Loaded", f"Project loaded successfully from {file_path}")
@@ -585,6 +516,8 @@ class VFXCoreWindow(QMainWindow):
         dialog.exec()
 
 if __name__ == "__main__":
+    from utvfx.core.logger import setup_global_logger
+    setup_global_logger()
     app = QApplication(sys.argv)
     app.setStyleSheet("* { outline: none; }")
     

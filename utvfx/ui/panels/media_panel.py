@@ -80,7 +80,7 @@ class MediaPanel(QWidget):
         btn_load.setStyleSheet("""
             QPushButton {
                 background-color: #1e1e24;
-                border: 1px dashed #52525b;
+                border: 1px solid #3f3f46;
                 border-radius: 8px;
                 padding: 8px;
                 color: #e4e4e7;
@@ -90,7 +90,7 @@ class MediaPanel(QWidget):
             }
             QPushButton:hover {
                 background-color: #27272a;
-                border-color: #a1a1aa;
+                border-color: #52525b;
             }
         """)
         btn_load.clicked.connect(self._on_load_media)

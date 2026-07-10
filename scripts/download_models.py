@@ -24,35 +24,35 @@ MODELS = [
         "name": "BiRefNet (General)",
         "type": "huggingface",
         "repo_id": "ZhengPeng7/BiRefNet",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet"),
+        "path": os.path.join(BASE_DIR, "models", "BiRefNet"),
         "check_file": "model.safetensors"
     },
     {
         "name": "BiRefNet (Matting)",
         "type": "huggingface",
         "repo_id": "ZhengPeng7/BiRefNet-matting",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet-matting"),
+        "path": os.path.join(BASE_DIR, "models", "BiRefNet-matting"),
         "check_file": "model.safetensors"
     },
     {
         "name": "BiRefNet (Portrait)",
         "type": "huggingface",
         "repo_id": "ZhengPeng7/BiRefNet-portrait",
-        "path": os.path.join(BASE_DIR, "plugins", "CorridorKey", "System", "BiRefNetModule", "checkpoints", "BiRefNet-portrait"),
+        "path": os.path.join(BASE_DIR, "models", "BiRefNet-portrait"),
         "check_file": "model.safetensors"
     },
     {
         "name": "Segment Anything (SAM)",
         "type": "url",
         "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "MatAnyone2", "pretrained_models"),
+        "path": os.path.join(BASE_DIR, "models", "SAM"),
         "check_file": "sam_vit_h_4b8939.pth"
     },
     {
         "name": "Depth Anything V2 (Large)",
         "type": "url",
         "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth",
-        "path": os.path.join(BASE_DIR, "plugins", "Depth-Anything-V2", "checkpoints"),
+        "path": os.path.join(BASE_DIR, "models", "DepthAnythingV2"),
         "check_file": "depth_anything_v2_vitl.pth"
     }
 ]

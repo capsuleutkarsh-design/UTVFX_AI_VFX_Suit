@@ -9,10 +9,9 @@ import threading
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from PySide6.QtGui import QImage
 import numpy as np
+from utvfx.core.media_resolver import get_node_cache, get_upstream_nodes, get_cached_output, resolve_media_input, resolve_alpha_input, resolve_tracking_input, resolve_shape_input
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TEMP_DIR = os.path.join(BASE_DIR, "workspace", "temp")
-os.makedirs(TEMP_DIR, exist_ok=True)
 
 class InteractionWorker(QThread):
     """Offloads the fast interactive inference (e.g. SAM clicks) to prevent UI freezing."""
@@ -92,7 +91,9 @@ class InteractionWorker(QThread):
                 pass
                 
         except Exception as e:
-            self.error.emit(self.node_id, f"Interaction error: {str(e)}")
+            import traceback
+            tb_str = traceback.format_exc()
+            self.error.emit(self.node_id, f"Interaction error: {str(e)}\n\nTraceback:\n{tb_str}")
 
 class ExecutionEngine(QObject):
     """Orchestrates node execution, manages caching, and routes data."""
@@ -102,12 +103,21 @@ class ExecutionEngine(QObject):
     node_execution_finished = Signal(str)
     interactive_mask_ready = Signal(str, str, int, QImage) # node_id, layer_id, frame_idx, qimage
 
+    @property
+    def cache_dir(self):
+        from utvfx.core.settings_manager import SettingsManager
+        return SettingsManager().get("cache_dir", os.path.join(BASE_DIR, "workspace", "cache"))
+        
+    @property
+    def temp_dir(self):
+        from utvfx.core.settings_manager import SettingsManager
+        return SettingsManager().get("temp_dir", os.path.join(BASE_DIR, "workspace", "temp"))
+
     def __init__(self, scene):
         super().__init__()
-        from utvfx.core.settings_manager import SettingsManager
         self.scene = scene
-        self.cache_dir = SettingsManager().get("cache_dir", os.path.join(BASE_DIR, "workspace", "cache"))
         os.makedirs(self.cache_dir, exist_ok=True)
+        os.makedirs(self.temp_dir, exist_ok=True)
         self.active_workers = {}
         self.execution_queue = []
         self.is_executing_pipeline = False
@@ -120,7 +130,7 @@ class ExecutionEngine(QObject):
             if n.node_id in visited:
                 return
             visited.add(n.node_id)
-            for upstream in self._get_upstream_nodes(n):
+            for upstream in get_upstream_nodes(n):
                 dfs(upstream)
             sorted_nodes.append(n)
             
@@ -139,7 +149,7 @@ class ExecutionEngine(QObject):
         
         self.log_message.emit(node_id, f"Processing interaction: {len(points)} points on frame {frame_idx}...")
         
-        media_path = self._resolve_media_input(node)
+        media_path = resolve_media_input(node, cache_dir=self.cache_dir)
         if not media_path or not os.path.exists(media_path):
             self.log_message.emit(node_id, "Interaction failed: No media connected.")
             return
@@ -150,7 +160,7 @@ class ExecutionEngine(QObject):
             frame_idx=frame_idx,
             points=points,
             media_path=media_path,
-            temp_dir=TEMP_DIR
+            temp_dir=self.temp_dir
         )
         worker.finished.connect(self._on_interaction_success)
         worker.error.connect(self._on_interaction_error)
@@ -181,30 +191,6 @@ class ExecutionEngine(QObject):
     def _on_interaction_error(self, node_id, error_msg):
         self.log_message.emit(node_id, error_msg)
 
-    def _get_node_cache(self, node):
-        if getattr(node, "plugin_type", "") == "media_plate":
-            plate_file = getattr(node, "params", {}).get("plate_file")
-            if plate_file and os.path.exists(plate_file):
-                import hashlib
-                hasher = hashlib.md5()
-                hasher.update(plate_file.encode('utf-8'))
-                try:
-                    hasher.update(str(os.path.getmtime(plate_file)).encode('utf-8'))
-                except Exception:
-                    pass
-                media_hash = hasher.hexdigest()
-                return os.path.join(self.cache_dir, "MediaCache", media_hash)
-        return os.path.join(self.cache_dir, node.node_id)
-
-    def _get_upstream_nodes(self, node):
-        upstream_nodes = []
-        for port in getattr(node, "inputs", []):
-            for conn in getattr(port, "connections", []):
-                upstream_port = conn.port1 if conn.port1 != port else conn.port2
-                if upstream_port and upstream_port.node not in upstream_nodes:
-                    upstream_nodes.append(upstream_port.node)
-        return upstream_nodes
-
     def _compute_node_hash(self, node, memo=None):
         if memo is None:
             memo = {}
@@ -234,7 +220,7 @@ class ExecutionEngine(QObject):
                     
         # Incorporate hashes of all upstream dependencies so downstream nodes invalidate
         # if any upstream input changes.
-        for upstream in self._get_upstream_nodes(node):
+        for upstream in get_upstream_nodes(node):
             hasher.update(self._compute_node_hash(upstream, memo).encode('utf-8'))
             
         result = hasher.hexdigest()
@@ -242,111 +228,6 @@ class ExecutionEngine(QObject):
         return result
 
 
-    def _get_cached_output(self, node, preferred_dirs=None, allow_fallback=True):
-        node_cache = self._get_node_cache(node)
-        preferred_dirs = preferred_dirs or ["fgr", "pha", "Comp", "FG", "Matte", "AlphaHint", "sam_masks"]
-
-        for dirname in preferred_dirs:
-            candidate = os.path.join(node_cache, dirname)
-            if os.path.isdir(candidate) and os.listdir(candidate):
-                return candidate
-
-        if allow_fallback and os.path.isdir(node_cache):
-            files = [
-                os.path.join(node_cache, name)
-                for name in os.listdir(node_cache)
-                if os.path.isfile(os.path.join(node_cache, name))
-            ]
-            if files:
-                return node_cache
-        return None
-
-    def _resolve_media_input(self, node, visited=None, is_start_node=True):
-        if visited is None:
-            visited = set()
-        if node in visited:
-            return None
-        visited.add(node)
-
-        params = getattr(node, "params", {})
-        plate_file = params.get("plate_file")
-        if getattr(node, "plugin_type", "") == "media_plate" and plate_file and os.path.exists(plate_file):
-            cached_output = self._get_cached_output(node, ["Video Plate"])
-            if cached_output:
-                return cached_output
-                
-            if params.get("is_sequence", False) and os.path.isfile(plate_file):
-                return os.path.dirname(plate_file)
-            return plate_file
-
-        if not is_start_node and not getattr(node, "is_disabled", False):
-            cached_output = self._get_cached_output(node, ["fgr", "Comp", "FG"])
-            if cached_output:
-                return cached_output
-
-        for upstream_node in self._get_upstream_nodes(node):
-            media_path = self._resolve_media_input(upstream_node, visited, is_start_node=False)
-            if media_path:
-                return media_path
-        return None
-
-    def _resolve_alpha_input(self, node, visited=None, is_start_node=True):
-        if visited is None:
-            visited = set()
-        if node in visited:
-            return None
-        visited.add(node)
-
-        if not is_start_node and not getattr(node, "is_disabled", False):
-            cached_alpha = self._get_cached_output(node, ["pha", "Matte", "AlphaHint", "sam_masks"], allow_fallback=False)
-            if cached_alpha:
-                return cached_alpha
-
-        for upstream_node in self._get_upstream_nodes(node):
-            alpha_path = self._resolve_alpha_input(upstream_node, visited, is_start_node=False)
-            if alpha_path:
-                return alpha_path
-        return None
-
-    def _resolve_tracking_input(self, node, visited=None, is_start_node=True):
-        if visited is None:
-            visited = set()
-        if node in visited:
-            return None
-        visited.add(node)
-
-        if not is_start_node and not getattr(node, "is_disabled", False):
-            # For sfm_tracker, we want the base cache dir because it contains 'sparse' and 'database.db'
-            if getattr(node, "plugin_type", "") == "sfm_tracker":
-                cache_dir = self._get_node_cache(node)
-                if os.path.exists(os.path.join(cache_dir, "sparse")):
-                    return cache_dir
-
-        for upstream_node in self._get_upstream_nodes(node):
-            track_path = self._resolve_tracking_input(upstream_node, visited, is_start_node=False)
-            if track_path:
-                return track_path
-        return None
-
-    def _resolve_shape_input(self, node, visited=None, is_start_node=True):
-        if visited is None:
-            visited = set()
-        if node in visited:
-            return None
-        visited.add(node)
-
-        if not is_start_node and not getattr(node, "is_disabled", False):
-            if getattr(node, "plugin_type", "") == "roto_to_shape":
-                cache_dir = self._get_node_cache(node)
-                shape_dir = os.path.join(cache_dir, "roto_shapes")
-                if os.path.exists(shape_dir):
-                    return shape_dir
-
-        for upstream_node in self._get_upstream_nodes(node):
-            shape_path = self._resolve_shape_input(upstream_node, visited, is_start_node=False)
-            if shape_path:
-                return shape_path
-        return None
 
     def _map_corridor_key_params(self, params):
         mapped = dict(params)
@@ -382,7 +263,7 @@ class ExecutionEngine(QObject):
                 
                 f_idx = int(f_idx)
                 import uuid
-                temp_frame_path = os.path.join(TEMP_DIR, f"utvfx_gen_frame_{f_idx}_{uuid.uuid4().hex}.jpg")
+                temp_frame_path = os.path.join(self.temp_dir, f"utvfx_gen_frame_{f_idx}_{uuid.uuid4().hex}.jpg")
                 
                 # Extract frame
                 if os.path.isdir(video_path):
@@ -593,11 +474,33 @@ class ExecutionEngine(QObject):
         if getattr(self, "current_target_node_id", None) and self.current_target_node_id != node_id:
             self.log_message.emit(self.current_target_node_id, f"[Waiting] Currently executing upstream node: {node.name}...")
 
-        node_cache = self._get_node_cache(node)
-        os.makedirs(node_cache, exist_ok=True)
-
         plugin = node.plugin_type
         params = getattr(node, "params", {})
+
+        # --- Project Auto-Naming Fallback ---
+        if plugin == "media_plate" and "plate_file" in params and params["plate_file"]:
+            from utvfx.core.settings_manager import SettingsManager
+            sm = SettingsManager()
+            if sm.current_project_name == "Untitled":
+                import re
+                file_path = params["plate_file"]
+                basename = os.path.basename(file_path)
+                name, ext = os.path.splitext(basename)
+                shot_name = name
+                
+                if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
+                    clean_name = re.sub(r'[\._-]?\d+$', '', name)
+                    if clean_name:
+                        shot_name = clean_name
+                    else:
+                        folder_name = os.path.basename(os.path.dirname(file_path))
+                        if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
+                            shot_name = folder_name
+                
+                sm.set_project_name(shot_name)
+
+        node_cache = get_node_cache(node, self.cache_dir)
+        os.makedirs(node_cache, exist_ok=True)
 
         # --- Smart Cache Validation ---
         try:
@@ -606,7 +509,7 @@ class ExecutionEngine(QObject):
             
             # 1. Check for explicit frozen state
             if getattr(node, 'is_frozen', False):
-                if self._get_cached_output(node):
+                if get_cached_output(node, cache_dir=self.cache_dir):
                     self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen. Using cached output.")
                     self._on_finished(node_id)
                     return
@@ -619,7 +522,7 @@ class ExecutionEngine(QObject):
                     saved_hash = f.read().strip()
                     
                 # If state hashes match perfectly AND the output cache folder isn't empty, skip execution.
-                if saved_hash == current_hash and self._get_cached_output(node):
+                if saved_hash == current_hash and get_cached_output(node, cache_dir=self.cache_dir):
                     self.log_message.emit(node_id, f"[Cached] Output is already generated. Skipping execution for {node.name}.")
                     self._on_finished(node_id)
                     return
@@ -646,13 +549,13 @@ class ExecutionEngine(QObject):
                 # Check for standard names or implement types
                 inp_name_lower = inp_name.lower()
                 if "alpha" in inp_name_lower or "matte" in inp_name_lower:
-                    resolved_inputs[inp_name] = self._resolve_alpha_input(node)
+                    resolved_inputs[inp_name] = resolve_alpha_input(node, cache_dir=self.cache_dir)
                 elif "tracking" in inp_name_lower:
-                    resolved_inputs[inp_name] = self._resolve_tracking_input(node)
+                    resolved_inputs[inp_name] = resolve_tracking_input(node, cache_dir=self.cache_dir)
                 elif "shape" in inp_name_lower:
-                    resolved_inputs[inp_name] = self._resolve_shape_input(node)
+                    resolved_inputs[inp_name] = resolve_shape_input(node, cache_dir=self.cache_dir)
                 else:
-                    resolved_inputs[inp_name] = self._resolve_media_input(node)
+                    resolved_inputs[inp_name] = resolve_media_input(node, cache_dir=self.cache_dir)
                     
             if plugin == "corridor_keyer":
                 params = self._map_corridor_key_params(params)
@@ -706,7 +609,7 @@ class ExecutionEngine(QObject):
         if target_node:
             try:
                 current_hash = self._compute_node_hash(target_node)
-                node_cache = self._get_node_cache(target_node)
+                node_cache = get_node_cache(target_node, self.cache_dir)
                 if os.path.exists(node_cache):
                     hash_file = os.path.join(node_cache, "last_state_hash.txt")
                     with open(hash_file, "w", encoding="utf-8") as f:

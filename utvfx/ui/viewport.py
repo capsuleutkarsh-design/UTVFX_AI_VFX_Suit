@@ -10,579 +10,9 @@ from utvfx.ui.windows.point_cloud_viewer import PointCloudViewerWidget
 import time
 from PySide6.QtCore import Qt, QThread, Signal, Slot, QTimer, QMutex, QMutexLocker, QPointF, QRectF
 from PySide6.QtGui import QColor, QPalette, QImage, QPixmap, QPainter, QPen, QBrush
-
-# Enable EXR support in OpenCV
-os.environ['OPENCV_IO_ENABLE_OPENEXR'] = '1'
-
-class VideoPlayerThread(QThread):
-    frame_ready = Signal(QImage, int, int) # image, current_frame, total_frames
-    
-    def __init__(self, media_path):
-        super().__init__()
-        self.media_path = media_path
-        self.is_running = True
-        self.is_paused = True # Default to paused to prevent annoying autoplay
-        self.current_frame = 0
-        self.total_frames = 1
-        self.fps = 24
-        self.mutex = QMutex()
-        self.target_frame = 0
-        self.seek_requested = False
-        
-        # Determine if it's a sequence or video
-        self.is_sequence = False
-        self.sequence_files = []
-        self.start_frame_offset = 1
-        
-        if os.path.isdir(self.media_path):
-            self.is_sequence = True
-            # Load images
-            exts = ("*.png", "*.jpg", "*.jpeg", "*.exr", "*.dpx", "*.tif", "*.tiff", "*.hdr")
-            for ext in exts:
-                self.sequence_files.extend(glob.glob(os.path.join(self.media_path, ext)))
-            self.sequence_files.sort()
-            self.total_frames = len(self.sequence_files)
-            if self.sequence_files:
-                import re
-                m = re.match(r"^(.*?)(\d+)(\.[^.]+)$", os.path.basename(self.sequence_files[0]))
-                if m:
-                    offset = int(m.group(2))
-                    self.start_frame_offset = 1 if offset == 0 else offset
-        else:
-            ext = os.path.splitext(self.media_path)[1].lower()
-            if ext in [".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"]:
-                self.is_sequence = True
-                
-                import re
-                folder = os.path.dirname(self.media_path)
-                base = os.path.basename(self.media_path)
-                m = re.match(r"^(.*?)(\d+)(\.[^.]+)$", base)
-                
-                if m:
-                    prefix, suffix = m.group(1), m.group(3)
-                    all_files = glob.glob(os.path.join(folder, f"{prefix}*{suffix}"))
-                    
-                    seq = []
-                    for f in all_files:
-                        fb = os.path.basename(f)
-                        if re.match(r"^" + re.escape(prefix) + r"\d+" + re.escape(suffix) + r"$", fb):
-                            seq.append(f)
-                    seq.sort()
-                    self.sequence_files = seq if seq else [self.media_path]
-                    
-                    if self.sequence_files:
-                        m_first = re.match(r"^(.*?)(\d+)(\.[^.]+)$", os.path.basename(self.sequence_files[0]))
-                        if m_first:
-                            offset = int(m_first.group(2))
-                            self.start_frame_offset = 1 if offset == 0 else offset
-                else:
-                    self.sequence_files = [self.media_path]
-                
-                self.total_frames = max(0, len(self.sequence_files))
-                if self.media_path in self.sequence_files:
-                    self.current_frame = self.sequence_files.index(self.media_path)
-            else:
-                # Video file
-                self.is_sequence = False
-                self.total_frames = 1
-                self.start_frame_offset = 1
-                self.fps = 24
-                # cap initialization is deferred to the run() method to prevent UI freeze
-                    
-
-                    
-    def stop(self):
-        self.is_running = False
-        self.wait()
-        
-    def seek(self, frame_idx):
-        with QMutexLocker(self.mutex):
-            self.target_frame = min(max(frame_idx, 0), self.total_frames - 1)
-            self.seek_requested = True
-        
-    def read_and_emit(self, frame_idx):
-        if self.is_sequence:
-            if not self.sequence_files:
-                # Create a placeholder frame indicating no media
-                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-                cv2.putText(frame, "NO MEDIA RENDERED", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (100, 100, 100), 3)
-                qimg = QImage(frame.data, 1280, 720, 1280*3, QImage.Format_RGB888)
-                self.frame_ready.emit(qimg, 0, 0)
-                return
-                
-            # Safe clamp to the actual sequence files list size to completely prevent IndexError
-            frame_idx = min(max(frame_idx, 0), len(self.sequence_files) - 1)
-            path = self.sequence_files[frame_idx]
-            frame = None
-            
-            from utvfx.core.image_utils import load_frame
-            frame = load_frame(path)
-            
-            if frame is not None:
-                if getattr(self, 'view_mode', 'COMP') == "MATTE":
-                    if len(frame.shape) == 3 and frame.shape[2] == 4:
-                        alpha = frame[:, :, 3]
-                        frame = cv2.cvtColor(alpha, cv2.COLOR_GRAY2RGB)
-                    elif len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):
-                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-                    else:
-                        frame = cv2.cvtColor(frame[:, :, :3], cv2.COLOR_BGR2GRAY)
-                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-                else:
-                    if len(frame.shape) == 2 or (len(frame.shape) == 3 and frame.shape[2] == 1):
-                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
-                    elif len(frame.shape) == 3 and frame.shape[2] == 4:
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2RGB)
-                        frame = frame[:, :, :3]
-                    elif len(frame.shape) == 3 and frame.shape[2] >= 3:
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        frame = frame[:, :, :3]
-
-            if frame is None: return
-        else:
-            if not hasattr(self, 'cap') or not self.cap.isOpened(): return
-            ret, frame = self.cap.read()
-            if not ret: return
-            # OpenCV video captures natively read in BGR
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            
-        h, w, ch = frame.shape
-        bytes_per_line = ch * w
-        qimg = QImage(frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
-        
-        # Prevent UI slider jumping: if a newer seek was requested while we were reading,
-        # abort emitting this obsolete frame and let the thread process the newer seek.
-        with QMutexLocker(self.mutex):
-            if getattr(self, 'seek_requested', False):
-                return
-                
-        self.frame_ready.emit(qimg.copy(), frame_idx, self.total_frames)
-        
-    def run(self):
-        # Initial setup inside the thread to avoid blocking the main thread
-        if not self.is_sequence:
-            self.cap = cv2.VideoCapture(self.media_path)
-            if self.cap.isOpened():
-                with QMutexLocker(self.mutex):
-                    self.total_frames = max(1, int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)))
-                    self.fps = self.cap.get(cv2.CAP_PROP_FPS)
-                    if self.fps <= 0: self.fps = 24
-
-        # Initial frame load
-        with QMutexLocker(self.mutex):
-            if not self.is_sequence and hasattr(self, 'cap'):
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-            initial_frame = self.current_frame
-            
-        self.read_and_emit(initial_frame)
-            
-        target_frame_time = 1.0 / self.fps
-        
-        while self.is_running:
-            do_seek = False
-            seek_target = 0
-            
-            with QMutexLocker(self.mutex):
-                if self.seek_requested:
-                    do_seek = True
-                    seek_target = self.target_frame
-                    self.seek_requested = False
-                    self.current_frame = seek_target
-                    
-            if do_seek:
-                if not self.is_sequence and hasattr(self, 'cap'):
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, seek_target)
-                self.read_and_emit(seek_target)
-                continue
-                
-            if not self.is_paused and self.total_frames > 1:
-                loop_start = time.time()
-                
-                with QMutexLocker(self.mutex):
-                    start_bound = getattr(self, 'in_frame', 0)
-                    if start_bound is None: start_bound = 0
-                    end_bound = getattr(self, 'out_frame', self.total_frames - 1)
-                    if end_bound is None: end_bound = self.total_frames - 1
-                    
-                    self.current_frame += 1
-                    if self.current_frame > end_bound or self.current_frame < start_bound:
-                        self.current_frame = start_bound
-                        
-                    if not self.is_sequence and hasattr(self, 'cap'):
-                        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.current_frame)
-                    
-                    frame_to_read = self.current_frame
-                    
-                self.read_and_emit(frame_to_read)
-                    
-                elapsed = time.time() - loop_start
-                sleep_time = max(0.0, target_frame_time - elapsed)
-                self.msleep(int(sleep_time * 1000))
-            else:
-                self.msleep(10)
-                
-        with QMutexLocker(self.mutex):
-            if not self.is_sequence and hasattr(self, 'cap'):
-                self.cap.release()
-
-class InteractiveVideoCanvas(QWidget):
-    interaction_requested = Signal(int, list) # frame_idx, [(nx, ny, is_positive), ...]
-    keyframes_changed = Signal(list)
-    zoom_changed = Signal()
-    pixel_probed = Signal(int, int, int, int, int) # x, y, r, g, b
-    
-    def __init__(self, placeholder_text="NO MEDIA LOADED", parent=None):
-        super().__init__(parent)
-        self.placeholder_text = placeholder_text
-        self.setMouseTracking(True)
-        
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        
-        self.is_interactive = False
-        self.current_frame = 0
-        self.mask_layers = []
-        self.active_layer_id = None
-        self.mask_overlays = {}
-        self.current_mask_overlay = None
-        self.tracking_points = {}
-        
-        self.last_mouse_pos = None
-        self.bg_mode = "black"
-        
-        # A/B Wipe Properties
-        self.wipe_enabled = False
-        self.last_b_image = None
-        self.wipe_pos = 0.5
-        self.is_dragging_wipe = False
-
-    def setText(self, text):
-        self.placeholder_text = text
-        self.update()
-
-    def text(self):
-        return self.placeholder_text
-
-    def clear(self):
-        self.last_raw_image = None
-        self.placeholder_text = ""
-        self.update()
-
-    def set_current_frame(self, frame_idx):
-        if self.current_frame != frame_idx:
-            # Restore the cached mask for this frame and active layer, if it exists
-            self.current_mask_overlay = self.mask_overlays.get((self.active_layer_id, frame_idx), None)
-            
-            # Request mask generation if there are points for the active layer
-            active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-            if self.current_mask_overlay is None and active_layer and frame_idx in active_layer.get("keyframes", {}):
-                self.interaction_requested.emit(frame_idx, active_layer["keyframes"][frame_idx])
-                
-        self.current_frame = frame_idx
-        self.update()
-
-    def enable_interaction(self, enable):
-        self.is_interactive = enable
-        if not enable:
-            self.current_mask_overlay = None
-        self.update()
-        
-    def set_mask_overlay(self, layer_id, frame_idx, qimage):
-        self.mask_overlays[(layer_id, frame_idx)] = qimage
-        if self.current_frame == frame_idx and self.active_layer_id == layer_id:
-            self.current_mask_overlay = qimage
-            self.update()
-
-    def clear_current_frame_points(self):
-        active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-        if active_layer and "keyframes" in active_layer and self.current_frame in active_layer["keyframes"]:
-            del active_layer["keyframes"][self.current_frame]
-            cache_key = (self.active_layer_id, self.current_frame)
-            if cache_key in self.mask_overlays:
-                del self.mask_overlays[cache_key]
-            self.current_mask_overlay = None
-            self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-            self.update()
-
-    def wheelEvent(self, event):
-        # Zoom in/out with mouse scroll
-        if event.angleDelta().y() > 0:
-            self.zoom_factor *= 1.1
-        else:
-            self.zoom_factor /= 1.1
-            
-        self.zoom_factor = max(0.1, min(self.zoom_factor, 10.0))
-        
-        # Trigger an update by emitting a signal or forcing the viewport to redraw the frame
-        # Since update_frame is in Viewport, we can just call self.parent().update_frame ?
-        # A simpler way is to signal the viewport to redraw. We can add a simple signal.
-        if hasattr(self, 'zoom_changed'):
-            self.zoom_changed.emit()
-        self.update()
-
-
-
-    def mouseMoveEvent(self, event):
-        if self.last_mouse_pos is not None:
-            delta = event.position() - self.last_mouse_pos
-            self.pan_x += delta.x()
-            self.pan_y += delta.y()
-            self.last_mouse_pos = event.position()
-            self.update()
-            
-        # Pixel Probe
-        if hasattr(self, 'last_raw_image') and self.last_raw_image and not self.last_raw_image.isNull():
-            img_w, img_h = self.last_raw_image.width(), self.last_raw_image.height()
-            lbl_w, lbl_h = self.width(), self.height()
-            
-            scale = min(lbl_w / img_w, lbl_h / img_h) * self.zoom_factor
-            drawn_w = img_w * scale
-            drawn_h = img_h * scale
-            
-            x_offset = (lbl_w - drawn_w) / 2 + self.pan_x
-            y_offset = (lbl_h - drawn_h) / 2 + self.pan_y
-            
-            click_x = event.position().x() - x_offset
-            click_y = event.position().y() - y_offset
-            
-            if 0 <= click_x <= drawn_w and 0 <= click_y <= drawn_h:
-                px = int((click_x / drawn_w) * img_w)
-                py = int((click_y / drawn_h) * img_h)
-                
-                # Safely probe pixel
-                if 0 <= px < img_w and 0 <= py < img_h:
-                    color = QColor(self.last_raw_image.pixel(px, py))
-                    self.pixel_probed.emit(px, py, color.red(), color.green(), color.blue())
-            
-            if self.wipe_enabled and self.is_dragging_wipe:
-                self.wipe_pos = max(0.0, min(1.0, click_x / drawn_w))
-                self.update()
-                    
-        super().mouseMoveEvent(event)
-
-    def mousePressEvent(self, event):
-        if event.button() in (Qt.MiddleButton, Qt.RightButton):
-            self.last_mouse_pos = event.position()
-            
-        elif event.button() == Qt.LeftButton:
-            if self.wipe_enabled and hasattr(self, 'last_raw_image') and self.last_raw_image:
-                img_w, img_h = self.last_raw_image.width(), self.last_raw_image.height()
-                lbl_w, lbl_h = self.width(), self.height()
-                scale = min(lbl_w / img_w, lbl_h / img_h) * self.zoom_factor
-                drawn_w = img_w * scale
-                x_offset = (lbl_w - drawn_w) / 2 + self.pan_x
-                
-                click_x = event.position().x() - x_offset
-                wipe_px = drawn_w * self.wipe_pos
-                
-                if abs(click_x - wipe_px) < 15: # 15px hit radius
-                    self.is_dragging_wipe = True
-                    return
-
-            if self.is_interactive and hasattr(self, 'last_raw_image') and self.last_raw_image:
-                img_w, img_h = self.last_raw_image.width(), self.last_raw_image.height()
-                lbl_w, lbl_h = self.width(), self.height()
-                
-                scale = min(lbl_w / img_w, lbl_h / img_h) * self.zoom_factor
-                drawn_w = img_w * scale
-                drawn_h = img_h * scale
-                
-                x_offset = (lbl_w - drawn_w) / 2 + self.pan_x
-                y_offset = (lbl_h - drawn_h) / 2 + self.pan_y
-                
-                click_x = event.position().x() - x_offset
-                click_y = event.position().y() - y_offset
-                
-                if 0 <= click_x <= drawn_w and 0 <= click_y <= drawn_h:
-                    norm_x = click_x / drawn_w
-                    norm_y = click_y / drawn_h
-                    
-                    tool_mode = "Point"
-                    if self.parent() and hasattr(self.parent(), "current_node") and self.parent().current_node:
-                        tool_mode = self.parent().current_node.params.get("tool_mode", "Point")
-                        
-                    if tool_mode == "Box":
-                        self.drag_start_pos = (norm_x, norm_y)
-                        self.drag_current_pos = (norm_x, norm_y)
-                        self.is_drawing_box = True
-                        self.update()
-                        return
-                    
-                    is_positive = (event.modifiers() != Qt.ShiftModifier)
-                    
-                    active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-                    if active_layer:
-                        if "keyframes" not in active_layer:
-                            active_layer["keyframes"] = {}
-                        if self.current_frame not in active_layer["keyframes"]:
-                            active_layer["keyframes"][self.current_frame] = []
-                            
-                        active_layer["keyframes"][self.current_frame].append((norm_x, norm_y, is_positive))
-                        self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-                        
-                        # Emit interaction request for live preview
-                        self.interaction_requested.emit(self.current_frame, active_layer["keyframes"][self.current_frame])
-                        self.update()
-            
-        super().mousePressEvent(event)
-
-    def mouseReleaseEvent(self, event):
-        if getattr(self, 'is_drawing_box', False):
-            self.is_drawing_box = False
-            
-            x1 = min(self.drag_start_pos[0], self.drag_current_pos[0])
-            y1 = min(self.drag_start_pos[1], self.drag_current_pos[1])
-            x2 = max(self.drag_start_pos[0], self.drag_current_pos[0])
-            y2 = max(self.drag_start_pos[1], self.drag_current_pos[1])
-            
-            if x2 - x1 > 0.01 and y2 - y1 > 0.01:
-                active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-                if active_layer:
-                    if "keyframes" not in active_layer:
-                        active_layer["keyframes"] = {}
-                    if self.current_frame not in active_layer["keyframes"]:
-                        active_layer["keyframes"][self.current_frame] = []
-                        
-                    active_layer["keyframes"][self.current_frame].append((x1, y1, x2, y2, "box"))
-                    self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-                    self.interaction_requested.emit(self.current_frame, active_layer["keyframes"][self.current_frame])
-            self.update()
-            return
-            
-        self.is_dragging_wipe = False
-        if event.button() in (Qt.MiddleButton, Qt.RightButton):
-            self.last_mouse_pos = None
-
-    def reset_zoom(self):
-        self.zoom_factor = 1.0
-        self.pan_x = 0.0
-        self.pan_y = 0.0
-        self.update()
-
-    def mouseDoubleClickEvent(self, event):
-        self.reset_zoom()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        
-        if not hasattr(self, 'last_raw_image') or self.last_raw_image is None or self.last_raw_image.isNull():
-            painter.setPen(QColor("#71717a"))
-            painter.drawText(self.rect(), Qt.AlignCenter, self.placeholder_text)
-            return
-            
-        img_w, img_h = self.last_raw_image.width(), self.last_raw_image.height()
-        lbl_w, lbl_h = self.width(), self.height()
-        
-        scale = min(lbl_w / img_w, lbl_h / img_h) * self.zoom_factor
-        drawn_w = img_w * scale
-        drawn_h = img_h * scale
-        
-        x_offset = (lbl_w - drawn_w) / 2 + self.pan_x
-        y_offset = (lbl_h - drawn_h) / 2 + self.pan_y
-        
-        drawn_rect = QRectF(x_offset, y_offset, drawn_w, drawn_h)
-        
-        # Draw Background Mode
-        if self.bg_mode == "checkerboard":
-            tile_size = 16
-            tile_pm = QPixmap(tile_size * 2, tile_size * 2)
-            tile_pm.fill(QColor("#a1a1aa"))
-            tp = QPainter(tile_pm)
-            tp.fillRect(0, 0, tile_size, tile_size, QColor("#e4e4e7"))
-            tp.fillRect(tile_size, tile_size, tile_size, tile_size, QColor("#e4e4e7"))
-            tp.end()
-            painter.fillRect(drawn_rect, QBrush(tile_pm))
-        elif self.bg_mode == "white":
-            painter.fillRect(drawn_rect, Qt.white)
-        else:
-            painter.fillRect(drawn_rect, Qt.black)
-            
-        if self.wipe_enabled and self.last_b_image and not self.last_b_image.isNull():
-            wipe_x = drawn_w * self.wipe_pos
-            
-            # Draw A (Left)
-            rect_a_src = QRectF(0, 0, img_w * self.wipe_pos, img_h)
-            rect_a_dst = QRectF(x_offset, y_offset, wipe_x, drawn_h)
-            painter.drawImage(rect_a_dst, self.last_raw_image, rect_a_src)
-            
-            # Draw B (Right)
-            rect_b_src = QRectF(img_w * self.wipe_pos, 0, img_w * (1 - self.wipe_pos), img_h)
-            rect_b_dst = QRectF(x_offset + wipe_x, y_offset, drawn_w - wipe_x, drawn_h)
-            painter.drawImage(rect_b_dst, self.last_b_image, rect_b_src)
-            
-            # Wipe Line
-            painter.setPen(QPen(Qt.white, 3))
-            painter.drawLine(x_offset + wipe_x, y_offset, x_offset + wipe_x, y_offset + drawn_h)
-            # Draw small handle
-            painter.setBrush(QBrush(Qt.white))
-            painter.drawEllipse(QPointF(x_offset + wipe_x, y_offset + drawn_h / 2), 6, 6)
-        else:
-            painter.drawImage(drawn_rect, self.last_raw_image)
-        
-        if self.current_mask_overlay is not None and not self.current_mask_overlay.isNull():
-            painter.setOpacity(0.55)
-            painter.drawImage(drawn_rect, self.current_mask_overlay)
-            painter.setOpacity(1.0)
-        
-        if self.is_interactive:
-            for layer in self.mask_layers:
-                is_active = (layer["id"] == self.active_layer_id)
-                
-                # (Points from inactive layers will be drawn dimmed/smaller below)
-                points = layer.get("keyframes", {}).get(self.current_frame, [])
-                layer_color = QColor(layer.get("color", "#ffffff"))
-                
-                for pt in points:
-                    if len(pt) == 5:
-                        x1, y1, x2, y2, prompt_type = pt
-                        px1 = x_offset + (x1 * drawn_w)
-                        py1 = y_offset + (y1 * drawn_h)
-                        px2 = x_offset + (x2 * drawn_w)
-                        py2 = y_offset + (y2 * drawn_h)
-                        
-                        painter.setBrush(Qt.BrushStyle.NoBrush)
-                        if is_active:
-                            painter.setPen(QPen(layer_color, 3, Qt.PenStyle.DashLine))
-                        else:
-                            painter.setPen(QPen(layer_color, 1, Qt.PenStyle.DashLine))
-                        
-                        painter.drawRect(QRectF(QPointF(px1, py1), QPointF(px2, py2)))
-                    else:
-                        nx, ny, is_pos = pt
-                        px = x_offset + (nx * drawn_w)
-                        py = y_offset + (ny * drawn_h)
-                        
-                        # Fill color: Green for positive, Red for negative
-                        fill_color = QColor(34, 197, 94) if is_pos else QColor(239, 68, 68)
-                        painter.setBrush(QBrush(fill_color))
-                        
-                        # Pen (outline): Layer color if active, otherwise dimmed
-                        if is_active:
-                            painter.setPen(QPen(layer_color, 3))
-                            painter.drawEllipse(QPointF(px, py), 7, 7)
-                        else:
-                            painter.setPen(QPen(layer_color, 1))
-                            painter.drawEllipse(QPointF(px, py), 5, 5)
-                
-        # Draw camera tracking points
-        if getattr(self, "show_tracking", False) and self.current_frame in self.tracking_points:
-            t_points = self.tracking_points[self.current_frame]
-            painter.setPen(Qt.NoPen)
-            for tx, ty, has_3d in t_points:
-                nx = tx / img_w
-                ny = ty / img_h
-                px = x_offset + (nx * drawn_w)
-                py = y_offset + (ny * drawn_h)
-                
-                # Orange if matched to 3D point, gray if 2D only
-                color = QColor(249, 115, 22) if has_3d else QColor(156, 163, 175, 100)
-                painter.setBrush(QBrush(color))
-                painter.drawRect(px - 1.5, py - 1.5, 3, 3)
-            
-        painter.end()
+from utvfx.playback.video_player import VideoPlayerThread
+from utvfx.ui.canvas import InteractiveVideoCanvas
+from utvfx.core.media_resolver import get_node_media_path
 
 
 class Viewport(QWidget):
@@ -833,8 +263,8 @@ class Viewport(QWidget):
             # Check if we should switch to 3D Viewer
             if mode == "3D" and getattr(self.current_node, "plugin_type", "") == "sfm_tracker":
                 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                sparse_dir = os.path.join(project_root, "cache", getattr(self.current_node, "node_id", ""), "sparse")
-                if os.path.exists(os.path.join(sparse_dir, "points3D.txt")):
+                sparse_dir = os.path.join(project_root, "workspace", "cache", getattr(self.current_node, "node_id", ""), "sparse")
+                if os.path.exists(os.path.join(sparse_dir, "0", "points3D.txt")):
                     self.stacked_display.setCurrentWidget(self.point_cloud_viewer)
                     self.point_cloud_viewer.load_colmap_model(sparse_dir)
                     if self.player_thread:
@@ -844,7 +274,7 @@ class Viewport(QWidget):
             
             # Otherwise, use 2D Viewer
             self.stacked_display.setCurrentWidget(self.img_display)
-            media_path = self._get_node_media_path(self.current_node, view_mode=mode)
+            media_path = get_node_media_path(self.current_node, view_mode=mode)
             if media_path and os.path.exists(media_path):
                 was_paused = True
                 curr_frame = 0
@@ -860,7 +290,7 @@ class Viewport(QWidget):
                 self.player_thread.view_mode = mode
                 
                 # Maintain true timeline length from source
-                true_path = self._get_node_media_path(self.current_node, view_mode="SOURCE BGR")
+                true_path = get_node_media_path(self.current_node, view_mode="SOURCE BGR")
                 if true_path and true_path != media_path:
                     temp_p = VideoPlayerThread(true_path)
                     self.player_thread.total_frames = max(self.player_thread.total_frames, temp_p.total_frames)
@@ -873,71 +303,14 @@ class Viewport(QWidget):
                 if was_paused:
                     self.seek_frame(curr_frame)
 
-    def _get_node_media_path(self, node, visited=None, view_mode="COMP"):
-        """Finds media associated with a node, generated cache, or upstream inputs."""
-        if visited is None:
-            visited = set()
 
-        if node in visited:
-            return None
-        visited.add(node)
-
-        params = getattr(node, "params", {})
-        plate_file = params.get("plate_file")
-        if getattr(node, "plugin_type", "") == "media_plate" and plate_file and os.path.exists(plate_file):
-            from utvfx.core.settings_manager import SettingsManager
-            node_cache = SettingsManager().get_cache_dir(getattr(node, "node_id", ""))
-            candidate = os.path.join(node_cache, "Video Plate")
-            if os.path.isdir(candidate) and os.listdir(candidate):
-                return candidate
-            if params.get("is_sequence", False) and os.path.isfile(plate_file):
-                return os.path.dirname(plate_file)
-            return plate_file
-
-        from utvfx.core.settings_manager import SettingsManager
-        node_cache = SettingsManager().get_cache_dir(getattr(node, "node_id", ""))
-
-        if os.path.exists(node_cache):
-            if view_mode == "MATTE":
-                preferred = ("pha", "Output/Matte", "Matte", "AlphaHint")
-            elif view_mode == "COMP" or view_mode == "3D":
-                preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG")
-            else:
-                preferred = ()
-                
-            for dirname in preferred:
-                candidate = os.path.join(node_cache, dirname)
-                if os.path.isdir(candidate) and os.listdir(candidate):
-                    return candidate
-            
-            if view_mode != "SRC":
-                files = glob.glob(os.path.join(node_cache, "*"))
-                files = [f for f in files if os.path.isfile(f)]
-                if files:
-                    return node_cache
-
-        for port in getattr(node, "inputs", []):
-            if port.connections:
-                conn = port.connections[0]
-                upstream_port = conn.port1 if conn.port1 != port else conn.port2
-                if upstream_port:
-                    upstream_path = self._get_node_media_path(upstream_port.node, visited, view_mode)
-                    if upstream_path:
-                        return upstream_path
-        return None
 
     def _sync_mask_keyframes(self, kfs=None):
         pass # UI updates handled elsewhere
 
     def _on_canvas_interaction(self, frame_idx, points):
         if self.current_node:
-            from utvfx.core.execution_engine import ExecutionEngine
-            if not getattr(self, "engine_ref", None):
-                main_window = self.window()
-                self.engine_ref = getattr(main_window, "execution_engine", None)
-            
-            if self.engine_ref:
-                self.engine_ref.handle_interaction(self.current_node.node_id, frame_idx, points)
+            self.interaction_requested.emit(self.current_node.node_id, frame_idx, points)
 
     def _on_zoom_changed(self):
         if hasattr(self.img_display, 'last_raw_image') and self.img_display.last_raw_image:
@@ -981,7 +354,7 @@ class Viewport(QWidget):
                 self.current_node.params = {}
             self.current_node._mask_overlays_cache = self.img_display.mask_overlays.copy()
         # Get the new media path before stopping the existing player
-        media_path = self._get_node_media_path(node, view_mode=self.current_view_mode)
+        media_path = get_node_media_path(node, view_mode=self.current_view_mode)
 
         # If it's the same node and the same media path, don't interrupt playback
         if getattr(self, "current_node", None) == node and self.player_thread and self.player_thread.media_path == media_path:
@@ -1080,7 +453,7 @@ class Viewport(QWidget):
         else:
             self.btn_clear_pts.hide()
             
-        media_path = self._get_node_media_path(node, view_mode=self.current_view_mode)
+        media_path = get_node_media_path(node, view_mode=self.current_view_mode)
 
         if media_path and os.path.exists(media_path):
             self.img_display.clear()
@@ -1089,7 +462,7 @@ class Viewport(QWidget):
             self.player_thread.view_mode = self.current_view_mode
             
             # Maintain true timeline length from source
-            true_path = self._get_node_media_path(node, view_mode="SOURCE BGR")
+            true_path = get_node_media_path(node, view_mode="SOURCE BGR")
             if true_path and true_path != media_path:
                 temp_p = VideoPlayerThread(true_path)
                 self.player_thread.total_frames = max(self.player_thread.total_frames, temp_p.total_frames)
@@ -1202,7 +575,7 @@ class Viewport(QWidget):
 
     def _fetch_source_frame_sync(self, frame_idx):
         if not self.current_node: return None
-        true_path = self._get_node_media_path(self.current_node, view_mode="SOURCE BGR")
+        true_path = get_node_media_path(self.current_node, view_mode="SOURCE BGR")
         if not true_path: return None
         
         # Super quick read using OpenCV for the preview B frame

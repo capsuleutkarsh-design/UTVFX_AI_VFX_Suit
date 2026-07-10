@@ -38,15 +38,35 @@ class SuperMatteWorker(BaseWorker):
         return tracked_nxny
 
     def generate_trimap(self, mask_uint8, erode_kernel_size, dilate_kernel_size):
-        kernel_erode = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (erode_kernel_size, erode_kernel_size))
-        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
+        # Adaptive Trimap Generation
+        # Compute distance to the background (for erosion)
+        dist_fg = cv2.distanceTransform(mask_uint8, cv2.DIST_L2, 3)
+        # Compute distance to the foreground (for dilation)
+        inv_mask = cv2.bitwise_not(mask_uint8)
+        dist_bg = cv2.distanceTransform(inv_mask, cv2.DIST_L2, 3)
         
-        eroded = cv2.erode(mask_uint8, kernel_erode, iterations=1)
-        dilated = cv2.dilate(mask_uint8, kernel_dilate, iterations=1)
+        # Calculate edge complexity using Sobel
+        grad_x = cv2.Sobel(mask_uint8, cv2.CV_32F, 1, 0, ksize=5)
+        grad_y = cv2.Sobel(mask_uint8, cv2.CV_32F, 0, 1, ksize=5)
+        grad_mag = cv2.magnitude(grad_x, grad_y)
+        grad_mag = cv2.normalize(grad_mag, None, 0, 1, cv2.NORM_MINMAX)
+        
+        # Dilate the gradient mask to spread the "complex edge" score
+        kernel_grad = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        grad_mag_dilated = cv2.dilate(grad_mag, kernel_grad, iterations=1)
+        
+        # Adaptive thresholds: where gradient is high, allow larger distance (up to 3x)
+        erode_thresh = (erode_kernel_size / 2.0) * (1.0 + grad_mag_dilated * 2.0)
+        dilate_thresh = (dilate_kernel_size / 2.0) * (1.0 + grad_mag_dilated * 2.0)
         
         trimap = np.full(mask_uint8.shape, 128, dtype=np.uint8)
-        trimap[dilated == 0] = 0
-        trimap[eroded == 255] = 255
+        
+        fg_mask = dist_fg > erode_thresh
+        bg_mask = dist_bg > dilate_thresh
+        
+        trimap[bg_mask] = 0
+        trimap[fg_mask] = 255
+        
         return trimap
 
     def run_task(self):
@@ -188,7 +208,14 @@ class SuperMatteWorker(BaseWorker):
             raise Exception("No prompt points defined in any layer. Add points in the UI.")
         
         sam_version = self.params.get("sam_version", "SAM 1 (ViT-H)")
+        refiner_model = self.params.get("refiner_model", "ViTMatte")
+        tool_mode = self.params.get("tool_mode", "Point")
         is_samurai = "SAM 2" in sam_version
+        
+        self.log_message.emit(self.node_id, f"Initializing SuperMatte execution...")
+        self.log_message.emit(self.node_id, f"Tracker/Segmenter: {sam_version}")
+        self.log_message.emit(self.node_id, f"Refiner Model: {refiner_model}")
+        self.log_message.emit(self.node_id, f"Interaction Mode: {tool_mode}")
         
         if is_samurai:
             use_existing_jpgs = False
@@ -482,7 +509,19 @@ class SuperMatteWorker(BaseWorker):
                 combined_alpha = cv2.GaussianBlur(combined_alpha, (ksize, ksize), 0)
                 
             if self.params.get("temporal_smoothing", False) and prev_gray is not None and getattr(self, "prev_alpha", None) is not None:
-                combined_alpha = cv2.addWeighted(combined_alpha, 0.6, self.prev_alpha, 0.4, 0)
+                # Dense Optical Flow Temporal Stabilization
+                flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+                
+                # We need a proper remap grid
+                h_img, w_img = prev_gray.shape
+                grid_x, grid_y = np.meshgrid(np.arange(w_img), np.arange(h_img))
+                map_x = (grid_x + flow[..., 0]).astype(np.float32)
+                map_y = (grid_y + flow[..., 1]).astype(np.float32)
+                
+                warped_prev_alpha = cv2.remap(self.prev_alpha, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_REPLICATE)
+                
+                # Blend
+                combined_alpha = cv2.addWeighted(combined_alpha, 0.6, warped_prev_alpha, 0.4, 0)
                 
             self.prev_alpha = combined_alpha
             
@@ -537,8 +576,8 @@ def run_fast_preview(params, frame_idx, points, frame_path):
     client = AIBridgeClient.get_instance()
     
     import uuid
-    from utvfx.bridge.ai_bridge_client import TEMP_DIR
-    out_path = os.path.join(TEMP_DIR, f"fast_preview_{uuid.uuid4().hex}.png")
+    from utvfx.core.settings_manager import SettingsManager
+    out_path = os.path.join(SettingsManager().get("temp_dir"), f"fast_preview_{uuid.uuid4().hex}.png")
     
     return client.query_mask(
         image_path=frame_path, 
