@@ -31,3 +31,4 @@ workspace/
 *.png
 *.exr
 *.jpg
+!resources/*.png
