@@ -330,6 +330,16 @@ class SamuraiVideoPredictor:
                     
                     clear_pts = True if box is not None else False
                     
+                    # SAMURAI's motion-aware memory requires bounding boxes to initialize the Kalman Filter.
+                    # If the user only provides points, SAMURAI will fail to track or shrink to nothing.
+                    # By disabling samurai_mode when box is None, we gracefully fall back to standard SAM 2 point tracking.
+                    if box is None:
+                        if hasattr(self.predictor, 'samurai_mode'):
+                            self.predictor.samurai_mode = False
+                    else:
+                        if hasattr(self.predictor, 'samurai_mode'):
+                            self.predictor.samurai_mode = True
+                    
                     self.predictor.add_new_points_or_box(
                         self.state,
                         frame_idx=f_idx,
