@@ -13,7 +13,7 @@ def get_upstream_nodes(node):
 
 def get_node_cache(node, cache_dir=None):
     if cache_dir is None:
-        cache_dir = SettingsManager().get_cache_dir(getattr(node, "node_id", ""))
+        cache_dir = SettingsManager().get_cache_dir("")
         
     if getattr(node, "plugin_type", "") == "media_plate":
         plate_file = getattr(node, "params", {}).get("plate_file")
