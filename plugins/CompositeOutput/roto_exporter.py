@@ -12,8 +12,8 @@ import nuke.rotopaint as rp
 def create_animated_roto():
     shapes_data = {json.dumps(shapes)}
     
-    # Sort frames to ensure correct order
-    frames = sorted([int(k) for k in shapes_data.keys()])
+    # Sort frames to ensure correct order, ignoring metadata keys
+    frames = sorted([int(k) for k in shapes_data.keys() if str(k).isdigit()])
     if not frames:
         print("No shape data found.")
         return
