@@ -1,0 +1,12 @@
+[submodule "plugins/third_party/segment-anything"]
+	path = plugins/third_party/segment-anything
+	url = https://github.com/facebookresearch/segment-anything.git
+[submodule "models/SAMURAI"]
+	path = models/SAMURAI
+	url = https://github.com/yangchris11/samurai.git
+[submodule "plugins/CorridorKey/System"]
+	path = plugins/CorridorKey/System
+	url = https://github.com/nikopueringer/CorridorKey.git
+[submodule "plugins/Depth-Anything-V2"]
+	path = plugins/Depth-Anything-V2
+	url = https://github.com/DepthAnything/Depth-Anything-V2.git

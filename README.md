@@ -39,7 +39,7 @@ This software relies on Python 3.10+, PySide6, and PyTorch (CUDA required for ha
 ### Setup for Developers
 1. Clone the repository:
    ```bash
-   git clone https://github.com/capsuleutkarsh-design/utvfx-ai-vfx-suit.git
+   git clone --recurse-submodules https://github.com/capsuleutkarsh-design/utvfx-ai-vfx-suit.git
    cd utvfx-ai-vfx-suit
    ```
 2. Activate a virtual environment and install dependencies:

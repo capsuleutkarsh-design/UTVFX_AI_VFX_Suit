@@ -248,11 +248,24 @@ def download_models(python_exe):
         
     return failed_downloads
 
+def setup_git_submodules():
+    print_header("Step 0: Initializing Git Submodules (Plugins & Extras)")
+    try:
+        # Check if git is installed
+        subprocess.check_call(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print("Git found. Updating submodules...")
+        subprocess.check_call(["git", "submodule", "update", "--init", "--recursive"])
+        print("[OK] Git submodules initialized successfully.")
+    except Exception as e:
+        print(f"[WARNING] Could not automatically update git submodules: {e}")
+        print("If you are missing plugin files, please run: git submodule update --init --recursive")
+
 def main():
     print("=" * 60)
     print(" UTVFX AI & VFX Suit - Universal Setup Script")
     print("=" * 60 + "\n")
     
+    setup_git_submodules()
     python_exe = setup_python_base()
     install_requirements(python_exe)
     failed = download_models(python_exe)
