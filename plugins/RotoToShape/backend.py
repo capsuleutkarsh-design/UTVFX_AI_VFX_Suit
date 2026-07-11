@@ -84,6 +84,8 @@ class RotoToShapeWorker(BaseWorker):
         self.log_message.emit(self.node_id, f"Extracting contours across {total_frames} frames...")
         
         all_shapes = {}
+        active_shapes = {}
+        next_shape_id = 0
         
         for i, f_name in enumerate(frames):
             if self.is_cancelled:
@@ -120,50 +122,69 @@ class RotoToShapeWorker(BaseWorker):
             # Filter by area
             valid_contours = [c for c in contours if cv2.contourArea(c) >= min_area]
             
-            if valid_contours:
-                # Take the largest contour
-                largest_contour = max(valid_contours, key=cv2.contourArea)
+            current_frame_shapes = {}
+            used_contours = set()
+            
+            # Track existing shapes
+            for shape_id, prev_pts in active_shapes.items():
+                prev_pts_np = np.array(prev_pts, dtype=np.float32)
+                prev_center = np.mean(prev_pts_np, axis=0)
                 
-                # Simplify
-                if epsilon > 0:
-                    largest_contour = cv2.approxPolyDP(largest_contour, epsilon, True)
+                best_cnt_idx = -1
+                min_dist = float('inf')
+                
+                for c_idx, cnt in enumerate(valid_contours):
+                    if c_idx in used_contours:
+                        continue
+                    M = cv2.moments(cnt)
+                    if M["m00"] != 0:
+                        cx = int(M["m10"] / M["m00"])
+                        cy = int(M["m01"] / M["m00"])
+                        dist = np.linalg.norm(prev_center - np.array([cx, cy], dtype=np.float32))
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_cnt_idx = c_idx
+                            
+                # If we found a contour close enough (e.g. within 200 pixels)
+                if best_cnt_idx != -1 and min_dist < 200.0:
+                    cnt = valid_contours[best_cnt_idx]
+                    used_contours.add(best_cnt_idx)
                     
-                # Resample to target points
-                resampled = self._resample_polygon(largest_contour, target_points)
-                
-                # Align with reference
-                if reference_polygon is not None:
-                    resampled = self._align_polygon(resampled, reference_polygon)
-                    
-                reference_polygon = resampled
-                
-                # Store (y-axis inverted for Nuke compatibility usually done in exporter, so we keep raw pixel coords here)
-                all_shapes[i] = resampled.tolist()
-                
-                # Draw preview
-                preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
-                pts_int = resampled.astype(np.int32).reshape((-1, 1, 2))
-                cv2.polylines(preview, [pts_int], isClosed=True, color=(0, 255, 0), thickness=2)
-                
-                # Optional: blend with original mask
-                mask_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-                preview = cv2.addWeighted(mask_bgr, 0.3, preview, 0.7, 0)
-                
-                cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
-            else:
-                # No shape found, repeat last frame to maintain shape existence
-                if reference_polygon is not None:
-                    all_shapes[i] = reference_polygon.tolist()
-                    
-                    # Draw preview of repeated shape
-                    preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
-                    pts_int = reference_polygon.astype(np.int32).reshape((-1, 1, 2))
-                    cv2.polylines(preview, [pts_int], isClosed=True, color=(0, 255, 0), thickness=2)
-                    cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+                    if epsilon > 0:
+                        cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                    resampled = self._resample_polygon(cnt, target_points)
+                    resampled = self._align_polygon(resampled, prev_pts_np)
+                    current_frame_shapes[shape_id] = resampled.tolist()
                 else:
-                    preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
-                    cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+                    # Shape disappeared in this frame. Copy previous to maintain it.
+                    current_frame_shapes[shape_id] = prev_pts
                     
+            # Any remaining contours are NEW shapes
+            for c_idx, cnt in enumerate(valid_contours):
+                if c_idx not in used_contours:
+                    if epsilon > 0:
+                        cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                    resampled = self._resample_polygon(cnt, target_points)
+                    
+                    shape_id = next_shape_id
+                    next_shape_id += 1
+                    current_frame_shapes[shape_id] = resampled.tolist()
+                    
+            active_shapes = current_frame_shapes.copy()
+            all_shapes[i] = current_frame_shapes
+            
+            # Draw preview
+            preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
+            mask_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
+            
+            for sid, pts in current_frame_shapes.items():
+                pts_int = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
+                color = (int((sid * 80) % 255), int((sid * 150 + 100) % 255), int((sid * 200 + 200) % 255))
+                cv2.polylines(preview, [pts_int], isClosed=True, color=color, thickness=2)
+                
+            preview = cv2.addWeighted(mask_bgr, 0.3, preview, 0.7, 0)
+            cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
+            
             self.progress_update.emit(self.node_id, i + 1, total_frames)
             
         # Save format dims for Nuke exporter

@@ -21,22 +21,40 @@ def create_animated_roto():
     roto_node = nuke.createNode("Roto")
     curves_knob = roto_node['curves']
     
-    # Create a new shape
-    shape = rp.Shape(curves_knob)
-    shape.name = "Auto_Shape"
-    
-    # Nuke requires the shape to have the points created first
-    # We use the first frame's data to initialize the points
-    first_frame = str(frames[0])
-    first_pts = shapes_data[first_frame]
-    
-    for pt in first_pts:
-        # Nuke points are AnimControl objects
-        cv = rp.ShapeControlPoint(pt[0], pt[1])
-        shape.append(cv)
+    # Find all unique shape IDs across all frames
+    unique_shape_ids = set()
+    for f in frames:
+        f_data = shapes_data[str(f)]
+        if isinstance(f_data, list):
+            unique_shape_ids.add("0") # Backwards compatibility for single shape format
+        elif isinstance(f_data, dict):
+            for sid in f_data.keys():
+                unique_shape_ids.add(str(sid))
+                
+    # Create Nuke shapes
+    nuke_shapes = {{}}
+    for sid in unique_shape_ids:
+        shape = rp.Shape(curves_knob)
+        shape.name = f"Auto_Shape_{{sid}}"
         
-    curves_knob.rootLayer.append(shape)
-    
+        # Initialize points using the FIRST frame this shape appears in
+        first_appearance = None
+        for f in frames:
+            f_data = shapes_data[str(f)]
+            if isinstance(f_data, list) and sid == "0":
+                first_appearance = f_data
+                break
+            elif isinstance(f_data, dict) and sid in f_data:
+                first_appearance = f_data[sid]
+                break
+                
+        if first_appearance:
+            for pt in first_appearance:
+                cv = rp.ShapeControlPoint(pt[0], pt[1])
+                shape.append(cv)
+            curves_knob.rootLayer.append(shape)
+            nuke_shapes[sid] = shape
+            
     format_height = shapes_data.get("format_height", 1080)
     
     # Now animate the points
@@ -44,32 +62,35 @@ def create_animated_roto():
         if str(f) not in shapes_data:
             continue
             
-        pts = shapes_data[str(f)]
-        if not isinstance(pts, list):
-            continue
-            
-        # Nuke frame offset (usually 1-based, assuming frames here is 0-based index)
+        f_data = shapes_data[str(f)]
         nuke_frame = f + 1 
         
-        for i, pt in enumerate(pts):
-            if i >= len(shape):
-                break
-            cv = shape[i]
-            # Get center position
-            center = cv.center
+        # Normalize into a dict mapping shape_id to points
+        pts_dict = {{}}
+        if isinstance(f_data, list):
+            pts_dict["0"] = f_data
+        elif isinstance(f_data, dict):
+            pts_dict = f_data
             
-            # Add keys
-            center.getPositionAnimCurve(0).addKey(nuke_frame, pt[0])
-            
-            # Nuke's origin is bottom-left, OpenCV is top-left
-            # We invert Y using format_height
-            center.getPositionAnimCurve(1).addKey(nuke_frame, format_height - pt[1])
-            
-            # To avoid weird tangency interpolation jumping, set keys to linear
-            center.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
-            center.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+        for sid, pts in pts_dict.items():
+            sid_str = str(sid)
+            if sid_str not in nuke_shapes:
+                continue
+                
+            shape = nuke_shapes[sid_str]
+            for i, pt in enumerate(pts):
+                if i >= len(shape):
+                    break
+                cv = shape[i]
+                center = cv.center
+                
+                center.getPositionAnimCurve(0).addKey(nuke_frame, pt[0])
+                center.getPositionAnimCurve(1).addKey(nuke_frame, format_height - pt[1])
+                
+                center.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                center.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
 
-    print("Roto shape created successfully!")
+    print("Roto shapes created successfully!")
 
 create_animated_roto()
 '''
