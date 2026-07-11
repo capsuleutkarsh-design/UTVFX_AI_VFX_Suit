@@ -158,9 +158,9 @@ def get_node_media_path(node, visited=None, view_mode="COMP"):
 
     if os.path.exists(node_cache):
         if view_mode == "MATTE":
-            preferred = ("pha", "Output/Matte", "Matte", "AlphaHint")
+            preferred = ("pha", "Output/Matte", "Matte", "AlphaHint", "roto_shapes")
         elif view_mode == "COMP" or view_mode == "3D":
-            preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG")
+            preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG", "roto_shapes")
         else:
             preferred = ()
             
