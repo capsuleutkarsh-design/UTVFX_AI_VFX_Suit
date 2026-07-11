@@ -221,6 +221,10 @@ class PropertiesPanel(QWidget):
             
         # Add execution section if applicable
         self._build_execution_section(color)
+        
+        # Force a layout recalculation to prevent the panel from clipping its contents
+        self.content_widget.adjustSize()
+        self.content_layout.update()
             
     def _build_param_widget(self, param, color):
         return build_param_widget(self, param, color)

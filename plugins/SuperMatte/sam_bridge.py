@@ -123,7 +123,7 @@ class SAM3Predictor:
         original_size = inputs["original_sizes"][0].tolist() # (H, W)
         results = self.processor.image_processor.post_process_instance_segmentation(
             outputs, 
-            threshold=0.0, # Get all masks to filter manually
+            threshold=0.01, # Get low-confidence masks but filter pure noise
             target_sizes=[(original_size[0], original_size[1])]
         )
         
@@ -171,40 +171,59 @@ class SAM3Predictor:
             
         H, W = self.image.shape[:2]
         
-        points = []
-        for y in np.linspace(H*0.1, H*0.9, 5):
-            for x in np.linspace(W*0.1, W*0.9, 5):
-                points.append([[float(x), float(y)]])
+        all_boxes = []
+        all_labels = []
+        
+        # 3x3 grid of large overlapping boxes
+        box_w = W * 0.45
+        box_h = H * 0.45
+        stride_x = W * 0.25
+        stride_y = H * 0.25
+        
+        for y_idx in range(3):
+            for x_idx in range(3):
+                x1 = x_idx * stride_x
+                y1 = y_idx * stride_y
+                x2 = min(x1 + box_w, W - 1)
+                y2 = min(y1 + box_h, H - 1)
+                all_boxes.append([float(x1), float(y1), float(x2), float(y2)])
+                all_labels.append(1)
                 
+        # 4x4 grid of medium boxes
+        box_w2 = W * 0.3
+        box_h2 = H * 0.3
+        stride_x2 = W * 0.22
+        stride_y2 = H * 0.22
+        for y_idx in range(4):
+            for x_idx in range(4):
+                x1 = x_idx * stride_x2
+                y1 = y_idx * stride_y2
+                x2 = min(x1 + box_w2, W - 1)
+                y2 = min(y1 + box_h2, H - 1)
+                all_boxes.append([float(x1), float(y1), float(x2), float(y2)])
+                all_labels.append(1)
         inputs = self.processor(
             images=self.image, 
-            input_points=[points],
+            input_boxes=[all_boxes],
+            input_boxes_labels=[all_labels],
             return_tensors="pt"
         ).to(self.device)
         
         with torch.no_grad():
             outputs = self.model(**inputs)
             
-        # Try both post_process functions depending on the transformers version
-        if hasattr(self.processor.image_processor, "post_process_masks"):
-            masks = self.processor.image_processor.post_process_masks(
-                outputs.pred_masks.cpu(), 
-                inputs["original_sizes"].cpu(),
-                inputs["reshaped_input_sizes"].cpu()
-            )
-            all_masks = masks[0].reshape(-1, H, W).numpy()
-            all_scores = outputs.iou_scores[0].reshape(-1).cpu().numpy()
-        else:
-            # Fallback for older transformers API
-            original_size = inputs["original_sizes"][0].tolist()
-            results = self.processor.image_processor.post_process_instance_segmentation(
-                outputs, 
-                threshold=0.0,
-                target_sizes=[(original_size[0], original_size[1])]
-            )
-            all_masks = results[0]["masks"].cpu().numpy()
-            all_scores = results[0]["scores"].cpu().numpy()
+        original_size = inputs["original_sizes"][0].tolist()
+        results = self.processor.image_processor.post_process_instance_segmentation(
+            outputs, 
+            threshold=0.0,
+            target_sizes=[(original_size[0], original_size[1])]
+        )
         
+        all_masks = results[0]["masks"].cpu().numpy()
+        all_scores = results[0]["scores"].cpu().numpy()
+        if all_scores.size == 0:
+            return []
+            
         top_indices = np.argsort(all_scores)[::-1]
         
         objects = []
@@ -212,7 +231,7 @@ class SAM3Predictor:
         
         for idx in top_indices:
             score = float(all_scores[idx])
-            if score < 0.8:
+            if score < 0.02:
                 continue
                 
             mask = all_masks[idx] > 0
@@ -596,7 +615,7 @@ def main():
                     global_gdino = getattr(sys.modules[__name__], "gdino", None)
                     if global_gdino is None:
                         model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
-                        if os.path.exists(model_dir):
+                        if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
                             model_id = model_dir
                         else:
                             model_id = "IDEA-Research/grounding-dino-base"
@@ -648,7 +667,7 @@ def main():
                 if global_gdino is None:
                     # Initialize on first use
                     model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
-                    if os.path.exists(model_dir):
+                    if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
                         model_id = model_dir
                     else:
                         model_id = "IDEA-Research/grounding-dino-base"

@@ -5,14 +5,15 @@ from PySide6.QtCore import Qt, QSize, Slot, QThread, Signal
 
 class ScanWorker(QThread):
     finished = Signal(object, int)
-    def __init__(self, client, f_path, frame_idx, text_prompt=""):
+    def __init__(self, client, f_path, frame_idx, text_prompt="", sam_version=""):
         super().__init__()
         self.client = client
         self.f_path = f_path
         self.frame_idx = frame_idx
         self.text_prompt = text_prompt
+        self.sam_version = sam_version
     def run(self):
-        res = self.client.auto_scan(self.f_path, self.text_prompt)
+        res = self.client.auto_scan(self.f_path, self.text_prompt, self.sam_version)
         self.finished.emit(res, self.frame_idx)
 
 class LayerItemWidget(QWidget):
@@ -140,9 +141,10 @@ class LayerManagerWidget(QWidget):
         """)
         self.btn_remove.clicked.connect(self.remove_layer)
         
-        self.btn_auto_scan = QPushButton("Auto-Scan (SAM 3)")
+        self.btn_auto_scan = QPushButton("Auto-Scan")
         self.btn_auto_scan.setStyleSheet("""
-            QPushButton { background-color: #0ea5e9; color: white; border-radius: 4px; padding: 4px; font-size: 11px; font-weight: bold; }
+            QPushButton {
+                background-color: #3f3f46; color: white; border-radius: 4px; padding: 4px; font-size: 11px; font-weight: bold; }
             QPushButton:hover { background-color: #0284c7; }
         """)
         self.btn_auto_scan.clicked.connect(self.auto_scan_objects)
@@ -200,12 +202,14 @@ class LayerManagerWidget(QWidget):
             main_window.statusBar().showMessage("Auto-Scan: Scanning image for objects...", 10000)
         
         client = AIBridgeClient.get_instance()
-        
         self.btn_auto_scan.setEnabled(False)
         self.btn_auto_scan.setText("Scanning... (May take a few minutes)")
         
         text_prompt = self.node.params.get("text_prompt", "")
-        self.scan_thread = ScanWorker(client, f_path, frame_idx, text_prompt)
+        sam_version = self.node.params.get("sam_version")
+        if not sam_version:
+            sam_version = "SAM 3 (ViT-B)"
+        self.scan_thread = ScanWorker(client, f_path, frame_idx, text_prompt, sam_version)
         self.scan_thread.finished.connect(self.on_scan_finished)
         # Keep a strong reference on the persistent node object so the thread 
         # doesn't get destroyed if the user clicks away and this widget dies.
@@ -216,7 +220,7 @@ class LayerManagerWidget(QWidget):
     @Slot(object, int)
     def on_scan_finished(self, objects, frame_idx):
         self.btn_auto_scan.setEnabled(True)
-        self.btn_auto_scan.setText("Auto-Scan (SAM 3)")
+        self.btn_auto_scan.setText("Auto-Scan")
         
         if not objects:
             QMessageBox.warning(self, "Scan Failed", "No objects detected or model failed.")
@@ -238,10 +242,16 @@ class LayerManagerWidget(QWidget):
             c = colors[i % len(colors)]
             name = f"Auto Object {len(layers)+1} ({(score*100):.1f}%)"
             
-            # Create a keyframe at the current frame with the object's center point
-            kf_data = [[nx, ny, 1]]
-            if box:
+            sam_version = self.node.params.get("sam_version", "")
+            is_sam3 = "SAM 3" in sam_version
+            
+            kf_data = []
+            if box and is_sam3:
                 kf_data.append([box[0], box[1], box[2], box[3], "box"])
+            else:
+                kf_data.append([nx, ny, 1])
+                if box:
+                    kf_data.append([box[0], box[1], box[2], box[3], "box"])
                 
             keyframes = {frame_idx: kf_data}
             layers.append({"id": layer_id, "name": name, "color": c, "keyframes": keyframes, "enabled": True})
