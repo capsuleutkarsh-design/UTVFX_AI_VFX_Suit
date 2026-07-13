@@ -6,10 +6,10 @@ import json
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QFrame, QLabel, QPushButton, QMessageBox, QFileDialog
+    QSplitter, QFrame, QLabel, QPushButton, QMessageBox, QFileDialog, QSplashScreen
 )
-from PySide6.QtCore import Qt, QSize, Slot
-from PySide6.QtGui import QIcon, QFontDatabase, QColor, QShortcut, QKeySequence
+from PySide6.QtCore import Qt, QSize, Slot, QTimer
+from PySide6.QtGui import QIcon, QFontDatabase, QColor, QShortcut, QKeySequence, QPixmap
 
 # Add current dir to path to allow absolute imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -154,6 +154,11 @@ class VFXCoreWindow(QMainWindow):
         self.btn_settings.clicked.connect(self.open_settings)
         nav_layout.addWidget(self.btn_settings)
         
+        self.btn_help = QPushButton("ℹ️ Help")
+        self.btn_help.setStyleSheet(BTN_DEFAULT)
+        self.btn_help.clicked.connect(self.open_help)
+        nav_layout.addWidget(self.btn_help)
+        
         self.btn_queue = QPushButton("▶ Render")
         self.btn_queue.setStyleSheet(BTN_WARNING)
         nav_layout.addWidget(self.btn_queue)
@@ -213,12 +218,12 @@ class VFXCoreWindow(QMainWindow):
         
         # 3. Right Dock
         self.properties_panel = PropertiesPanel()
-        self.properties_panel.setMinimumWidth(350)
-        self.properties_panel.setMaximumWidth(550)
+        self.properties_panel.setMinimumWidth(420)
+        self.properties_panel.setMaximumWidth(700)
         self.main_splitter.addWidget(self.properties_panel)
         
-        # Set Splitter Sizes (approx: 250px, 1fr, 350px)
-        self.main_splitter.setSizes([250, 600, 350])
+        # Set Splitter Sizes (approx: 250px, 1fr, 420px)
+        self.main_splitter.setSizes([250, 600, 420])
         self.main_splitter.setStretchFactor(0, 0)
         self.main_splitter.setStretchFactor(1, 1)
         self.main_splitter.setStretchFactor(2, 0)
@@ -309,6 +314,11 @@ class VFXCoreWindow(QMainWindow):
     def open_settings(self):
         from utvfx.ui.windows.settings_ui import SettingsDialog
         dialog = SettingsDialog(self, download_callback=self.open_model_downloader)
+        dialog.exec()
+        
+    def open_help(self):
+        from utvfx.ui.windows.help_dialog import HelpDialog
+        dialog = HelpDialog(self)
         dialog.exec()
 
     def _on_execute_node_requested(self, node_id):
@@ -527,10 +537,29 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyleSheet("* { outline: none; }")
     
+    # --- SPLASH SCREEN ---
+    splash_image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "assets", "wizard_large.bmp")
+    if os.path.exists(splash_image_path):
+        splash_pixmap = QPixmap(splash_image_path)
+        splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
+        splash.show()
+        splash.showMessage("Initializing Core VFX Engine...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+        app.processEvents()
+    else:
+        splash = None
+
+    if splash:
+        splash.showMessage("Loading UI Components...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+        app.processEvents()
+
     # Optional: Load font families if they exist locally
     # QFontDatabase.addApplicationFont("fonts/Inter-Regular.ttf")
     # QFontDatabase.addApplicationFont("fonts/SpaceGrotesk-Bold.ttf")
     
     window = VFXCoreWindow()
     window.showMaximized()
+    
+    if splash:
+        splash.finish(window)
+        
     sys.exit(app.exec())

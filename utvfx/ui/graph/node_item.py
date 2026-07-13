@@ -158,6 +158,9 @@ class VFXNodeItem(QGraphicsObject):
         # Execution State
         self.is_executing = False
         self.progress = 0
+        self.is_error = False
+        self.error_message = ""
+        self.is_cached = False
         
         # Shake to Disconnect tracking
         import time
@@ -380,12 +383,18 @@ class VFXNodeItem(QGraphicsObject):
         
         # 8. Draw Main Node Title
         title_font = QFont("Inter", 9.5, QFont.Bold)
-        if getattr(self, "is_frozen", False):
+        if self.is_error:
+            title_font.setItalic(True)
+            self.name_display = self.name + " ⚠ (Error)"
+        elif getattr(self, "is_frozen", False):
             title_font.setItalic(True)
             self.name_display = self.name + " ❄ (Frozen)"
         elif self.is_disabled:
             title_font.setItalic(True)
             self.name_display = self.name + " (Bypassed)"
+        elif self.is_cached:
+            title_font.setItalic(True)
+            self.name_display = self.name + " ✓ (Cached)"
         else:
             self.name_display = self.name
             
@@ -394,11 +403,16 @@ class VFXNodeItem(QGraphicsObject):
         painter.drawText(14, 33, self.name_display)
         
         # 9. Outer Border Outline
-        if self.isSelected():
+        if self.is_error:
+            border_pen = QPen(QColor(239, 68, 68, 255), 2.5) # Red error border
+            self.shadow.setColor(QColor(239, 68, 68, 120))
+        elif self.isSelected():
             border_pen = QPen(self.accent_color.lighter(110), 2.0)
         elif self.is_executing:
             # Pulsing border when executing
             border_pen = QPen(QColor(self.accent_color.red(), self.accent_color.green(), self.accent_color.blue(), 255), 2.5)
+        elif self.is_cached:
+            border_pen = QPen(QColor(56, 189, 248, 180), 1.5) # Light blue cached border
         elif self.is_hovered:
             border_pen = QPen(NODE_BORDER_HOVER, 1.2)
         else:
@@ -426,9 +440,37 @@ class VFXNodeItem(QGraphicsObject):
     def set_execution_state(self, executing, progress=0):
         self.is_executing = executing
         self.progress = progress
+        if executing:
+            self.is_error = False
+            self.is_cached = False
+            self.error_message = ""
         self.update()
 
         self.is_frozen = False
+        
+    def set_error_state(self, is_error, message=""):
+        self.is_error = is_error
+        self.error_message = message
+        if is_error:
+            self.is_executing = False
+        self.update()
+        
+    def set_cached_state(self):
+        self.is_cached = True
+        self.is_executing = False
+        self.is_error = False
+        self.update()
+        
+        # Flash the shadow
+        self.shadow.setColor(QColor(56, 189, 248, 150))
+        
+        # Clear cached state indicator automatically after 3 seconds
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(3000, self._clear_cached_state)
+        
+    def _clear_cached_state(self):
+        self.is_cached = False
+        self.update()
 
     def toggle_disable(self):
         self.is_disabled = not self.is_disabled

@@ -9,6 +9,7 @@ import threading
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from PySide6.QtGui import QImage
 import numpy as np
+import gc
 from utvfx.core.media_resolver import get_node_cache, get_upstream_nodes, get_cached_output, resolve_media_input, resolve_alpha_input, resolve_tracking_input, resolve_shape_input
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -142,6 +143,18 @@ class ExecutionEngine(QObject):
             self._node_index = {n.node_id: n for n in self.scene.nodes}
         return self._node_index.get(node_id)
 
+    def _clear_vram(self):
+        """Force cleanup of system and GPU memory."""
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except ImportError:
+            pass
+
     @Slot(str, int, list)
     def handle_interaction(self, node_id, frame_idx, points):
         node = self._get_node_by_id(node_id)
@@ -181,6 +194,7 @@ class ExecutionEngine(QObject):
         with getattr(self, "_interaction_workers_lock", threading.Lock()):
             if hasattr(self, "_interaction_workers") and w in self._interaction_workers:
                 self._interaction_workers.remove(w)
+        self._clear_vram()
 
     @Slot(str, str, int, object)
     def _on_interaction_success(self, node_id, layer_id, frame_idx, mask_qimage):
@@ -524,6 +538,10 @@ class ExecutionEngine(QObject):
                 # If state hashes match perfectly AND the output cache folder isn't empty, skip execution.
                 if saved_hash == current_hash and get_cached_output(node, cache_dir=self.cache_dir):
                     self.log_message.emit(node_id, f"[Cached] Output is already generated. Skipping execution for {node.name}.")
+                    
+                    if hasattr(node, 'set_cached_state'):
+                        node.set_cached_state()
+                        
                     self._on_finished(node_id)
                     return
         except Exception as e:
@@ -585,6 +603,11 @@ class ExecutionEngine(QObject):
     @Slot(str, str, object)
     def _on_error(self, node_id, err, worker_ref=None):
         self.log_message.emit(node_id, f"ERROR: {err}")
+        
+        target_node = self._get_node_by_id(node_id)
+        if target_node and hasattr(target_node, 'set_error_state'):
+            target_node.set_error_state(True, str(err))
+            
         self.node_execution_finished.emit(node_id)
         
         # Clean up specific worker or active worker
@@ -627,6 +650,8 @@ class ExecutionEngine(QObject):
                 self.active_workers.pop(node_id)
             from PySide6.QtCore import QTimer
             QTimer.singleShot(2000, worker.deleteLater)
+            
+        self._clear_vram()
             
         if self.is_executing_pipeline:
             self._pump_execution_queue()

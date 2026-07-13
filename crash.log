@@ -1,0 +1,25 @@
+Traceback (most recent call last):
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\ui\viewport.py", line 357, in connect_to_node
+    media_path = get_node_media_path(node, view_mode=self.current_view_mode)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 157, in get_node_media_path
+    node_cache = get_node_cache(node)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 30, in get_node_cache
+    return os.path.join(cache_dir, node.node_id)
+AttributeError: 'NoneType' object has no attribute 'node_id'
+Traceback (most recent call last):
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\ui\viewport.py", line 357, in connect_to_node
+    media_path = get_node_media_path(node, view_mode=self.current_view_mode)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 157, in get_node_media_path
+    node_cache = get_node_cache(node)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 30, in get_node_cache
+    return os.path.join(cache_dir, node.node_id)
+AttributeError: 'NoneType' object has no attribute 'node_id'
+Traceback (most recent call last):
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\ui\viewport.py", line 357, in connect_to_node
+    media_path = get_node_media_path(node, view_mode=self.current_view_mode)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 157, in get_node_media_path
+    node_cache = get_node_cache(node)
+  File "D:\Software\UTVFX AI & VFX suit\utvfx\core\media_resolver.py", line 30, in get_node_cache
+    return os.path.join(cache_dir, node.node_id)
+AttributeError: 'NoneType' object has no attribute 'node_id'
+Shutting down... cleaning up workers and subprocesses.

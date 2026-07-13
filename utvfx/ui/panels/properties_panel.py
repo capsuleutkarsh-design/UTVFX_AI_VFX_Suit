@@ -155,7 +155,14 @@ class PropertiesPanel(QWidget):
     @Slot()
     def refresh_ui(self):
         if getattr(self, "current_node", None):
+            current_tab = 0
+            if getattr(self, "tabs", None) is not None:
+                current_tab = self.tabs.currentIndex()
+                
             self.set_node(self.current_node)
+            
+            if getattr(self, "tabs", None) is not None and current_tab < self.tabs.count():
+                self.tabs.setCurrentIndex(current_tab)
 
 
     def set_node(self, node_item):
@@ -189,8 +196,8 @@ class PropertiesPanel(QWidget):
             
         has_tabs = any("tab" in p for p in params)
         if has_tabs:
-            tabs = QTabWidget()
-            tabs.setStyleSheet("""
+            self.tabs = QTabWidget()
+            self.tabs.setStyleSheet("""
                 QTabWidget::pane { border: none; top: 0px; }
                 QTabBar::tab { background-color: transparent; color: #a1a1aa; border: none; border-bottom: 2px solid transparent; padding: 8px 16px; font-family: 'Inter'; font-weight: bold; font-size: 12px; margin-right: 4px; }
                 QTabBar::tab:selected { color: #fafafa; border-bottom: 2px solid """ + color + """; }
@@ -211,10 +218,11 @@ class PropertiesPanel(QWidget):
                 l.setAlignment(Qt.AlignTop)
                 for p in t_params:
                     l.addWidget(self._build_param_widget(p, color))
-                tabs.addTab(w, t_name)
+                self.tabs.addTab(w, t_name)
                 
-            self.content_layout.addWidget(tabs)
+            self.content_layout.addWidget(self.tabs)
         else:
+            self.tabs = None
             for param in params:
                 group = self._build_param_widget(param, color)
                 self.content_layout.addWidget(group)

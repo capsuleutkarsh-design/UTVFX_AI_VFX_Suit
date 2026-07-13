@@ -40,7 +40,7 @@ def build_param_widget(panel, param, color):
     lbl.setStyleSheet("font-family: 'Inter'; font-size: 10px; font-weight: 800; color: #a1a1aa; letter-spacing: 1px; background: transparent; border: none;")
     
     if not is_complex:
-        lbl.setFixedWidth(140)
+        lbl.setFixedWidth(180)
         
     layout.addWidget(lbl)
     
