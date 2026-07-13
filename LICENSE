@@ -1,0 +1,18 @@
+Copyright (c) 2026 Utkarsh Tripathi / CapsuleUtkarsh Design
+All Rights Reserved.
+
+NOTICE: All information contained herein is, and remains the property of the copyright owner. 
+The intellectual and technical concepts contained herein are proprietary to the copyright owner 
+and may be covered by copyright and trade secret laws.
+
+This software is for internal use only. Dissemination of this information, reproduction 
+of this material, or unauthorized distribution of this software is strictly forbidden 
+unless prior written permission is obtained from the copyright owner.
+
+THIRD-PARTY LICENSES:
+This software utilizes third-party open-source libraries and models, including but not limited to:
+- PySide6 (LGPLv3)
+- FFmpeg (GPLv3 - external binary)
+- Meta Segment Anything 1 & 2 (Apache 2.0)
+- GroundingDINO, BiRefNet, Depth-Anything
+The respective rights and licenses of these third-party works remain with their original authors.

@@ -239,6 +239,12 @@ class VFXCoreWindow(QMainWindow):
         
         f_layout.addStretch()
         
+        lbl_copyright = QLabel("© 2026 Utkarsh Tripathi / CapsuleUtkarsh Design. All Rights Reserved.")
+        lbl_copyright.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #52525b;")
+        f_layout.addWidget(lbl_copyright)
+        
+        f_layout.addStretch()
+        
         self.lbl_stats = QLabel("project / alpha_seq_012   |   engine / PySide6 (Qt6)")
         self.lbl_stats.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #71717a;")
         f_layout.addWidget(self.lbl_stats)
