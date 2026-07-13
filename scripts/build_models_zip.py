@@ -2,26 +2,31 @@ import os
 import zipfile
 
 def create_models_zip():
-    zip_filename = "build/UTVFX_Models.zip"
+    zip_filename = "releases/UTVFX_Models.zip"
     
     # Define which extensions to look for
     model_exts = ('.pth', '.pt', '.safetensors', '.onnx', '.bin')
     
     # Define directories to search
-    search_dirs = ['plugins', 'CorridorKeyModule']
+    search_dirs = ['models']
     
     # Find all local model files
     local_models = {}
     for search_dir in search_dirs:
         if not os.path.exists(search_dir):
             continue
-        for root, _, files in os.walk(search_dir):
+        for root, dirs, files in os.walk(search_dir):
+            # Skip hidden folders like .git or .cache
+            dirs[:] = [d for d in dirs if not d.startswith('.')]
             for file in files:
-                if file.lower().endswith(model_exts):
-                    file_path = os.path.normpath(os.path.join(root, file))
-                    # Normalizing for zip format (forward slashes)
-                    zip_path = file_path.replace("\\", "/")
-                    local_models[zip_path] = os.path.getsize(file_path)
+                # Skip hidden files
+                if file.startswith('.'):
+                    continue
+                
+                file_path = os.path.normpath(os.path.join(root, file))
+                # Normalizing for zip format (forward slashes)
+                zip_path = file_path.replace("\\", "/")
+                local_models[zip_path] = os.path.getsize(file_path)
 
     # Check if the zip already exists and has all the required models
     needs_update = True

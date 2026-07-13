@@ -5,7 +5,14 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('plugins', 'plugins/'), ('CorridorKeyModule', 'CorridorKeyModule/')],
+    datas=[
+        ('plugins', 'plugins/'), 
+        ('CorridorKeyModule', 'CorridorKeyModule/'),
+        ('build/assets/app_icon.ico', 'build/'),
+        ('first_setup.py', '.'),
+        ('python_base', 'python_base/'),
+        ('tools', 'tools/')
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -18,11 +25,23 @@ def exclude_models(datas):
     filtered = []
     # extensions to exclude
     bad_ext = ('.pth', '.pt', '.safetensors', '.onnx', '.bin')
+    # folders to exclude
+    bad_folders = ('uv_cache', '.venv', '.git', '__pycache__')
+    
     for item in datas:
         # item is a tuple: (source_path, dest_dir)
         src = item[0].lower()
-        if not src.endswith(bad_ext):
-            filtered.append(item)
+        
+        # Check if the source path ends with a bad extension
+        if src.endswith(bad_ext):
+            continue
+            
+        # Check if any part of the path matches a bad folder
+        path_parts = src.replace('\\', '/').split('/')
+        if any(bad_folder in path_parts for bad_folder in bad_folders):
+            continue
+            
+        filtered.append(item)
     return filtered
 
 a.datas = exclude_models(a.datas)

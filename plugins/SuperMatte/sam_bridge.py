@@ -399,8 +399,8 @@ class SAM2Predictor:
         if not os.path.exists(model_dir):
             raise FileNotFoundError(f"SAM2 Model directory missing at '{model_dir}'.")
             
-        self.processor = Sam2Processor.from_pretrained(model_dir)
-        self.model = Sam2Model.from_pretrained(model_dir).to(self.device)
+        self.processor = Sam2Processor.from_pretrained(model_dir, local_files_only=True)
+        self.model = Sam2Model.from_pretrained(model_dir, local_files_only=True).to(self.device)
         self.image = None
         
     def set_image(self, image_rgb):
@@ -617,10 +617,12 @@ def main():
                         model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
                         if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
                             model_id = model_dir
+                            local_only = True
                         else:
                             model_id = "IDEA-Research/grounding-dino-base"
-                        gdino_processor = AutoProcessor.from_pretrained(model_id)
-                        gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+                            local_only = False
+                        gdino_processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_only)
+                        gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id, local_files_only=local_only).to(device)
                         global_gdino = (gdino_processor, gdino_model)
                         setattr(sys.modules[__name__], "gdino", global_gdino)
                     
@@ -669,10 +671,12 @@ def main():
                     model_dir = os.path.join(ROOT_DIR, "models", "GroundingDINO")
                     if os.path.exists(model_dir) and os.path.exists(os.path.join(model_dir, "config.json")):
                         model_id = model_dir
+                        local_only = True
                     else:
                         model_id = "IDEA-Research/grounding-dino-base"
-                    gdino_processor = AutoProcessor.from_pretrained(model_id)
-                    gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(device)
+                        local_only = False
+                    gdino_processor = AutoProcessor.from_pretrained(model_id, local_files_only=local_only)
+                    gdino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id, local_files_only=local_only).to(device)
                     global_gdino = (gdino_processor, gdino_model)
                     setattr(sys.modules[__name__], "gdino", global_gdino)
                 

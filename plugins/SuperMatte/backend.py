@@ -22,19 +22,42 @@ class SuperMatteWorker(BaseWorker):
     def track_points_pyrlk(self, img1, img2, pts_nxny):
         if not pts_nxny or len(pts_nxny) == 0:
             return []
+            
         h, w = img1.shape[:2]
-        p0 = np.array([[[p[0] * w, p[1] * h]] for p in pts_nxny], dtype=np.float32)
+        
+        # Separate points (len == 3) from boxes (len == 5)
+        points_to_track = []
+        point_indices = []
+        for i, p in enumerate(pts_nxny):
+            if len(p) == 3:
+                points_to_track.append(p)
+                point_indices.append(i)
+                
+        if not points_to_track:
+            # If everything is a box, nothing to track with optical flow
+            return list(pts_nxny)
+            
+        p0 = np.array([[[p[0] * w, p[1] * h]] for p in points_to_track], dtype=np.float32)
         lk_params = dict(winSize=(31, 31), maxLevel=4,
                          criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
         p1, st, err = cv2.calcOpticalFlowPyrLK(img1, img2, p0, None, **lk_params)
+        
         tracked_nxny = []
+        point_idx = 0
         for i in range(len(pts_nxny)):
-            if st[i][0] == 1:
-                nx = float(p1[i][0][0]) / w
-                ny = float(p1[i][0][1]) / h
-                tracked_nxny.append((nx, ny, pts_nxny[i][2]))
-            else:
+            if len(pts_nxny[i]) == 5:
+                # It's a box, just pass it through unchanged
                 tracked_nxny.append(pts_nxny[i])
+            else:
+                # It's a point
+                if st[point_idx][0] == 1:
+                    nx = float(p1[point_idx][0][0]) / w
+                    ny = float(p1[point_idx][0][1]) / h
+                    tracked_nxny.append((nx, ny, pts_nxny[i][2]))
+                else:
+                    tracked_nxny.append(pts_nxny[i])
+                point_idx += 1
+                
         return tracked_nxny
 
     def generate_trimap(self, mask_uint8, erode_kernel_size, dilate_kernel_size):
@@ -474,7 +497,7 @@ class SuperMatteWorker(BaseWorker):
                 out_alpha_path = os.path.join(layer_dir, f"alpha_{frame_idx:06d}.png")
                 cv2.imwrite(out_alpha_path, alpha_uint8)
                 
-                combined_alpha = np.maximum(combined_alpha, alpha_uint8)
+                combined_alpha = cv2.add(combined_alpha, alpha_uint8)
                 
                 # Clean up SAM temp mask
                 os.remove(sam_mask_path)
