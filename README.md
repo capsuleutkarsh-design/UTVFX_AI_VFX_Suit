@@ -53,6 +53,13 @@ This software relies on Python 3.10+, PySide6, and PyTorch (CUDA required for ha
    python main.py
    ```
 
+### Troubleshooting: Manual FFmpeg Installation
+If the `first_setup.py` script fails to download FFmpeg due to an SSL error (`[SSL: WRONG_VERSION_NUMBER]`), you must download it manually:
+1. Download [ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip).
+2. Extract the `.zip` file.
+3. Locate `ffmpeg.exe` inside the `bin/` folder.
+4. Copy and paste `ffmpeg.exe` into: `plugins/3DTracker/bin/ffmpeg.exe` (create the `bin` folder if it does not exist).
+
 ## 📦 Building the Installer
 The project is configured for automated distribution packaging via **PyInstaller** and **Inno Setup**.
 
