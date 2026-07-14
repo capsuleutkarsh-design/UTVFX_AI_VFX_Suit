@@ -37,5 +37,14 @@ Used as a high-quality background removal backend for CorridorKey and Rotoscopin
 - **Matting Model:** [model.safetensors (matting)](https://huggingface.co/ZhengPeng7/BiRefNet-matting/resolve/main/model.safetensors)
   - Place in: `plugins/CorridorKey/System/BiRefNetModule/checkpoints/BiRefNet-matting/`
 
+## 6. MEMatte
+Used for memory-efficient temporal video matting.
+Download the `.pth` weights from the links below:
+- [MEMatte Weight File 1](https://drive.google.com/file/d/1R5NbgIpOudKjvLz1V9M9SxXr1ovAmu3u/view)
+- [MEMatte Weight File 2](https://drive.google.com/file/d/1NOV64zMSFtoKPASqvEvxQKI_PRY9m5IA/view)
+- [MEMatte Weight File 3](https://drive.google.com/file/d/122p3sdhJVb7vg4IXELeC9C3HEG9Mlh5z/view)
+
+**Directory:** `models/MEMatte/`
+
 ---
 *Note: If you run the pre-built Windows Installer setup, you can simply put all these models into a single `.zip` file and select it during installation to automatically extract them to the right places.*
