@@ -11,7 +11,9 @@ a = Analysis(
         ('build/assets/app_icon.ico', 'build/'),
         ('first_setup.py', '.'),
         ('python_base', 'python_base/'),
-        ('tools', 'tools/')
+        ('tools', 'tools/'),
+        ('assets', 'assets/'),
+        ('utvfx', 'utvfx/')
     ],
     hiddenimports=[],
     hookspath=[],

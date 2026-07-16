@@ -354,7 +354,7 @@ class Viewport(QWidget):
                 self.current_node.params = {}
             self.current_node._mask_overlays_cache = self.img_display.mask_overlays.copy()
         # Get the new media path before stopping the existing player
-        media_path = get_node_media_path(node, view_mode=self.current_view_mode)
+        media_path = get_node_media_path(node, view_mode=self.current_view_mode) if node else None
 
         # If it's the same node and the same media path, don't interrupt playback
         if getattr(self, "current_node", None) == node and self.player_thread and self.player_thread.media_path == media_path:

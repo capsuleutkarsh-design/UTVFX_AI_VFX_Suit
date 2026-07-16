@@ -103,12 +103,24 @@ class SuperMatteWorker(BaseWorker):
         self.log_message.emit(self.node_id, "Loading Refiner...")
         use_onnx = False
         use_mematte = False
+        use_videomama = False
         processor = None
         model = None
         ort_session = None
+        videomama_pipeline = None
         
         try:
-            if refiner_mode == "MEMatte" or refiner_mode == "MEMatte (Local)":
+            if refiner_mode == "VideoMaMa":
+                self.log_message.emit(self.node_id, "Loading VideoMaMa Temporal Refiner...")
+                # Hotfix for diffusers compatibility with newer transformers
+                import transformers.utils
+                if not hasattr(transformers.utils, 'FLAX_WEIGHTS_NAME'):
+                    transformers.utils.FLAX_WEIGHTS_NAME = "flax_model.msgpack"
+                
+                from plugins.CorridorKey.System.VideoMaMaInferenceModule.inference import load_videomama_model
+                videomama_pipeline = load_videomama_model(device=device)
+                use_videomama = True
+            elif refiner_mode == "MEMatte" or refiner_mode == "MEMatte (Local)":
                 import sys
                 
                 # Ensure the models directory is in sys.path so MEMatte can import detectron2_mock
@@ -326,6 +338,9 @@ class SuperMatteWorker(BaseWorker):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
         
         prev_gray = None
+        videomama_frames = []
+        videomama_masks = []
+        
         for frame_idx in range(total_frames):
             if self.is_cancelled:
                 break
@@ -419,89 +434,103 @@ class SuperMatteWorker(BaseWorker):
                     if qimage is None or not os.path.exists(sam_mask_path):
                         raise Exception(f"SAM Inference failed or timed out for {layer_name}.")
                     
-                # 2. Trimap Generation
                 sam_mask = cv2.imread(sam_mask_path, cv2.IMREAD_GRAYSCALE)
                 
-                if self.params.get("fill_holes", False):
-                    kernel_close = np.ones((5, 5), np.uint8)
-                    sam_mask = cv2.morphologyEx(sam_mask, cv2.MORPH_CLOSE, kernel_close)
-                    
-                trimap = self.generate_trimap(sam_mask, erode_size, dilate_size)
-                
-                # 3. ViTMatte Refinement
-                from PIL import Image
-                
-                orig_h, orig_w = frame.shape[:2]
-                max_dim = 2048 # Avoid CUDA OOM on large resolutions
-                scale_factor = 1.0
-                if max(orig_w, orig_h) > max_dim:
-                    scale_factor = max_dim / float(max(orig_w, orig_h))
-                    new_w = int(orig_w * scale_factor)
-                    new_h = int(orig_h * scale_factor)
-                    infer_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
-                    infer_trimap = cv2.resize(trimap, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
-                else:
-                    infer_frame = frame
-                    infer_trimap = trimap
-
-                if use_mematte:
-                    rgb_frame = cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB)
-                    img_t = torch.from_numpy(rgb_frame).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
-                    trimap_t = torch.from_numpy(infer_trimap).unsqueeze(0).unsqueeze(0).float().to(device) / 255.0
-                    
-                    batched_inputs = {
-                        "image": img_t,
-                        "trimap": trimap_t
-                    }
-                    
-                    with torch.no_grad():
-                        raw_out = model(batched_inputs)
-                        def find_phas(obj):
-                            if isinstance(obj, dict) and 'phas' in obj:
-                                return obj['phas']
-                            if isinstance(obj, (list, tuple)):
-                                for item in obj:
-                                    res = find_phas(item)
-                                    if res is not None:
-                                        return res
-                            return None
+                if not use_videomama:
+                    # 2. Trimap Generation
+                    if self.params.get("fill_holes", False):
+                        kernel_close = np.ones((5, 5), np.uint8)
+                        sam_mask = cv2.morphologyEx(sam_mask, cv2.MORPH_CLOSE, kernel_close)
                         
-                        alpha_pred = find_phas(raw_out)
-                        if alpha_pred is None:
-                            raise RuntimeError(f"Could not find 'phas' in model output")
+                    trimap = self.generate_trimap(sam_mask, erode_size, dilate_size)
+                    
+                    # 3. ViTMatte Refinement
+                    from PIL import Image
+                    
+                    orig_h, orig_w = frame.shape[:2]
+                    max_dim = 2048 # Avoid CUDA OOM on large resolutions
+                    scale_factor = 1.0
+                    if max(orig_w, orig_h) > max_dim:
+                        scale_factor = max_dim / float(max(orig_w, orig_h))
+                        new_w = int(orig_w * scale_factor)
+                        new_h = int(orig_h * scale_factor)
+                        infer_frame = cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA)
+                        infer_trimap = cv2.resize(trimap, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
+                    else:
+                        infer_frame = frame
+                        infer_trimap = trimap
+    
+                    if use_mematte:
+                        rgb_frame = cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB)
+                        img_t = torch.from_numpy(rgb_frame).permute(2, 0, 1).float().unsqueeze(0).to(device) / 255.0
+                        trimap_t = torch.from_numpy(infer_trimap).unsqueeze(0).unsqueeze(0).float().to(device) / 255.0
                         
-                    alpha = alpha_pred[0, 0].cpu().numpy()
-                elif use_onnx:
-                    image_pil = Image.fromarray(cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB))
-                    trimap_pil = Image.fromarray(infer_trimap).convert("L")
-                    model_inputs = processor(images=image_pil, trimaps=trimap_pil, return_tensors="np")
-                    ort_inputs = {"pixel_values": model_inputs["pixel_values"]}
-                    predictions = ort_session.run(None, ort_inputs)[0]
-                    alpha = predictions[0, 0]
+                        batched_inputs = {
+                            "image": img_t,
+                            "trimap": trimap_t
+                        }
+                        
+                        with torch.no_grad():
+                            raw_out = model(batched_inputs)
+                            def find_phas(obj):
+                                if isinstance(obj, dict) and 'phas' in obj:
+                                    return obj['phas']
+                                if isinstance(obj, (list, tuple)):
+                                    for item in obj:
+                                        res = find_phas(item)
+                                        if res is not None:
+                                            return res
+                                return None
+                            
+                            alpha_pred = find_phas(raw_out)
+                            if alpha_pred is None:
+                                raise RuntimeError(f"Could not find 'phas' in model output")
+                            
+                        alpha = alpha_pred[0, 0].cpu().numpy()
+                    elif use_onnx:
+                        image_pil = Image.fromarray(cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB))
+                        trimap_pil = Image.fromarray(infer_trimap).convert("L")
+                        model_inputs = processor(images=image_pil, trimaps=trimap_pil, return_tensors="np")
+                        ort_inputs = {"pixel_values": model_inputs["pixel_values"]}
+                        predictions = ort_session.run(None, ort_inputs)[0]
+                        alpha = predictions[0, 0]
+                    else:
+                        image_pil = Image.fromarray(cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB))
+                        trimap_pil = Image.fromarray(infer_trimap).convert("L")
+                        model_inputs = processor(images=image_pil, trimaps=trimap_pil, return_tensors="pt")
+                        model_inputs = {k: v.to(device) for k, v in model_inputs.items()}
+                        with torch.no_grad():
+                            predictions = model(**model_inputs).alphas
+                        alpha = predictions[0, 0].cpu().numpy()
+                    alpha_uint8 = (alpha * 255).astype(np.uint8)
+                    
+                    if scale_factor != 1.0:
+                        alpha_uint8 = cv2.resize(alpha_uint8, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
+                    
+                    # Save into a layer-specific subfolder
+                    layer_dir = os.path.join(alpha_dir, layer_name)
+                    os.makedirs(layer_dir, exist_ok=True)
+                    out_alpha_path = os.path.join(layer_dir, f"alpha_{frame_idx:06d}.png")
+                    cv2.imwrite(out_alpha_path, alpha_uint8)
+                    
+                    combined_alpha = cv2.add(combined_alpha, alpha_uint8)
                 else:
-                    image_pil = Image.fromarray(cv2.cvtColor(infer_frame, cv2.COLOR_BGR2RGB))
-                    trimap_pil = Image.fromarray(infer_trimap).convert("L")
-                    model_inputs = processor(images=image_pil, trimaps=trimap_pil, return_tensors="pt")
-                    model_inputs = {k: v.to(device) for k, v in model_inputs.items()}
-                    with torch.no_grad():
-                        predictions = model(**model_inputs).alphas
-                    alpha = predictions[0, 0].cpu().numpy()
-                alpha_uint8 = (alpha * 255).astype(np.uint8)
-                
-                if scale_factor != 1.0:
-                    alpha_uint8 = cv2.resize(alpha_uint8, (orig_w, orig_h), interpolation=cv2.INTER_LINEAR)
-                
-                # Save into a layer-specific subfolder
-                layer_dir = os.path.join(alpha_dir, layer_name)
-                os.makedirs(layer_dir, exist_ok=True)
-                out_alpha_path = os.path.join(layer_dir, f"alpha_{frame_idx:06d}.png")
-                cv2.imwrite(out_alpha_path, alpha_uint8)
-                
-                combined_alpha = cv2.add(combined_alpha, alpha_uint8)
-                
+                    if 'combined_sam_mask' not in locals():
+                        combined_sam_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                    combined_sam_mask = cv2.bitwise_or(combined_sam_mask, sam_mask)
+                    
                 # Clean up SAM temp mask
                 os.remove(sam_mask_path)
             
+            if use_videomama:
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                videomama_frames.append(rgb_frame)
+                if 'combined_sam_mask' not in locals():
+                    combined_sam_mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+                videomama_masks.append(combined_sam_mask)
+                self.progress_update.emit(self.node_id, frame_idx + 1, total_frames * 2)
+                continue
+                
             # Post-process combined matte
             feathering = self.params.get("feathering", 0)
             shrink_grow = self.params.get("shrink_grow", 0)
@@ -562,6 +591,71 @@ class SuperMatteWorker(BaseWorker):
             prev_gray = gray
             self.progress_update.emit(self.node_id, frame_idx + 1, total_frames)
         
+        if use_videomama and videomama_frames:
+            self.log_message.emit(self.node_id, "Running VideoMaMa Temporal Inference...")
+            from plugins.CorridorKey.System.VideoMaMaInferenceModule.inference import run_inference
+            
+            output_generator = run_inference(videomama_pipeline, videomama_frames, videomama_masks, chunk_size=8)
+            
+            final_alphas = []
+            chunk_idx = 0
+            for chunk_output in output_generator:
+                self.log_message.emit(self.node_id, f"VideoMaMa processed chunk {chunk_idx + 1}...")
+                chunk_idx += 1
+                for out_rgb in chunk_output:
+                    gray_alpha = cv2.cvtColor(out_rgb, cv2.COLOR_RGB2GRAY)
+                    final_alphas.append(gray_alpha)
+                    
+            self.log_message.emit(self.node_id, "VideoMaMa Inference Complete. Saving outputs...")
+            
+            for idx, alpha in enumerate(final_alphas):
+                frame_idx = start_frame + idx
+                frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.png")
+                if not os.path.exists(frame_path):
+                    frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.jpg")
+                frame = cv2.imread(frame_path)
+                
+                combined_alpha = alpha
+                
+                # Post-process combined matte
+                feathering = self.params.get("feathering", 0)
+                shrink_grow = self.params.get("shrink_grow", 0)
+                threshold = self.params.get("threshold", 128)
+                contrast = self.params.get("contrast", 100)
+                
+                if shrink_grow != 0:
+                    sg_val = abs(int(shrink_grow))
+                    kernel_sg = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (sg_val, sg_val))
+                    if shrink_grow > 0:
+                        combined_alpha = cv2.dilate(combined_alpha, kernel_sg)
+                    else:
+                        combined_alpha = cv2.erode(combined_alpha, kernel_sg)
+                        
+                if contrast != 100 or threshold != 128:
+                    t_f = threshold / 255.0
+                    c_f = contrast / 100.0
+                    alpha_f = combined_alpha.astype(np.float32) / 255.0
+                    alpha_f = (alpha_f - t_f) * c_f + 0.5
+                    alpha_f = np.clip(alpha_f, 0, 1)
+                    combined_alpha = (alpha_f * 255).astype(np.uint8)
+                    
+                if feathering > 0:
+                    ksize = int(feathering)
+                    if ksize % 2 == 0:
+                        ksize += 1
+                    combined_alpha = cv2.GaussianBlur(combined_alpha, (ksize, ksize), 0)
+                    
+                matte_path = os.path.join(matte_dir, f"matte_{frame_idx:06d}.png")
+                cv2.imwrite(matte_path, combined_alpha)
+                
+                alpha_3d = (combined_alpha / 255.0)[..., np.newaxis]
+                bg_img = np.full_like(frame, bg_color_bgr, dtype=np.uint8)
+                comp = (frame * alpha_3d + bg_img * (1.0 - alpha_3d)).astype(np.uint8)
+                comp_path = os.path.join(comp_dir, f"comp_{frame_idx:06d}.png")
+                cv2.imwrite(comp_path, comp)
+                
+                self.progress_update.emit(self.node_id, total_frames + frame_idx + 1, total_frames * 2)
+
         if cap is not None:
             cap.release()
         
