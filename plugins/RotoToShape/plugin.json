@@ -6,9 +6,19 @@
     "inputs": ["Alpha Matte"],
     "outputs": ["Shape Data"],
     "parameters": [
-        {"id": "target_points", "name": "Control Points (Resolution)", "type": "slider", "value": 100, "min": 10, "max": 500, "step": 10},
+        {"id": "point_mode", "name": "Point Mode", "type": "select", "value": "Auto (Adaptive)", "options": ["Auto (Adaptive)", "Fixed"]},
+        {"id": "auto_point_spacing", "name": "Point Spacing (px)", "type": "slider", "value": 30, "min": 10, "max": 100, "step": 5, "tooltip": "Lower = more points, higher = fewer points"},
+        {"id": "target_points", "name": "Fixed Points", "type": "slider", "value": 100, "min": 10, "max": 500, "step": 10},
+        {"id": "curvature_weight", "name": "Curvature Weight", "type": "slider", "value": 5.0, "min": 1.0, "max": 15.0, "step": 0.5, "tooltip": "How aggressively points cluster at curves vs. straights"},
+        {"id": "simplify_epsilon", "name": "Curve Smoothing", "type": "slider", "value": 1.0, "min": 0.0, "max": 10.0, "step": 0.5, "tooltip": "Higher = smoother/simpler curves, lower = more raw detail"},
+        {"id": "edge_snap_radius", "name": "Edge Snap Radius (px)", "type": "slider", "value": 2, "min": 0, "max": 10, "step": 1, "tooltip": "How far points can shift to find the true matte edge"},
         {"id": "min_area", "name": "Minimum Area (px)", "type": "slider", "value": 100, "min": 0, "max": 10000, "step": 100},
-        {"id": "simplify_epsilon", "name": "Simplify Curve Epsilon", "type": "slider", "value": 1.0, "min": 0.0, "max": 10.0, "step": 0.5}
+        {"id": "iou_threshold", "name": "Tracking Overlap", "type": "slider", "value": 0.3, "min": 0.05, "max": 1.0, "step": 0.05, "tooltip": "Min bounding-box overlap to consider shapes the same across frames"},
+        {"id": "include_holes", "name": "Include Holes", "type": "checkbox", "value": false},
+        {"id": "max_missing_frames", "name": "Max Missing Frames", "type": "slider", "value": 5, "min": 0, "max": 50, "step": 1},
+        {"id": "temporal_smoothing", "name": "Temporal Smoothing", "type": "checkbox", "value": true, "tooltip": "3-frame rolling average to reduce AI matte jitter"},
+        {"id": "first_frame", "name": "First Frame", "type": "slider", "value": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "0 = start from beginning"},
+        {"id": "last_frame", "name": "Last Frame", "type": "slider", "value": 0, "min": 0, "max": 10000, "step": 1, "tooltip": "0 = process to end"}
     ],
     "worker_module": "plugins.RotoToShape.backend",
     "worker_class": "RotoToShapeWorker"

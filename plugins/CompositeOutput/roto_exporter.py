@@ -9,6 +9,18 @@ def export_roto_to_nuke(json_path, out_py_path):
     script_content = f'''import nuke
 import nuke.rotopaint as rp
 
+def compute_tangents(pts):
+    # pts: list of [x, y]
+    N = len(pts)
+    tangents = []
+    for i in range(N):
+        p_prev = pts[(i-1)%N]
+        p_next = pts[(i+1)%N]
+        tx = (p_next[0] - p_prev[0]) / 6.0
+        ty = (p_next[1] - p_prev[1]) / 6.0
+        tangents.append((tx, ty))
+    return tangents
+
 def create_animated_roto():
     shapes_data = {json.dumps(shapes)}
     
@@ -35,7 +47,7 @@ def create_animated_roto():
     nuke_shapes = {{}}
     for sid in unique_shape_ids:
         shape = rp.Shape(curves_knob)
-        shape.name = f"Auto_Shape_{{sid}}"
+        shape.name = sid if sid.startswith("Shape_") or sid.startswith("Hole_") else f"Auto_Shape_{{sid}}"
         
         # Initialize points using the FIRST frame this shape appears in
         first_appearance = None
@@ -78,17 +90,33 @@ def create_animated_roto():
                 continue
                 
             shape = nuke_shapes[sid_str]
+            tangents = compute_tangents(pts)
+            
             for i, pt in enumerate(pts):
                 if i >= len(shape):
                     break
                 cv = shape[i]
-                center = cv.center
                 
-                center.getPositionAnimCurve(0).addKey(nuke_frame, pt[0])
-                center.getPositionAnimCurve(1).addKey(nuke_frame, format_height - pt[1])
+                # Center point
+                cv.center.getPositionAnimCurve(0).addKey(nuke_frame, pt[0])
+                cv.center.getPositionAnimCurve(1).addKey(nuke_frame, format_height - pt[1])
+                cv.center.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                cv.center.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
                 
-                center.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
-                center.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                # Tangents (Nuke is relative to center, Y is flipped)
+                tx, ty = tangents[i]
+                
+                # Left Tangent (Y negated for Nuke bottom-up coords)
+                cv.leftTangent.getPositionAnimCurve(0).addKey(nuke_frame, -tx)
+                cv.leftTangent.getPositionAnimCurve(1).addKey(nuke_frame, -ty)
+                cv.leftTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                cv.leftTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                
+                # Right Tangent
+                cv.rightTangent.getPositionAnimCurve(0).addKey(nuke_frame, tx)
+                cv.rightTangent.getPositionAnimCurve(1).addKey(nuke_frame, -ty)
+                cv.rightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
+                cv.rightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = rp.AnimCurve.InterpolationType.LINEAR
 
     print("Roto shapes created successfully!")
 
