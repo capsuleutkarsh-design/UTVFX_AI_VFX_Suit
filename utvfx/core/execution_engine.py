@@ -214,12 +214,13 @@ class ExecutionEngine(QObject):
         hasher = hashlib.sha256()
         hasher.update(str(node.plugin_type).encode('utf-8'))
         
-        # Serialize node parameters
+        # Serialize node parameters, ignoring UI-only state that doesn't affect the output
         params = getattr(node, "params", {})
+        hash_params = {k: v for k, v in params.items() if k not in ["active_layer_id", "ui_scroll_position"]}
         try:
-            params_str = json.dumps(params, sort_keys=True)
+            params_str = json.dumps(hash_params, sort_keys=True)
         except Exception:
-            params_str = str(params)
+            params_str = str(hash_params)
         hasher.update(params_str.encode('utf-8'))
         
         # Include file modification time if it's a media plate
@@ -653,7 +654,15 @@ class ExecutionEngine(QObject):
             
         self._clear_vram()
             
+        # Free persistent bridge memory between node renders to prevent 8GB OOM
         if self.is_executing_pipeline:
+            try:
+                from utvfx.bridge.ai_bridge_client import AIBridgeClient
+                if AIBridgeClient._instance:
+                    AIBridgeClient._instance.shutdown()
+            except Exception:
+                pass
+            
             self._pump_execution_queue()
 
     @Slot(str)

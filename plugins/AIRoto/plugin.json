@@ -1,0 +1,23 @@
+{
+    "name": "AI Roto",
+    "plugin_type": "ai_roto",
+    "category": "🎭 Matte",
+    "color": "#ec4899",
+    "inputs": ["Video Plate", "Alpha Matte", "Depth Map"],
+    "outputs": ["Shape Data"],
+    "parameters": [
+        {"id": "target_points_limb", "name": "Points per Limb", "type": "slider", "value": 30, "min": 10, "max": 100, "step": 2, "tooltip": "Fixed number of points for each limb segment"},
+        {"id": "target_points_torso", "name": "Points for Torso", "type": "slider", "value": 60, "min": 20, "max": 200, "step": 4, "tooltip": "Fixed number of points for the Torso quad"},
+        {"id": "target_points_head", "name": "Points for Head", "type": "slider", "value": 30, "min": 10, "max": 100, "step": 2, "tooltip": "Fixed number of points for the Head"},
+        {"id": "corner_threshold", "name": "Corner Threshold (deg)", "type": "slider", "value": 45, "min": 10, "max": 90, "step": 5, "tooltip": "Angles sharper than this become hard Bezier Cusps"},
+        {"id": "edge_snap_radius", "name": "Edge Snap Radius (px)", "type": "slider", "value": 2, "min": 0, "max": 10, "step": 1, "tooltip": "How far points shift to lock onto true mask edge"},
+        {"id": "temporal_smoothing", "name": "Temporal Smoothing", "type": "checkbox", "value": true, "tooltip": "Applies a rolling average filter to bone points"},
+        {"id": "hysteresis_low", "name": "Occlusion Depth Low", "type": "slider", "value": 0.15, "min": 0.01, "max": 1.0, "step": 0.05, "tooltip": "Normalized depth distance under torso where shape becomes hidden"},
+        {"id": "hysteresis_high", "name": "Occlusion Depth High", "type": "slider", "value": 0.25, "min": 0.01, "max": 1.0, "step": 0.05, "tooltip": "Normalized depth distance under torso where shape becomes visible again"},
+        {"id": "flow_decay", "name": "Drift Decay Rate", "type": "slider", "value": 0.05, "min": 0.0, "max": 0.2, "step": 0.01, "tooltip": "How fast flow-tracked points decay back to rigid joint positions during dropouts"},
+        {"id": "first_frame", "name": "First Frame", "type": "slider", "value": 0, "min": 0, "max": 10000, "step": 1},
+        {"id": "last_frame", "name": "Last Frame", "type": "slider", "value": 0, "min": 0, "max": 10000, "step": 1}
+    ],
+    "worker_module": "plugins.AIRoto.backend",
+    "worker_class": "AIRotoWorker"
+}

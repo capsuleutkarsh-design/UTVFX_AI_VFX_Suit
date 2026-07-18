@@ -36,9 +36,12 @@ class MediaWorker(BaseWorker):
             total_frames = len(files)
             
             def frame_generator():
+                import re
                 from utvfx.core.image_utils import load_frame
                 for f in files:
-                    yield load_frame(os.path.join(media_dir, f))
+                    match = re.search(r'(\d+)\.\w+$', f)
+                    f_idx = int(match.group(1)) if match else None
+                    yield load_frame(os.path.join(media_dir, f)), f_idx
                     
             generator = frame_generator()
         else:
@@ -46,8 +49,11 @@ class MediaWorker(BaseWorker):
             if ext in [".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"]:
                 total_frames = 1
                 def frame_generator():
+                    import re
                     from utvfx.core.image_utils import load_frame
-                    yield load_frame(self.plate_file)
+                    match = re.search(r'(\d+)\.\w+$', self.plate_file)
+                    f_idx = int(match.group(1)) if match else 1
+                    yield load_frame(self.plate_file), f_idx
                 generator = frame_generator()
             else:
                 cap = cv2.VideoCapture(self.plate_file)
@@ -60,18 +66,22 @@ class MediaWorker(BaseWorker):
                         except Exception:
                             total_frames = reader.get_meta_data().get('nframes', 0)
                         def frame_generator():
+                            i = 1
                             for frame_rgb in reader:
-                                yield cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+                                yield cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), i
+                                i += 1
                         generator = frame_generator()
                     except Exception:
                         raise Exception(f"Failed to open video file: {self.plate_file}")
                 else:
                     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
                     def frame_generator():
+                        i = 1
                         while True:
                             ret, frame = cap.read()
                             if not ret: break
-                            yield frame
+                            yield frame, i
+                            i += 1
                         cap.release()
                     generator = frame_generator()
 
@@ -111,7 +121,7 @@ class MediaWorker(BaseWorker):
             
 
 
-        for i, frame in enumerate(generator):
+        for i, (frame, actual_idx) in enumerate(generator):
             if self.is_cancelled:
                 self.log_message.emit(self.node_id, "Media pre-processing cancelled.")
                 break
@@ -119,13 +129,15 @@ class MediaWorker(BaseWorker):
             if frame is None:
                 self.log_message.emit(self.node_id, f"Warning: Frame {i} is empty/corrupt. Skipping.")
                 continue
+                
+            f_idx = actual_idx if actual_idx is not None else (i + 1)
 
             # Save PNG
-            out_path = os.path.join(out_folder, f"frame_{i:06d}.png")
+            out_path = os.path.join(out_folder, f"frame_{f_idx:06d}.png")
             cv2.imwrite(out_path, frame)
             
             # Save JPG
-            out_path_jpg = os.path.join(out_folder_jpg, f"frame_{i:06d}.jpg")
+            out_path_jpg = os.path.join(out_folder_jpg, f"frame_{f_idx:06d}.jpg")
             cv2.imwrite(out_path_jpg, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
             
             progress_val = int(((i + 1) / total_frames) * 100)

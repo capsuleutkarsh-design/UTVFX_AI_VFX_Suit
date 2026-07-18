@@ -1,5 +1,6 @@
 import json
 import os
+import re
 
 import cv2
 import numpy as np
@@ -147,22 +148,7 @@ class RotoToShapeWorker(BaseWorker):
             
         return snapped
 
-    def _align_polygon(self, current, reference):
-        # current and reference both (N, 2)
-        # Maximize circular cross-correlation to minimize Euclidean distance
-        N = len(current)
-        if N < 2:
-            return current
-            
-        c_x = np.tile(current[:, 0], 2)[:-1]
-        c_y = np.tile(current[:, 1], 2)[:-1]
-        r_x = reference[:, 0]
-        r_y = reference[:, 1]
-        
-        corr = np.correlate(c_x, r_x, mode='valid') + np.correlate(c_y, r_y, mode='valid')
-        best_shift = np.argmax(corr)
-                    
-        return np.roll(current, -best_shift, axis=0)
+
 
     def run_task(self):
         self.log_message.emit(self.node_id, "Initializing Roto to Shape processing...")
@@ -187,218 +173,289 @@ class RotoToShapeWorker(BaseWorker):
         out_dir = os.path.join(self.cache_dir, "roto_shapes")
         os.makedirs(out_dir, exist_ok=True)
         
-        # Gather frames
-        frames = []
-        if os.path.isdir(self.mask_path):
-            frames = sorted([f for f in os.listdir(self.mask_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
-        else:
-            raise Exception("Expected a directory of alpha masks.")
-
-        # Apply frame range
-        if first_frame > 0:
-            frames = frames[first_frame:]
-        if last_frame > 0:
-            frames = frames[:last_frame - first_frame + 1]
-
-        total_frames = len(frames)
-        if total_frames == 0:
-            raise ValueError("No mask frames found in the specified range.")
+        layers_to_process = []
+        sam_masks_dir = os.path.join(os.path.dirname(self.mask_path), "sam_masks")
+        if os.path.isdir(sam_masks_dir):
+            for item in os.listdir(sam_masks_dir):
+                item_path = os.path.join(sam_masks_dir, item)
+                if os.path.isdir(item_path):
+                    layers_to_process.append({"name": item, "dir": item_path})
+        
+        if not layers_to_process:
+            layers_to_process.append({"name": "Shapes", "dir": self.mask_path})
             
-        self.log_message.emit(self.node_id, f"Extracting contours across {total_frames} frames (range: {first_frame}-{last_frame if last_frame > 0 else 'end'})...")
+        self.log_message.emit(self.node_id, f"Found {len(layers_to_process)} layers to process.")
         
         all_shapes = {}
-        active_shapes = {}
-        lost_shapes_count = {}
-        next_shape_id = 0
         
-        for i, f_name in enumerate(frames):
-            if self.is_cancelled:
-                self.log_message.emit(self.node_id, "Roto extraction cancelled.")
-                return
-                
-            frame_path = os.path.join(self.mask_path, f_name)
+        for layer_info in layers_to_process:
+            layer_name = layer_info["name"]
+            layer_dir = layer_info["dir"]
             
-            # Use IMREAD_UNCHANGED to read potential 16-bit or alpha channels
-            img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-            if img is None:
+            self.log_message.emit(self.node_id, f"Processing layer: {layer_name}")
+            
+            frames = sorted([f for f in os.listdir(layer_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
+            if first_frame > 0:
+                frames = frames[first_frame:]
+            if last_frame > 0:
+                frames = frames[:last_frame - first_frame + 1]
+                
+            total_frames = len(frames)
+            if total_frames == 0:
                 continue
                 
-            # If 3 or 4 channels, grab alpha or average
-            if len(img.shape) == 3:
-                if img.shape[2] == 4:
-                    img = img[:, :, 3]
-                else:
-                    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            active_shapes = {}
+            lost_shapes_count = {}
+            next_shape_id = 0
             
-            # Ensure 8-bit
-            if img.dtype != np.uint8:
-                if img.dtype == np.uint16:
-                    img = (img / 256).astype(np.uint8)
-                else:
-                    img = (np.clip(img, 0, 1) * 255).astype(np.uint8)
+            prev_gray = None
+            
+            for i, f_name in enumerate(frames):
+                if self.is_cancelled:
+                    return
+                    
+                match = re.search(r'(?:_|)(\d+)\.\w+$', f_name)
+                f_idx = int(match.group(1)) if match else i
+                f_idx_str = str(f_idx)
                 
-            # Calculate gradient magnitude for sub-pixel snapping
-            grad_x = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=3)
-            grad_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
-            grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-            
-            # Threshold to ensure binary
-            _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
-            
-            # Find contours
-            contours, hierarchy = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-            
-            valid_contours = []
-            valid_is_hole = []
-            valid_bboxes = []
-            
-            if hierarchy is not None:
-                for c_idx, cnt in enumerate(contours):
-                    if cv2.contourArea(cnt) >= min_area:
-                        parent_idx = hierarchy[0][c_idx][3]
-                        is_hole = (parent_idx != -1)
-                        if is_hole and not include_holes:
-                            continue
-                        valid_contours.append(cnt)
-                        valid_is_hole.append(is_hole)
-                        valid_bboxes.append(cv2.boundingRect(cnt))
-            
-            current_frame_shapes = {}
-            used_contours = set()
-            
-            # Track existing shapes using Bounding Box IOU
-            for shape_id, prev_pts in active_shapes.items():
-                prev_pts_np = np.array(prev_pts, dtype=np.float32)
+                if f_idx_str not in all_shapes:
+                    all_shapes[f_idx_str] = {}
+                    
+                frame_path = os.path.join(layer_dir, f_name)
+                img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
+                if img is None: continue
                 
-                # Compute bounding box of previous points
-                x_min, y_min = np.min(prev_pts_np, axis=0)
-                x_max, y_max = np.max(prev_pts_np, axis=0)
-                prev_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
+                if "format_width" not in all_shapes:
+                    all_shapes["format_width"] = img.shape[1]
+                    all_shapes["format_height"] = img.shape[0]
                 
-                best_cnt_idx = -1
-                max_iou = -1.0
+                if len(img.shape) == 3:
+                    img = img[:, :, 3] if img.shape[2] == 4 else cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                if img.dtype != np.uint8:
+                    img = (img / 256).astype(np.uint8) if img.dtype == np.uint16 else (np.clip(img, 0, 1) * 255).astype(np.uint8)
+                    
+                grad_x = cv2.Sobel(img, cv2.CV_32F, 1, 0, ksize=3)
+                grad_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
+                grad_mag = np.sqrt(grad_x**2 + grad_y**2)
                 
-                for c_idx, cnt in enumerate(valid_contours):
-                    if c_idx in used_contours:
-                        continue
-                        
-                    iou = bbox_iou(prev_bbox, valid_bboxes[c_idx])
-                    if iou > max_iou:
-                        max_iou = iou
-                        best_cnt_idx = c_idx
+                _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+                contours, hierarchy = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+                
+                valid_contours = []
+                valid_is_hole = []
+                valid_bboxes = []
+                if hierarchy is not None:
+                    for c_idx, cnt in enumerate(contours):
+                        if cv2.contourArea(cnt) >= min_area:
+                            is_hole = (hierarchy[0][c_idx][3] != -1)
+                            if is_hole and not include_holes: continue
+                            valid_contours.append(cnt)
+                            valid_is_hole.append(is_hole)
+                            valid_bboxes.append(cv2.boundingRect(cnt))
                             
-                if best_cnt_idx != -1 and max_iou >= iou_threshold:
-                    # Match found
-                    cnt = valid_contours[best_cnt_idx]
-                    used_contours.add(best_cnt_idx)
+                current_frame_shapes = {}
+                used_contours = set()
+                
+                # Optical flow image prep
+                # Blur slightly to create gradients for PyrLK
+                curr_gray = cv2.GaussianBlur(img, (15, 15), 0)
+                
+                for shape_id, prev_pts in active_shapes.items():
+                    prev_pts_np = np.array(prev_pts, dtype=np.float32)
+                    x_min, y_min = np.min(prev_pts_np, axis=0)
+                    x_max, y_max = np.max(prev_pts_np, axis=0)
+                    prev_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
                     
-                    if epsilon > 0:
-                        cnt = cv2.approxPolyDP(cnt, epsilon, True)
-                    
-                    # Maintain original point count
-                    prev_num_points = len(prev_pts_np)
-                    resampled = self._resample_polygon(cnt, prev_num_points, curvature_weight)
-                    resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius)
-                    resampled = self._align_polygon(resampled, prev_pts_np)
-                    
-                    current_frame_shapes[shape_id] = resampled.tolist()
-                    lost_shapes_count[shape_id] = 0
-                else:
-                    # Shape disappeared in this frame
-                    lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
-                    if lost_shapes_count[shape_id] <= max_missing_frames:
-                        # Copy previous to maintain it while missing
-                        current_frame_shapes[shape_id] = prev_pts
-                    
-            # Any remaining contours are NEW shapes
-            for c_idx, cnt in enumerate(valid_contours):
-                if c_idx not in used_contours:
-                    if epsilon > 0:
-                        cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                    best_cnt_idx = -1
+                    max_iou = -1.0
+                    for c_idx, cnt in enumerate(valid_contours):
+                        if c_idx in used_contours: continue
+                        iou = bbox_iou(prev_bbox, valid_bboxes[c_idx])
+                        if iou > max_iou:
+                            max_iou = iou
+                            best_cnt_idx = c_idx
+                            
+                    if best_cnt_idx != -1 and max_iou >= iou_threshold:
+                        cnt = valid_contours[best_cnt_idx]
+                        used_contours.add(best_cnt_idx)
                         
-                    if point_mode == "Auto (Adaptive)":
-                        perimeter = cv2.arcLength(cnt, True)
-                        num_points = max(8, int(perimeter / auto_point_spacing))
+                        # Apply Optical Flow Tracking (PyrLK) to prevent sliding
+                        tracked_pts_np = prev_pts_np
+                        if prev_gray is not None:
+                            try:
+                                tracked_pts, st, err = cv2.calcOpticalFlowPyrLK(
+                                    prev_gray, curr_gray, prev_pts_np, None, 
+                                    winSize=(21, 21), maxLevel=3, 
+                                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
+                                )
+                                # Keep valid points
+                                tracked_pts_np = np.where(st == 1, tracked_pts, prev_pts_np)
+                            except Exception as e:
+                                pass # fallback to previous points if flow fails
+                        
+                        if epsilon > 0:
+                            cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                            
+                        # Snap tracked points to the true edge via _snap_to_gradient
+                        snapped_pts = self._snap_to_gradient(tracked_pts_np, grad_mag, edge_snap_radius)
+                        
+                        cnt_pts = cnt.reshape(-1, 2).astype(np.float32)
+                        projected_pts = np.zeros_like(snapped_pts)
+                        for pt_idx in range(len(snapped_pts)):
+                            pt = snapped_pts[pt_idx]
+                            best_dist = float('inf')
+                            best_proj = pt
+                            for i in range(len(cnt_pts)):
+                                p1 = cnt_pts[i]
+                                p2 = cnt_pts[(i+1)%len(cnt_pts)]
+                                v = p2 - p1
+                                w = pt - p1
+                                v_sq = np.dot(v, v)
+                                if v_sq == 0:
+                                    proj = p1
+                                else:
+                                    t = np.clip(np.dot(w, v) / v_sq, 0.0, 1.0)
+                                    proj = p1 + t * v
+                                dist = np.linalg.norm(pt - proj)
+                                if dist < best_dist:
+                                    best_dist = dist
+                                    best_proj = proj
+                            projected_pts[pt_idx] = best_proj
+                        
+                        current_frame_shapes[shape_id] = projected_pts.tolist()
+                        lost_shapes_count[shape_id] = 0
                     else:
-                        num_points = target_points
+                        lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
+                        if lost_shapes_count[shape_id] <= max_missing_frames:
+                            current_frame_shapes[shape_id] = prev_pts
+                            
+                for c_idx, cnt in enumerate(valid_contours):
+                    if c_idx not in used_contours:
+                        if epsilon > 0:
+                            cnt = cv2.approxPolyDP(cnt, epsilon, True)
+                        perimeter = cv2.arcLength(cnt, True)
+                        num_points = max(8, int(perimeter / auto_point_spacing)) if point_mode == "Auto (Adaptive)" else target_points
+                        resampled = self._resample_polygon(cnt, num_points, curvature_weight)
+                        resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius)
                         
-                    resampled = self._resample_polygon(cnt, num_points, curvature_weight)
-                    resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius)
-                    
-                    is_hole = valid_is_hole[c_idx]
-                    prefix = "Hole" if is_hole else "Shape"
-                    shape_id = f"{prefix}_{next_shape_id}"
-                    next_shape_id += 1
-                    
-                    current_frame_shapes[shape_id] = resampled.tolist()
-                    lost_shapes_count[shape_id] = 0
-                    
-            active_shapes = current_frame_shapes.copy()
-            all_shapes[str(i)] = current_frame_shapes
-            
-            # Draw preview
-            preview = np.zeros((img.shape[0], img.shape[1], 3), dtype=np.uint8)
-            mask_bgr = cv2.cvtColor(thresh, cv2.COLOR_GRAY2BGR)
-            
-            for sid, pts in current_frame_shapes.items():
-                pts_int = np.array(pts, dtype=np.int32).reshape((-1, 1, 2))
+                        prefix = "Hole" if valid_is_hole[c_idx] else "Shape"
+                        # Namespace shape with layer
+                        shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
+                        next_shape_id += 1
+                        current_frame_shapes[shape_id] = resampled.tolist()
+                        lost_shapes_count[shape_id] = 0
+                        
+                active_shapes = current_frame_shapes.copy()
+                all_shapes[f_idx_str].update(current_frame_shapes)
+                prev_gray = curr_gray
                 
-                # generate deterministic color from sid string
-                sid_num = sum(ord(c) for c in sid)
-                color = ((sid_num * 80) % 255, (sid_num * 150 + 100) % 255, (sid_num * 200 + 200) % 255)
-                cv2.polylines(preview, [pts_int], isClosed=True, color=color, thickness=2)
+                self.progress_update.emit(self.node_id, i + 1, max(1, total_frames))
                 
-                # Draw control point dots so artists can see adaptive distribution
-                for pt in pts:
-                    cx, cy = int(round(pt[0])), int(round(pt[1]))
-                    cv2.circle(preview, (cx, cy), 3, (255, 255, 255), -1)  # white fill
-                    cv2.circle(preview, (cx, cy), 3, color, 1)  # colored ring
-                
-            preview = cv2.addWeighted(mask_bgr, 0.3, preview, 0.7, 0)
-            cv2.imwrite(os.path.join(out_dir, f"preview_{i:06d}.png"), preview)
-            
-            self.progress_update.emit(self.node_id, i + 1, max(1, total_frames))
-            
         # --- Temporal Smoothing Post-Process ---
-        if temporal_smoothing and total_frames > 2:
-            self.log_message.emit(self.node_id, "Applying temporal smoothing...")
-            shape_ids = set()
-            for f in range(total_frames):
-                if str(f) in all_shapes:
-                    shape_ids.update(all_shapes[str(f)].keys())
+        if temporal_smoothing:
+            self.log_message.emit(self.node_id, "Applying temporal rolling average smoothing...")
+            frames_present = sorted([int(k) for k in all_shapes.keys() if str(k).isdigit()])
+            
+            smoothed_shapes = {str(f): {} for f in frames_present}
+            smoothed_shapes["format_width"] = all_shapes.get("format_width", 1920)
+            smoothed_shapes["format_height"] = all_shapes.get("format_height", 1080)
+            
+            for f_idx in frames_present:
+                f_str = str(f_idx)
+                for sid, pts in all_shapes[f_str].items():
+                    pts_np = np.array(pts)
+                    num_pts = len(pts_np)
                     
-            for sid in shape_ids:
-                frames_present = [f for f in range(total_frames) if str(f) in all_shapes and sid in all_shapes[str(f)]]
-                if len(frames_present) < 3:
-                    continue
+                    smoothed_pts = pts_np
                     
-                smoothed = {}
-                for idx, f in enumerate(frames_present):
-                    pts_curr = np.array(all_shapes[str(f)][sid])
+                    idx = frames_present.index(f_idx)
                     if idx > 0 and idx < len(frames_present) - 1:
-                        f_prev = frames_present[idx-1]
-                        f_next = frames_present[idx+1]
-                        if f_prev == f - 1 and f_next == f + 1:
-                            pts_prev = np.array(all_shapes[str(f_prev)][sid])
-                            pts_next = np.array(all_shapes[str(f_next)][sid])
-                            pts_curr = (pts_prev + pts_curr + pts_next) / 3.0
-                    smoothed[str(f)] = pts_curr.tolist()
+                        prev_f = str(frames_present[idx - 1])
+                        next_f = str(frames_present[idx + 1])
+                        if sid in all_shapes[prev_f] and sid in all_shapes[next_f]:
+                            pts_prev = np.array(all_shapes[prev_f][sid])
+                            pts_next = np.array(all_shapes[next_f][sid])
+                            if len(pts_prev) == num_pts and len(pts_next) == num_pts:
+                                smoothed_pts = (pts_prev + pts_np + pts_next) / 3.0
                     
-                for f in frames_present:
-                    if str(f) in smoothed:
-                        all_shapes[str(f)][sid] = smoothed[str(f)]
+                    smoothed_shapes[f_str][sid] = smoothed_pts.tolist()
             
-        # Save format dims for Nuke exporter
-        if frames:
-            first_frame_path = os.path.join(self.mask_path, frames[0])
-            first_img = cv2.imread(first_frame_path, cv2.IMREAD_UNCHANGED)
-            if first_img is not None:
-                all_shapes["format_width"] = first_img.shape[1]
-                all_shapes["format_height"] = first_img.shape[0]
+            all_shapes = smoothed_shapes
             
-        # Save to JSON
-        out_file = os.path.join(out_dir, "shapes.json")
-        with open(out_file, "w") as f:
-            json.dump(all_shapes, f)
+        # --- Format Y-flip and Cusp Detection ---
+        format_h = all_shapes.get("format_height", 1080)
+        
+        corner_threshold = float(self.params.get("corner_threshold", 45))
+        corner_rad = np.radians(corner_threshold)
+        
+        frames_present = sorted([int(k) for k in all_shapes.keys() if str(k).isdigit()])
+        for f_idx in frames_present:
+            f_str = str(f_idx)
+            for sid, pts in all_shapes[f_str].items():
+                pts_np = np.array(pts, dtype=np.float32)
+                pts_with_type = []
+                if len(pts_np) > 2:
+                    pts_rolled_fwd = np.roll(pts_np, -1, axis=0)
+                    pts_rolled_bck = np.roll(pts_np, 1, axis=0)
+                    v1 = pts_np - pts_rolled_bck
+                    v2 = pts_rolled_fwd - pts_np
+                    n1 = np.linalg.norm(v1, axis=1, keepdims=True)
+                    n2 = np.linalg.norm(v2, axis=1, keepdims=True)
+                    n1[n1 == 0] = 1.0
+                    n2[n2 == 0] = 1.0
+                    dot = np.sum((v1 / n1) * (v2 / n2), axis=1)
+                    dot = np.clip(dot, -1.0, 1.0)
+                    angle = np.arccos(dot)
+                else:
+                    angle = np.zeros(len(pts_np))
+                    
+                for j, pt in enumerate(pts_np):
+                    y_flipped = format_h - pt[1]
+                    curve_type = "cusp" if angle[j] > corner_rad else "smooth"
+                    pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
+                    
+                all_shapes[f_str][sid] = pts_with_type
+
+        # --- Preview Generation ---
+        if os.path.exists(self.mask_path):
+            self.log_message.emit(self.node_id, "Generating preview overlays...")
+            preview_dir = os.path.join(out_dir, "previews")
+            os.makedirs(preview_dir, exist_ok=True)
             
-        self.log_message.emit(self.node_id, f"Successfully generated animated shape data.")
+            mask_files = sorted([f for f in os.listdir(self.mask_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
+            
+            frame_map = {}
+            for f_name in mask_files:
+                match = re.search(r'(\d+)\.\w+$', f_name)
+                idx = int(match.group(1)) if match else -1
+                if idx != -1:
+                    frame_map[idx] = f_name
+            
+            for f_idx in frames_present:
+                if f_idx in frame_map:
+                    f_name = frame_map[f_idx]
+                    mask_img = cv2.imread(os.path.join(self.mask_path, f_name))
+                    if mask_img is not None:
+                        if len(mask_img.shape) == 2:
+                            mask_img = cv2.cvtColor(mask_img, cv2.COLOR_GRAY2BGR)
+                            
+                        for sid, pts_with_type in all_shapes[str(f_idx)].items():
+                            is_hole = "Hole_" in sid.split('/')[-1]
+                            color = (0, 0, 255) if is_hole else (0, 255, 0)
+                            
+                            # unflip Y just for preview
+                            draw_pts = np.array([[pt[0], format_h - pt[1]] for pt in pts_with_type], dtype=np.int32)
+                            if len(draw_pts) > 0:
+                                cv2.polylines(mask_img, [draw_pts], isClosed=True, color=color, thickness=2)
+                                
+                                for pt in draw_pts:
+                                    cv2.circle(mask_img, (pt[0], pt[1]), 2, (255, 0, 0), -1)
+                        
+                        out_prev_path = os.path.join(preview_dir, f"preview_{f_idx:04d}.png")
+                        cv2.imwrite(out_prev_path, mask_img)
+
+        json_path = os.path.join(out_dir, "shapes.json")
+        with open(json_path, 'w') as f:
+            json.dump(all_shapes, f, indent=2)
+            
+        self.log_message.emit(self.node_id, f"Exported {len(all_shapes)} frames of shape data.")

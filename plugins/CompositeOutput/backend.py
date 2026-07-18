@@ -63,12 +63,13 @@ class CompositeOutputWorker(BaseWorker):
         # 1.5 Process Shape Data (Roto to Shape)
         if self.shape_path and os.path.exists(self.shape_path):
             if self.params.get("export_roto_nuke", True):
-                self.log_message.emit(self.node_id, "Found Roto Shape data. Exporting Python script for Nuke...")
+                self.log_message.emit(self.node_id, "Found Roto Shape data. Exporting Nuke Roto generator (.nk)...")
                 shapes_json = os.path.join(self.shape_path, "shapes.json")
                 if os.path.exists(shapes_json):
-                    py_script = os.path.join(self.output_dir, "import_roto_to_nuke.py")
-                    export_roto_to_nuke(shapes_json, py_script)
-                    self.log_message.emit(self.node_id, f"Exported Roto Python Script to {py_script}")
+                    nk_script = os.path.join(self.output_dir, "roto_shapes.nk")
+                    interp_mode = self.params.get("roto_interpolation", "Linear")
+                    export_roto_to_nuke(shapes_json, nk_script, interp_mode)
+                    self.log_message.emit(self.node_id, f"Exported Nuke Roto to {nk_script}")
         
         # 2. Process Image Data
         if self.input_path and os.path.exists(self.input_path) and os.path.isdir(self.input_path):

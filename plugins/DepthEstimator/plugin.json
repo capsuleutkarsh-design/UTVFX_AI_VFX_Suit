@@ -13,6 +13,8 @@
         {"id": "blur_radius", "name": "Post Blur", "type": "slider", "value": 0, "min": 0, "max": 50},
         {"id": "colormap", "name": "Preview Colormap", "type": "select", "value": "Grayscale", "options": ["Grayscale", "Inferno", "Turbo", "Magma", "Plasma"]},
         {"id": "invert_depth", "name": "Invert Depth", "type": "checkbox", "value": false}
+    "actions": [
+        {"id": "run_depth", "label": "Execute Depth Anything V2"}
     ],
     "worker_module": "plugins.DepthEstimator.backend",
     "worker_class": "DepthWorker"

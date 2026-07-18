@@ -122,7 +122,7 @@ def resolve_shape_input(node, visited=None, is_start_node=True, cache_dir=None):
     visited.add(node)
 
     if not is_start_node and not getattr(node, "is_disabled", False):
-        if getattr(node, "plugin_type", "") == "roto_to_shape":
+        if getattr(node, "plugin_type", "") in ["roto_to_shape", "ai_roto"]:
             cache_path = get_node_cache(node, cache_dir)
             shape_dir = os.path.join(cache_path, "roto_shapes")
             if os.path.exists(shape_dir):
