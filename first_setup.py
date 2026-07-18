@@ -221,7 +221,11 @@ MODELS = [
     
     # Additional HuggingFace Repos (SAM 3, GroundingDINO)
     {"name": "SAM 3 Weights", "type": "hf_repo", "repo_id": "1038lab/sam3", "local_dir": "models/SAM3"},
-    {"name": "GroundingDINO Weights", "type": "hf_repo", "repo_id": "IDEA-Research/grounding-dino-base", "local_dir": "models/GroundingDINO"}
+    {"name": "GroundingDINO Weights", "type": "hf_repo", "repo_id": "IDEA-Research/grounding-dino-base", "local_dir": "models/GroundingDINO"},
+    
+    # VideoMaMa Temporal Refiner
+    {"name": "VideoMaMa Base (SVD-XT)", "type": "hf_repo", "repo_id": "stabilityai/stable-video-diffusion-img2vid-xt", "local_dir": "models/VideoMaMa/stable-video-diffusion-img2vid-xt"},
+    {"name": "VideoMaMa Fine-Tuned UNet", "type": "hf_repo", "repo_id": "SammyLim/VideoMaMa", "local_dir": "models/VideoMaMa"}
 ]
 
 def download_models(python_exe):

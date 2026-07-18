@@ -46,5 +46,12 @@ Download the `.pth` weights from the links below:
 
 **Directory:** `models/MEMatte/`
 
+## 7. VideoMaMa
+Used for temporal masking refinement in Super Matte.
+- **Base Model (SVD-XT):** Clone or download the folder structure from [stabilityai/stable-video-diffusion-img2vid-xt](https://huggingface.co/stabilityai/stable-video-diffusion-img2vid-xt/tree/main).
+  - Place all contents in: `models/VideoMaMa/stable-video-diffusion-img2vid-xt/`
+- **VideoMaMa Fine-tuned UNet:** Download `diffusion_pytorch_model.safetensors` and `config.json` from [SammyLim/VideoMaMa](https://huggingface.co/SammyLim/VideoMaMa/tree/main).
+  - Place these files directly in: `models/VideoMaMa/`
+
 ---
 *Note: If you run the pre-built Windows Installer setup, you can simply put all these models into a single `.zip` file and select it during installation to automatically extract them to the right places.*
