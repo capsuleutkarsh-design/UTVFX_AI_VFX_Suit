@@ -84,7 +84,7 @@ else:
     format_w = shapes_data.get("format_width", 1920)
     format_h = shapes_data.get("format_height", 1080)
 
-    roto_node = nuke.createNode('Roto')
+    roto_node = nuke.thisNode()
     roto_node['name'].setValue('UTVFX_AI_Roto')
     
     curves = roto_node['curves']
@@ -263,10 +263,23 @@ else:
                     cv.featherCenter.getPositionAnimCurve(0).addKey(f, 0.0)
                     cv.featherCenter.getPositionAnimCurve(1).addKey(f, 0.0)
 
+    # Clear the onCreate callback so it doesn't run again if the node is copied/pasted
+    roto_node.knob('onCreate').setValue('')
     print("Roto shapes created successfully!")
 """
 
-    nk_content = "python {\n" + py_script.replace('\r\n', '\n') + "\n}\n"
+    py_script_clean = py_script.replace('\r\n', '\n').replace('\r', '')
+    
+    nk_content = f"""set cut_paste_input [stack 0]
+version 13.0 v1
+push $cut_paste_input
+Roto {{
+ name UTVFX_AI_Roto
+ onCreate {{
+{py_script_clean}
+ }}
+}}"""
+
     
     # Must use newline='\n' to prevent Nuke's TCL interpreter from choking on \r\n
     with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
