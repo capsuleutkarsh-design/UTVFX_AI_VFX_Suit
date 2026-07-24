@@ -27,4 +27,4 @@ diffusers<0.32.0
 easydict
 timm
 kornia
-mediapipe
+mediapipe<0.10.10
