@@ -337,8 +337,9 @@ class RotoToShapeWorker(BaseWorker):
                 
                 for shape_id, prev_pts in active_shapes.items():
                     prev_pts_np = np.array(prev_pts, dtype=np.float32)
-                    x_min, y_min = np.min(prev_pts_np, axis=0)
-                    x_max, y_max = np.max(prev_pts_np, axis=0)
+                    main_pts_np = prev_pts_np[:, :2]
+                    x_min, y_min = np.min(main_pts_np, axis=0)
+                    x_max, y_max = np.max(main_pts_np, axis=0)
                     prev_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
                     
                     best_cnt_idx = -1
@@ -369,7 +370,7 @@ class RotoToShapeWorker(BaseWorker):
                         min_dist_sum = float('inf')
                         for shift in range(num_points):
                             rolled = np.roll(resampled, shift, axis=0)
-                            dist_sum = np.sum(np.linalg.norm(rolled - prev_pts_np, axis=1))
+                            dist_sum = np.sum(np.linalg.norm(rolled - main_pts_np, axis=1))
                             if dist_sum < min_dist_sum:
                                 min_dist_sum = dist_sum
                                 best_shift = shift
