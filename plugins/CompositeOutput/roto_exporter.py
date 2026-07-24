@@ -254,6 +254,17 @@ else:
                 cv.rightTangent.getPositionAnimCurve(1).addKey(f, rty)
                 cv.rightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
                 cv.rightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
+                
+                # Feather
+                if len(pt) >= 5:
+                    fx, fy = float(pt[3]), float(pt[4])
+                    cv.featherCenter.getPositionAnimCurve(0).addKey(f, fx - pt[0])
+                    cv.featherCenter.getPositionAnimCurve(1).addKey(f, fy - pt[1])
+                    cv.featherCenter.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
+                    cv.featherCenter.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
+                else:
+                    cv.featherCenter.getPositionAnimCurve(0).addKey(f, 0.0)
+                    cv.featherCenter.getPositionAnimCurve(1).addKey(f, 0.0)
 
     print("Roto shapes created successfully!")
 """

@@ -127,6 +127,46 @@ class RotoToShapeWorker(BaseWorker):
             
         return resampled
 
+    def _calculate_feather(self, pts, img, threshold=5, max_dist=100):
+        h, w = img.shape
+        feather_pts = []
+        
+        pts_rolled_fwd = np.roll(pts, -1, axis=0)
+        pts_rolled_bck = np.roll(pts, 1, axis=0)
+        tangent = pts_rolled_fwd - pts_rolled_bck
+        
+        norms = np.linalg.norm(tangent, axis=1, keepdims=True)
+        norms[norms == 0] = 1.0
+        tangent = tangent / norms
+        normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
+        
+        for i in range(len(pts)):
+            pt = pts[i]
+            n = normal[i]
+            
+            # Find which direction points outward (towards lower alpha)
+            p1 = pt + n * 2
+            p2 = pt - n * 2
+            
+            val1 = img[min(h-1, max(0, int(p1[1]))), min(w-1, max(0, int(p1[0])))]
+            val2 = img[min(h-1, max(0, int(p2[1]))), min(w-1, max(0, int(p2[0])))]
+            
+            out_dir = n if val1 < val2 else -n
+            
+            f_pt = pt.copy()
+            for step in range(1, max_dist):
+                test_pt = pt + out_dir * step
+                tx, ty = int(test_pt[0]), int(test_pt[1])
+                if tx < 0 or tx >= w or ty < 0 or ty >= h:
+                    f_pt = test_pt
+                    break
+                if img[ty, tx] <= threshold:
+                    f_pt = test_pt
+                    break
+            feather_pts.append(f_pt)
+            
+        return np.array(feather_pts)
+
     def _snap_to_gradient(self, pts, grad_mag, snap_radius=2):
         h, w = grad_mag.shape
         snapped = np.copy(pts)
@@ -262,8 +302,12 @@ class RotoToShapeWorker(BaseWorker):
                 grad_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
                 grad_mag = np.sqrt(grad_x**2 + grad_y**2)
                 
-                edge_threshold = int(self.params.get("edge_threshold", 127))
+                edge_placement = int(self.params.get("edge_placement", 50))
+                # Map 0 (Soft edge) to threshold 10, and 100 (Hard edge) to threshold 245
+                edge_threshold = int(10 + (edge_placement / 100.0) * 235)
                 _, thresh = cv2.threshold(img, edge_threshold, 255, cv2.THRESH_BINARY)
+                
+                generate_feather = self.params.get("generate_feather", True)
                 
                 # Use morphological operations to clean up noisy edge thresholding if needed
                 kernel = np.ones((3,3), np.uint8)
@@ -335,7 +379,13 @@ class RotoToShapeWorker(BaseWorker):
                         # Snap aligned points to edge gradient
                         snapped_pts = self._snap_to_gradient(aligned_resampled, grad_mag, edge_snap_radius)
                         
-                        current_frame_shapes[shape_id] = snapped_pts.tolist()
+                        if generate_feather:
+                            feather_pts = self._calculate_feather(snapped_pts, img, threshold=5, max_dist=100)
+                            combined = np.hstack([snapped_pts, feather_pts])
+                            current_frame_shapes[shape_id] = combined.tolist()
+                        else:
+                            current_frame_shapes[shape_id] = snapped_pts.tolist()
+                            
                         lost_shapes_count[shape_id] = 0
                     else:
                         lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
@@ -358,7 +408,14 @@ class RotoToShapeWorker(BaseWorker):
                         # Namespace shape with layer
                         shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
                         next_shape_id += 1
-                        current_frame_shapes[shape_id] = resampled.tolist()
+                        
+                        if generate_feather:
+                            feather_pts = self._calculate_feather(resampled, img, threshold=5, max_dist=100)
+                            combined = np.hstack([resampled, feather_pts])
+                            current_frame_shapes[shape_id] = combined.tolist()
+                        else:
+                            current_frame_shapes[shape_id] = resampled.tolist()
+                            
                         lost_shapes_count[shape_id] = 0
                         
                 active_shapes = current_frame_shapes.copy()
@@ -413,12 +470,15 @@ class RotoToShapeWorker(BaseWorker):
             f_str = str(f_idx)
             for sid, pts in all_shapes[f_str].items():
                 pts_np = np.array(pts, dtype=np.float32)
+                has_feather = pts_np.shape[1] == 4
+                main_pts = pts_np[:, :2]
+                
                 pts_with_type = []
-                if len(pts_np) > 2:
-                    pts_rolled_fwd = np.roll(pts_np, -1, axis=0)
-                    pts_rolled_bck = np.roll(pts_np, 1, axis=0)
-                    v1 = pts_np - pts_rolled_bck
-                    v2 = pts_rolled_fwd - pts_np
+                if len(main_pts) > 2:
+                    pts_rolled_fwd = np.roll(main_pts, -1, axis=0)
+                    pts_rolled_bck = np.roll(main_pts, 1, axis=0)
+                    v1 = main_pts - pts_rolled_bck
+                    v2 = pts_rolled_fwd - main_pts
                     n1 = np.linalg.norm(v1, axis=1, keepdims=True)
                     n2 = np.linalg.norm(v2, axis=1, keepdims=True)
                     n1[n1 == 0] = 1.0
@@ -427,12 +487,18 @@ class RotoToShapeWorker(BaseWorker):
                     dot = np.clip(dot, -1.0, 1.0)
                     angle = np.arccos(dot)
                 else:
-                    angle = np.zeros(len(pts_np))
+                    angle = np.zeros(len(main_pts))
                     
-                for j, pt in enumerate(pts_np):
+                for j, pt in enumerate(main_pts):
                     y_flipped = format_h - pt[1]
                     curve_type = "cusp" if angle[j] > corner_rad else "smooth"
-                    pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
+                    
+                    if has_feather:
+                        fx = pts_np[j, 2]
+                        fy_flipped = format_h - pts_np[j, 3]
+                        pts_with_type.append([float(pt[0]), float(y_flipped), curve_type, float(fx), float(fy_flipped)])
+                    else:
+                        pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
                     
                 all_shapes[f_str][sid] = pts_with_type
 
