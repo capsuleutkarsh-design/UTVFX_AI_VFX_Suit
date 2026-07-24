@@ -278,7 +278,7 @@ class RotoToShapeWorker(BaseWorker):
                 if self.is_cancelled:
                     return
                     
-                match = re.search(r'(?:_|)(\d+)\.\w+$', f_name)
+                match = re.search(r'(\d+)\.\w+$', f_name)
                 f_idx = int(match.group(1)) if match else i
                 f_idx_str = str(f_idx)
                 

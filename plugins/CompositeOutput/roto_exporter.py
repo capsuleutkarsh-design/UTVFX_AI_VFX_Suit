@@ -168,52 +168,11 @@ else:
                 
             nuke_shapes[sid] = shape
             
-    # Keyframe reduction helper function
-    def is_keyframe_needed(shapes_data, sid, f, frames, dev_thresh=0.5):
-        idx = frames.index(f)
-        if idx == 0 or idx == len(frames) - 1:
-            return True
-            
-        prev_f = str(frames[idx - 1])
-        next_f = str(frames[idx + 1])
-        curr_f = str(f)
-        
-        if sid not in shapes_data[prev_f] or sid not in shapes_data[next_f]:
-            return True
-            
-        pts_prev = shapes_data[prev_f][sid]
-        pts_curr = shapes_data[curr_f][sid]
-        pts_next = shapes_data[next_f][sid]
-        
-        pts_prev = pts_prev["points"] if isinstance(pts_prev, dict) else pts_prev
-        pts_curr = pts_curr["points"] if isinstance(pts_curr, dict) else pts_curr
-        pts_next = pts_next["points"] if isinstance(pts_next, dict) else pts_next
-        
-        if len(pts_prev) != len(pts_curr) or len(pts_next) != len(pts_curr):
-            return True
-            
-        for i in range(len(pts_curr)):
-            p0 = pts_prev[i]
-            p1 = pts_curr[i]
-            p2 = pts_next[i]
-            
-            exp_x = 0.5 * (p0[0] + p2[0])
-            exp_y = 0.5 * (p0[1] + p2[1])
-            
-            err = ((p1[0] - exp_x)**2 + (p1[1] - exp_y)**2)**0.5
-            if err > dev_thresh:
-                return True
-                
-        return False
-
-    # Animate points and opacity only on keyframes
+    # Animate points and opacity on every frame
     for f in frames:
         f_data = shapes_data[str(f)]
         for sid, val in f_data.items():
             if str(sid) not in nuke_shapes:
-                continue
-                
-            if not is_keyframe_needed(shapes_data, str(sid), f, frames, dev_thresh=0.4):
                 continue
                 
             shape = nuke_shapes[str(sid)]
