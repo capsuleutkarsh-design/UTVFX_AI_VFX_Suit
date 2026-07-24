@@ -14,28 +14,39 @@ import nuke
 import nuke.rotopaint as rp
 import random
 
-def compute_tangents(pts, prev_pts=None, next_pts=None):
+def compute_tangents(pts):
     N = len(pts)
-    tangents = []
+    left_tangents = []
+    right_tangents = []
+    import math
     for i in range(N):
         pt_type = pts[i][2] if len(pts[i]) > 2 else "smooth"
         if pt_type == "cusp":
-            tangents.append((0.0, 0.0))
+            left_tangents.append((0.0, 0.0))
+            right_tangents.append((0.0, 0.0))
         else:
+            p_curr = pts[i]
             p_prev = pts[(i-1)%N]
             p_next = pts[(i+1)%N]
-            tx = (p_next[0] - p_prev[0]) / 6.0
-            ty = (p_next[1] - p_prev[1]) / 6.0
             
-            # Temporal Velocity stretch (Motion-blur aware)
-            if prev_pts and next_pts and i < len(prev_pts) and i < len(next_pts):
-                vx = (next_pts[i][0] - prev_pts[i][0])
-                vy = (next_pts[i][1] - prev_pts[i][1])
-                tx += vx * 0.15
-                ty += vy * 0.15
+            d_prev = math.hypot(p_curr[0] - p_prev[0], p_curr[1] - p_prev[1])
+            d_next = math.hypot(p_next[0] - p_curr[0], p_next[1] - p_curr[1])
+            d_total = d_prev + d_next
+            
+            if d_total == 0:
+                left_tangents.append((0.0, 0.0))
+                right_tangents.append((0.0, 0.0))
+            else:
+                dir_x = (p_next[0] - p_prev[0]) / 3.0
+                dir_y = (p_next[1] - p_prev[1]) / 3.0
                 
-            tangents.append((tx, ty))
-    return tangents
+                scale_left = d_prev / d_total
+                scale_right = d_next / d_total
+                
+                left_tangents.append((dir_x * scale_left, dir_y * scale_left))
+                right_tangents.append((dir_x * scale_right, dir_y * scale_right))
+                
+    return left_tangents, right_tangents
 
 def generate_color(sid):
     random.seed(str(sid))
@@ -62,7 +73,13 @@ def get_centroid_name(pts, format_width, format_height):
     if x_pos == "Center": return y_pos
     return f"{{y_pos}}{{x_pos}}"
 
-shapes_data = {json.dumps(shapes)}
+try:
+    with open('{json_path.replace(chr(92), '/')}', 'r') as f:
+        shapes_data = json.load(f)
+except Exception as e:
+    nuke.message('Failed to load shapes data: ' + str(e))
+    shapes_data = {{}}
+
 frames = sorted([int(k) for k in shapes_data.keys() if str(k).isdigit()])
 if not frames:
     nuke.message('No shape data found.')
@@ -154,28 +171,59 @@ else:
                 
             nuke_shapes[sid] = shape
             
-    # Animate points and opacity
+    # Keyframe reduction helper function
+    def is_keyframe_needed(shapes_data, sid, f, frames, dev_thresh=0.5):
+        idx = frames.index(f)
+        if idx == 0 or idx == len(frames) - 1:
+            return True
+            
+        prev_f = str(frames[idx - 1])
+        next_f = str(frames[idx + 1])
+        curr_f = str(f)
+        
+        if sid not in shapes_data[prev_f] or sid not in shapes_data[next_f]:
+            return True
+            
+        pts_prev = shapes_data[prev_f][sid]
+        pts_curr = shapes_data[curr_f][sid]
+        pts_next = shapes_data[next_f][sid]
+        
+        pts_prev = pts_prev["points"] if isinstance(pts_prev, dict) else pts_prev
+        pts_curr = pts_curr["points"] if isinstance(pts_curr, dict) else pts_curr
+        pts_next = pts_next["points"] if isinstance(pts_next, dict) else pts_next
+        
+        if len(pts_prev) != len(pts_curr) or len(pts_next) != len(pts_curr):
+            return True
+            
+        for i in range(len(pts_curr)):
+            p0 = pts_prev[i]
+            p1 = pts_curr[i]
+            p2 = pts_next[i]
+            
+            exp_x = 0.5 * (p0[0] + p2[0])
+            exp_y = 0.5 * (p0[1] + p2[1])
+            
+            err = ((p1[0] - exp_x)**2 + (p1[1] - exp_y)**2)**0.5
+            if err > dev_thresh:
+                return True
+                
+        return False
+
+    # Animate points and opacity only on keyframes
     for f in frames:
         f_data = shapes_data[str(f)]
         for sid, val in f_data.items():
             if str(sid) not in nuke_shapes:
                 continue
                 
+            if not is_keyframe_needed(shapes_data, str(sid), f, frames, dev_thresh=0.4):
+                continue
+                
             shape = nuke_shapes[str(sid)]
             pts = val["points"] if isinstance(val, dict) else val
             opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
             
-            # Get adjacent frames for velocity
-            prev_f = str(f - 1) if str(f - 1) in shapes_data else str(f)
-            next_f = str(f + 1) if str(f + 1) in shapes_data else str(f)
-            
-            prev_val = shapes_data[prev_f].get(sid, val)
-            next_val = shapes_data[next_f].get(sid, val)
-            
-            prev_pts = prev_val["points"] if isinstance(prev_val, dict) else prev_val
-            next_pts = next_val["points"] if isinstance(next_val, dict) else next_val
-            
-            tangents = compute_tangents(pts, prev_pts, next_pts)
+            left_tangents, right_tangents = compute_tangents(pts)
             
             # Animate Opacity
             opc_curve = shape.getAttributes().getAnimCurve('opc')
@@ -194,37 +242,50 @@ else:
                 cv.center.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
                 
                 # Tangents
-                tx, ty = tangents[i]
+                ltx, lty = left_tangents[i]
+                rtx, rty = right_tangents[i]
                 
-                cv.leftTangent.getPositionAnimCurve(0).addKey(f, -tx)
-                cv.leftTangent.getPositionAnimCurve(1).addKey(f, -ty)
+                cv.leftTangent.getPositionAnimCurve(0).addKey(f, -ltx)
+                cv.leftTangent.getPositionAnimCurve(1).addKey(f, -lty)
                 cv.leftTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
                 cv.leftTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
                 
-                cv.rightTangent.getPositionAnimCurve(0).addKey(f, tx)
-                cv.rightTangent.getPositionAnimCurve(1).addKey(f, ty)
+                cv.rightTangent.getPositionAnimCurve(0).addKey(f, rtx)
+                cv.rightTangent.getPositionAnimCurve(1).addKey(f, rty)
                 cv.rightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
                 cv.rightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
 
     print("Roto shapes created successfully!")
 """
 
-    # Escape the Python script for embedding inside a Nuke TCL string knob
-    tcl_script = py_script.replace('\\\\', '\\\\\\\\')
-    tcl_script = tcl_script.replace('"', '\\\\"')
-    tcl_script = tcl_script.replace('{', '\\\\{')
-    tcl_script = tcl_script.replace('}', '\\\\}')
-    tcl_script = tcl_script.replace('\\n', '\\\\n')
+    out_py_path = os.path.splitext(out_nk_path)[0] + ".py"
+    py_filename = os.path.basename(out_py_path)
+    py_filename_clean = py_filename.replace('\\', '/')
     
-    nk_content = f"""NoOp {{
+    # Write the clean Python script to standalone .py file
+    with open(out_py_path, "w", encoding="utf-8") as f:
+        f.write(py_script)
+        
+    # Use absolute path to guarantee Nuke finds the py file regardless of where the project is saved
+    out_py_path_clean = out_py_path.replace('\\', '/')
+    
+    # Write lightweight TCL .nk file that executes the .py script upon load/drag-drop
+    # Note: we use a single line exec to avoid any \r\n parsing issues in Nuke's TCL interpreter
+    nk_content = f"""python {{exec(open('{out_py_path_clean}', 'r', encoding='utf-8').read())}}
+
+NoOp {{
  name UTVFX_Roto_Generator
  note_font_size 14
  note_font_color 0x8b5cf6ff
  addUserKnob {{20 User l "UTVFX AI Roto"}}
- addUserKnob {{26 info l "" +STARTLINE T "Click below to generate the Roto node\\nwith animated shape layers:"}}
- addUserKnob {{22 generate l "Generate Animated Roto" T "{tcl_script}" +STARTLINE}}
+ addUserKnob {{26 info l "" +STARTLINE T "Click below to regenerate the Roto node:"}}
+ addUserKnob {{22 generate l "Generate Animated Roto" +STARTLINE T "exec(open('{out_py_path_clean}', 'r', encoding='utf-8').read())"}}
 }}
 """
     
-    with open(out_nk_path, "w") as f:
+    with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
         f.write(nk_content)
+
+
+
+

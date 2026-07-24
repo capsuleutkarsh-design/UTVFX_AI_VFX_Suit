@@ -4,11 +4,7 @@ import numpy as np
 import time
 import shutil
 from PySide6.QtCore import QThread, Signal
-import torch
-import torchvision
 
-# For ViTMatte
-from transformers import VitMatteImageProcessor, VitMatteForImageMatting
 
 from utvfx.bridge.base_worker import BaseWorker
 
@@ -195,7 +191,11 @@ class SuperMatteWorker(BaseWorker):
         
         # Determine Refiner Mode
         refiner_mode = self.params.get("refiner_model", "ViTMatte (ONNX/TensorRT)")
-        device = "cuda" if torch.cuda.is_available() else "cpu"
+        try:
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        except ImportError:
+            device = "cpu"
         
         # Shared processor for ViTMatte variants
         self.log_message.emit(self.node_id, "Loading Refiner...")
@@ -221,8 +221,8 @@ class SuperMatteWorker(BaseWorker):
             elif refiner_mode == "MEMatte" or refiner_mode == "MEMatte (Local)":
                 import sys
                 
-                # Ensure the models directory is in sys.path so MEMatte can import detectron2_mock
-                models_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models"))
+                from utvfx.core.settings_manager import SettingsManager
+                models_dir = SettingsManager().models_dir
                 if models_dir not in sys.path:
                     sys.path.insert(0, models_dir)
                     
@@ -231,18 +231,22 @@ class SuperMatteWorker(BaseWorker):
                 model.eval()
                 use_mematte = True
             elif refiner_mode == "ViTMatte (ONNX/TensorRT)" or refiner_mode == "ViTMatte":
-                onnx_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "ONNX_Exports", "vitmatte_base.onnx")
+                from transformers import VitMatteImageProcessor
+                from utvfx.core.settings_manager import SettingsManager
+                models_dir = SettingsManager().models_dir
+                onnx_path = os.path.join(models_dir, "ONNX_Exports", "vitmatte_base.onnx")
                 if os.path.exists(onnx_path):
                     import onnxruntime as ort
                     providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
                     ort_session = ort.InferenceSession(onnx_path, providers=providers)
                     use_onnx = True
-                    model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "ViTMatte")
+                    model_dir = os.path.join(models_dir, "ViTMatte")
                     model_id = model_dir if os.path.exists(model_dir) else "hustvl/vitmatte-small-composition-1k"
                     processor = VitMatteImageProcessor.from_pretrained(model_id)
                 else:
+                    from transformers import VitMatteImageProcessor, VitMatteForImageMatting
                     self.log_message.emit(self.node_id, "ONNX model not found, falling back to HuggingFace...")
-                    model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "ViTMatte")
+                    model_dir = os.path.join(models_dir, "ViTMatte")
                     if os.path.exists(model_dir):
                         model_id = model_dir
                     else:
@@ -252,7 +256,9 @@ class SuperMatteWorker(BaseWorker):
                     model.eval()
             else:
                 # ViTMatte (HuggingFace)
-                model_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "models", "ViTMatte")
+                from transformers import VitMatteImageProcessor, VitMatteForImageMatting
+                from utvfx.core.settings_manager import SettingsManager
+                model_dir = os.path.join(SettingsManager().models_dir, "ViTMatte")
                 if os.path.exists(model_dir):
                     model_id = model_dir
                 else:
@@ -431,7 +437,7 @@ class SuperMatteWorker(BaseWorker):
                         continue
                         
                     prompts.append({
-                        "frame": f_idx,
+                        "frame": f_idx - start_frame,
                         "obj_id": i,
                         "points": pts_list if pts_list else None,
                         "labels": lbls_list if lbls_list else None,
@@ -442,7 +448,7 @@ class SuperMatteWorker(BaseWorker):
                 raise Exception("No points or boxes found. Please add points or use Auto-Scan first.")
                     
             self.log_message.emit(self.node_id, "Running SAMURAI Memory Video Tracking...")
-            if not client.track_video(frames_dir, start_frame, prompts, alpha_dir, sam_version):
+            if not client.track_video(frames_dir, 0, prompts, alpha_dir, sam_version):
                 raise Exception("SAMURAI Video Tracking failed. Check terminal for bridge errors.")
             
             if not getattr(self, "is_sequence", False):
@@ -487,8 +493,8 @@ class SuperMatteWorker(BaseWorker):
                 frame = cv2.imread(frame_path)
                 gray = None
             
-            # Skip until we hit the first keyframe
-            if frame_idx < start_frame:
+            # Skip until we hit the first keyframe (only for non-SAMURAI which only tracks forward)
+            if not is_samurai and frame_idx < start_frame:
                 prev_gray = gray
                 self.progress_update.emit(self.node_id, i + 1, total_frames)
                 continue
@@ -504,7 +510,7 @@ class SuperMatteWorker(BaseWorker):
                 kfs = layer.get("keyframes", {})
                 
                 if is_samurai:
-                    sam_mask_path = os.path.join(alpha_dir, f"sam_mask_{layer_index}_{frame_idx:06d}.png")
+                    sam_mask_path = os.path.join(alpha_dir, f"sam_mask_{layer_index}_{i:06d}.png")
                     if not os.path.exists(sam_mask_path):
                         self.log_message.emit(self.node_id, f"Warning: SAMURAI mask missing for layer {layer_index} frame {frame_idx}")
                         # Create empty mask if missing
@@ -632,7 +638,7 @@ class SuperMatteWorker(BaseWorker):
                     
             self.log_message.emit(self.node_id, "VideoMaMa Inference Complete. Saving outputs...")
             
-            valid_indices = [f for f in self.frame_indices if f >= start_frame]
+            valid_indices = self.frame_indices if is_samurai else [f for f in self.frame_indices if f >= start_frame]
             for idx, (frame_idx, alpha) in enumerate(zip(valid_indices, final_alphas)):
                 frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.png")
                 if not os.path.exists(frame_path):

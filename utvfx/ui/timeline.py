@@ -58,7 +58,7 @@ class ThumbnailGeneratorThread(QThread):
                 else:
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     
-                img = QImage(frame.data, new_w, self.target_height, new_w * 3, QImage.Format_RGB888).copy()
+                img = QImage(frame.data, new_w, self.target_height, new_w * 3, QImage.Format.Format_RGB888).copy()
                 self.thumbnail_ready.emit(i, img)
                 
             self.msleep(10)
@@ -79,7 +79,7 @@ class TimelineWidget(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(40)  # Standard timeline height
 
         self._current_frame = 0
@@ -90,7 +90,7 @@ class TimelineWidget(QWidget):
         self._out_frame = None
 
         self._is_scrubbing = False
-        self._last_seek_time = 0
+        self._last_seek_time = 0.0
         
         self._thumbnails = {}
         self._thumbnail_thread = None
@@ -119,13 +119,17 @@ class TimelineWidget(QWidget):
 
     def set_media_path(self, media_path, is_sequence):
         if self._thumbnail_thread:
-            self._thumbnail_thread.stop()
+            try:
+                self._thumbnail_thread.stop()
+            except RuntimeError:
+                pass # C++ object already deleted by deleteLater
             self._thumbnail_thread = None
         self._thumbnails.clear()
         
         if media_path and self._total_frames > 0:
             self._thumbnail_thread = ThumbnailGeneratorThread(media_path, is_sequence, self._total_frames, self)
             self._thumbnail_thread.thumbnail_ready.connect(self._on_thumbnail_ready)
+            self._thumbnail_thread.finished.connect(self._thumbnail_thread.deleteLater)
             self._thumbnail_thread.start()
 
     def _on_thumbnail_ready(self, frame_idx, img):
@@ -165,7 +169,7 @@ class TimelineWidget(QWidget):
         return max(0, min(frame, self._total_frames - 1))
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._is_scrubbing = True
             frame = self._frame_for_x(event.position().x())
             if frame != self._current_frame:
@@ -188,7 +192,7 @@ class TimelineWidget(QWidget):
                     self.frame_seeked.emit(frame)
 
     def mouseReleaseEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             self._is_scrubbing = False
             # Ensure we seek to the final frame on release
             frame = self._frame_for_x(event.position().x())
@@ -196,7 +200,7 @@ class TimelineWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
         corner_radius = rect.height() / 2.0
@@ -229,8 +233,8 @@ class TimelineWidget(QWidget):
             in_x = self._x_for_frame(self._in_frame) if self._in_frame is not None else self.margin_left
             out_x = self._x_for_frame(self._out_frame) if self._out_frame is not None else self.width() - self.margin_right
             
-            painter.setPen(Qt.NoPen)
-            painter.setBrush(QBrush(QColor(255, 255, 255, 15))) # Slight white highlight for the valid range
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(63, 63, 70, 150))) # Slight white highlight for the valid range
             
             clip_path = QPainterPath()
             clip_path.addRoundedRect(rect.adjusted(1, 1, -1, -1), corner_radius, corner_radius)
@@ -252,7 +256,7 @@ class TimelineWidget(QWidget):
 
         # Draw translucent orange highlight for elapsed time
         if playhead_x > self.margin_left:
-            painter.setPen(Qt.NoPen)
+            painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self.highlight_color))
             # Create a clipping path for the pill shape
             clip_path = QPainterPath()
@@ -304,8 +308,8 @@ class TimelineWidget(QWidget):
                 badge_x = x - badge_w / 2
                 badge_y = self.height() / 2 - badge_h / 2
                 
-                painter.setPen(Qt.NoPen)
-                painter.setBrush(QBrush(QColor("#020617"))) # Dark badge
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(QBrush(QColor("#3b82f6"))) # Dark badge
                 painter.drawRoundedRect(QRectF(badge_x, badge_y, badge_w, badge_h), badge_h/2, badge_h/2)
                 
                 painter.setPen(QPen(self.text_color, 1))
@@ -313,7 +317,7 @@ class TimelineWidget(QWidget):
 
         # Draw Keyframes
         painter.setBrush(QBrush(self.keyframe_color))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         for kf in self._keyframes:
             if 0 <= kf < self._total_frames:
                 x = self._x_for_frame(kf)
@@ -330,7 +334,7 @@ class TimelineWidget(QWidget):
         
         # Draw Playhead Circle
         painter.setBrush(QBrush(self.playhead_color))
-        painter.setPen(Qt.NoPen)
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPointF(playhead_x, self.height() / 2), 7, 7)
 
         painter.end()

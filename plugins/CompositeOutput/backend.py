@@ -17,11 +17,12 @@ class CompositeOutputWorker(BaseWorker):
         self.tracking_path = inputs.get("3D Sparse Points")
         self.shape_path = inputs.get("Shape Data")
         
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        default_out = os.path.join(base_dir, "outputs")
+        from utvfx.core.settings_manager import SettingsManager
+        base_dir = SettingsManager().project_root
+        default_out = os.path.join(base_dir, "workspace", "outputs")
         self.output_dir = params.get("output_dir", default_out)
         if not os.path.isabs(self.output_dir):
-            self.output_dir = os.path.join(base_dir, self.output_dir)
+            self.output_dir = os.path.join(base_dir, "workspace", self.output_dir)
 
     def cancel(self):
         self.is_cancelled = True

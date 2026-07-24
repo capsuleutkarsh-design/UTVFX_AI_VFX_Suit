@@ -1,7 +1,8 @@
 [Setup]
 AppName=UT_VFX_AI/VFX_Tool
 AppVersion=1.0.0
-DefaultDirName={autopf}\UT_VFX_Tool
+DefaultDirName={localappdata}\Programs\UT_VFX_Tool
+PrivilegesRequired=lowest
 DefaultGroupName=UT_VFX_Tool
 OutputDir=..\releases
 OutputBaseFilename=UT_VFX_Tool_Setup

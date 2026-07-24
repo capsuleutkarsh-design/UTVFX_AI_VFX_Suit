@@ -6,11 +6,17 @@ import traceback
 import cv2
 import numpy as np
 import torch
+import socket
 
 # Directory setup
 CURRENT_DIR = os.path.dirname(__file__)
 PLUGINS_DIR = os.path.dirname(CURRENT_DIR)
-ROOT_DIR = os.path.dirname(PLUGINS_DIR)
+ROOT_APP_DIR = os.path.dirname(PLUGINS_DIR)
+if ROOT_APP_DIR not in sys.path:
+    sys.path.insert(0, ROOT_APP_DIR)
+
+from utvfx.core.settings_manager import SettingsManager
+ROOT_DIR = os.path.dirname(SettingsManager().models_dir)
 SEGMENT_ANYTHING_DIR = os.path.join(PLUGINS_DIR, "third_party", "segment-anything")
 
 class ONNXImageEncoder(torch.nn.Module):
@@ -544,7 +550,8 @@ class SAM2Predictor:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", type=str, default="SAM 1 (ViT-H)")
+    parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--model", type=str, default="SAM 1")
     args = parser.parse_args()
     
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -557,15 +564,32 @@ def main():
         else:
             predictor = SAM1Predictor(device)
             
-        print("READY", flush=True)
-        print("INITIALIZED", flush=True)
     except Exception as e:
-        print(f"ERROR_INIT: {str(e)}", flush=True)
-        print(f"TRACEBACK: {traceback.format_exc()}", flush=True)
+        print(f"Failed to initialize SAM model: {e}\n{traceback.format_exc()}", file=sys.stderr)
         sys.exit(1)
 
+    import socket
+    if args.port > 0:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server_socket.bind(("127.0.0.1", args.port))
+        server_socket.listen(1)
+        # We don't print INITIALIZED to stdout anymore; the client knows we are ready when connect() succeeds.
+        conn, addr = server_socket.accept()
+        io_in = conn.makefile('r')
+        io_out = conn.makefile('w')
+    else:
+        # Fallback to stdin/stdout
+        print("READY", flush=True)
+        print("INITIALIZED", flush=True)
+        io_in = sys.stdin
+        io_out = sys.stdout
+
     while True:
-        line = sys.stdin.readline()
+        try:
+            line = io_in.readline()
+        except Exception:
+            break
+            
         if not line:
             break
             
@@ -580,6 +604,9 @@ def main():
                 del predictor
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
+                if args.port > 0:
+                    conn.close()
+                    server_socket.close()
                 sys.exit(0)
                 
             if req.get("action") == "track_video":
@@ -590,20 +617,20 @@ def main():
                 
                 try:
                     predictor.track_video(frames_dir, start_frame_idx, prompts, out_dir)
-                    print(json.dumps({"status": "ok"}), flush=True)
+                    print(json.dumps({"status": "ok"}), file=io_out, flush=True)
                 except Exception as e:
-                    print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), flush=True)
+                    print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), file=io_out, flush=True)
                 continue
                 
             image_path = req.get("image_path")
             
             if not image_path or not os.path.exists(image_path):
-                print(json.dumps({"error": "Invalid image path"}), flush=True)
+                print(json.dumps({"error": "Invalid image path"}), file=io_out, flush=True)
                 continue
                 
             image = cv2.imread(image_path)
             if image is None:
-                print(json.dumps({"error": f"Failed to read image at {image_path}"}), flush=True)
+                print(json.dumps({"error": f"Failed to read image at {image_path}"}), file=io_out, flush=True)
                 continue
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             predictor.set_image(image)
@@ -653,7 +680,7 @@ def main():
                         objects.append([float(cx), float(cy), float(score), [nx1, ny1, nx2, ny2]])
                 else:
                     objects = predictor.auto_scan()
-                print(json.dumps({"status": "ok", "objects": objects}), flush=True)
+                print(json.dumps({"status": "ok", "objects": objects}), file=io_out, flush=True)
                 continue
                 
             points = req.get("points", [])
@@ -708,10 +735,10 @@ def main():
             mask_uint8 = (mask * 255).astype(np.uint8)
             cv2.imwrite(mask_out_path, mask_uint8)
             
-            print(json.dumps({"status": "ok"}), flush=True)
+            print(json.dumps({"status": "ok"}), file=io_out, flush=True)
             
         except Exception as e:
-            print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), flush=True)
+            print(json.dumps({"error": str(e), "traceback": traceback.format_exc()}), file=io_out, flush=True)
 
 if __name__ == "__main__":
     main()

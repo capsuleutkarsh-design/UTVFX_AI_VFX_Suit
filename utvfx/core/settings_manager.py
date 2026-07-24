@@ -11,8 +11,23 @@ class SettingsManager:
         return cls._instance
 
     def _init(self):
-        # Determine project root
-        self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        import sys
+        
+        # Smart Pathing: Detect if running from compiled EXE or from Python source
+        if getattr(sys, 'frozen', False):
+            # Compiled EXE: Use AppData to avoid permission errors on Windows
+            appdata_base = os.environ.get('APPDATA', os.path.expanduser('~'))
+            self.project_root = os.path.join(appdata_base, "UTVFX_Suit")
+            os.makedirs(self.project_root, exist_ok=True)
+            self.models_dir = os.path.join(os.path.dirname(sys.executable), "models")
+        else:
+            # Source: Use the repository root
+            self.project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            os.makedirs(self.project_root, exist_ok=True)
+            self.models_dir = os.path.join(self.project_root, "models")
+            
+        os.makedirs(self.models_dir, exist_ok=True)
+        
         self.settings_file = os.path.join(self.project_root, "settings.json")
         self.current_project_name = "Untitled"
         self.settings = {}
@@ -33,8 +48,8 @@ class SettingsManager:
                     from utvfx.core.logger import shutdown_logger
                     shutdown_logger()
                     shutil.move(untitled_dir, project_dir)
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"Warning: Could not rename Untitled project folder to {project_name}: {e}")
                     
         self.settings["output_dir"] = os.path.join(project_dir, "outputs")
         self.settings["cache_dir"] = os.path.join(project_dir, "cache")

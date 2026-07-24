@@ -1,11 +1,12 @@
 import os
 import sys
+import zipfile
 import requests
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
-    QProgressBar, QScrollArea, QWidget, QFrame
+    QProgressBar, QScrollArea, QWidget, QFrame, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
 
@@ -14,13 +15,17 @@ try:
 except ImportError:
     snapshot_download = None
 
-# Define the base directory of the software
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from utvfx.core.settings_manager import SettingsManager
 
 try:
     from first_setup import MODELS as SETUP_MODELS
 except ImportError:
     SETUP_MODELS = []
+
+# Resolve paths using SettingsManager
+_sm = SettingsManager()
+MODELS_DIR = _sm.models_dir
+BASE_DIR = os.path.dirname(MODELS_DIR)
 
 MODELS = []
 for sm in SETUP_MODELS:
@@ -63,8 +68,6 @@ class DownloadWorker(QThread):
                     if snapshot_download is None:
                         raise ImportError("huggingface_hub is not installed.")
                     os.makedirs(model["path"], exist_ok=True)
-                    # For huggingface, we can't easily track progress with our custom UI bar without monkeypatching.
-                    # We'll just show an indeterminate progress bar.
                     self.progress.emit(0, 0) 
                     snapshot_download(
                         repo_id=model["repo_id"],
@@ -105,66 +108,66 @@ class DownloadWorker(QThread):
         self.is_cancelled = True
 
 
+class ExtractWorker(QThread):
+    progress = Signal(int, int) # extracted, total
+    status = Signal(str)
+    finished_all = Signal()
+    error = Signal(str)
+
+    def __init__(self, zip_path, extract_dir):
+        super().__init__()
+        self.zip_path = zip_path
+        self.extract_dir = extract_dir
+        self.is_cancelled = False
+
+    def run(self):
+        self.status.emit("Extracting models (this may take a while)...")
+        try:
+            with zipfile.ZipFile(self.zip_path, 'r') as zip_ref:
+                members = zip_ref.infolist()
+                total_files = len(members)
+                
+                for i, member in enumerate(members):
+                    if self.is_cancelled:
+                        break
+                        
+                    # Fix paths for users who zipped the contents of the models directory directly
+                    if not (member.filename.startswith("models/") or member.filename.startswith("plugins/")):
+                        member.filename = "models/" + member.filename
+                            
+                    zip_ref.extract(member, self.extract_dir)
+                    self.progress.emit(i + 1, total_files)
+                    
+            if not self.is_cancelled:
+                self.status.emit("Extraction completed successfully!")
+        except Exception as e:
+            self.error.emit(f"Extraction failed: {str(e)}")
+            
+        self.finished_all.emit()
+
+    def cancel(self):
+        self.is_cancelled = True
+
+
 class ModelDownloaderDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("AI Model Downloader")
-        self.setMinimumSize(600, 450)
+        self.setWindowTitle("Offline/Online Model Setup")
+        self.setMinimumSize(700, 500)
         self.setStyleSheet("""
-            QDialog {
-                background-color: #18181b;
-                color: #fafafa;
-                font-family: 'Inter', sans-serif;
-            }
-            QLabel {
-                color: #fafafa;
-                font-size: 13px;
-            }
-            QProgressBar {
-                border: 1px solid #3f3f46;
-                border-radius: 4px;
-                background-color: #27272a;
-                text-align: center;
-                color: white;
-                height: 18px;
-            }
-            QProgressBar::chunk {
-                background-color: #3b82f6; /* Blue progress */
-                border-radius: 3px;
-            }
-            QPushButton {
-                background-color: #27272a;
-                color: #fafafa;
-                border: 1px solid #3f3f46;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #3f3f46;
-            }
-            QPushButton:disabled {
-                background-color: #1f1f22;
-                color: #71717a;
-                border-color: #27272a;
-            }
-            QPushButton#primary {
-                background-color: #3b82f6;
-                border: None;
-            }
-            QPushButton#primary:hover {
-                background-color: #2563eb;
-            }
-            QScrollArea {
-                border: 1px solid #27272a;
-                background-color: #0f0f11;
-                border-radius: 6px;
-            }
-            QFrame#model_item {
-                background-color: #18181b;
-                border-bottom: 1px solid #27272a;
-                padding: 8px;
-            }
+            QDialog { background-color: #18181b; color: #fafafa; font-family: 'Inter', sans-serif; }
+            QLabel { color: #fafafa; font-size: 13px; }
+            QProgressBar { border: 1px solid #3f3f46; border-radius: 4px; background-color: #27272a; text-align: center; color: white; height: 18px; }
+            QProgressBar::chunk { background-color: #3b82f6; border-radius: 3px; }
+            QPushButton { background-color: #27272a; color: #fafafa; border: 1px solid #3f3f46; padding: 8px 16px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background-color: #3f3f46; }
+            QPushButton:disabled { background-color: #1f1f22; color: #71717a; border-color: #27272a; }
+            QPushButton#primary { background-color: #3b82f6; border: None; }
+            QPushButton#primary:hover { background-color: #2563eb; }
+            QPushButton#secondary { background-color: #10b981; border: None; }
+            QPushButton#secondary:hover { background-color: #059669; }
+            QScrollArea { border: 1px solid #27272a; background-color: #0f0f11; border-radius: 6px; }
+            QFrame#model_item { background-color: #18181b; border-bottom: 1px solid #27272a; padding: 8px; }
         """)
 
         self.worker = None
@@ -177,8 +180,7 @@ class ModelDownloaderDialog(QDialog):
         layout.setSpacing(16)
         layout.setContentsMargins(20, 20, 20, 20)
 
-        # Title
-        title = QLabel("AI Model Requirements")
+        title = QLabel("AI Models Setup")
         title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
         layout.addWidget(title)
         
@@ -186,18 +188,16 @@ class ModelDownloaderDialog(QDialog):
         self.summary_label.setStyleSheet("color: #a1a1aa;")
         layout.addWidget(self.summary_label)
 
-        # Scroll area for models
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         self.scroll_content = QWidget()
         self.scroll_layout = QVBoxLayout(self.scroll_content)
         self.scroll_layout.setSpacing(0)
         self.scroll_layout.setContentsMargins(0, 0, 0, 0)
-        self.scroll_layout.setAlignment(Qt.AlignTop)
+        self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(self.scroll_content)
         layout.addWidget(scroll)
 
-        # Progress Area
         self.progress_container = QWidget()
         prog_layout = QVBoxLayout(self.progress_container)
         prog_layout.setContentsMargins(0,0,0,0)
@@ -213,32 +213,37 @@ class ModelDownloaderDialog(QDialog):
         
         layout.addWidget(self.progress_container)
 
-        # Buttons
         btn_layout = QHBoxLayout()
-        btn_layout.addStretch()
         
         self.btn_close = QPushButton("Close")
         self.btn_close.clicked.connect(self.close_dialog)
         btn_layout.addWidget(self.btn_close)
         
-        self.btn_download = QPushButton("Download Missing Models")
+        btn_layout.addStretch()
+        
+        self.btn_download = QPushButton("Download from Internet")
         self.btn_download.setObjectName("primary")
         self.btn_download.clicked.connect(self.start_download)
         self.btn_download.setEnabled(False)
         btn_layout.addWidget(self.btn_download)
+
+        self.btn_extract = QPushButton("Install from Offline ZIP...")
+        self.btn_extract.setObjectName("secondary")
+        self.btn_extract.clicked.connect(self.start_extraction)
+        self.btn_extract.setEnabled(False)
+        btn_layout.addWidget(self.btn_extract)
         
         layout.addLayout(btn_layout)
 
     def check_models(self):
-        # Clear existing items
         for i in reversed(range(self.scroll_layout.count())): 
-            w = self.scroll_layout.itemAt(i).widget()
-            if w:
-                w.setParent(None)
+            item = self.scroll_layout.itemAt(i)
+            if item:
+                w = item.widget()
+                if w: w.setParent(None)
 
         self.models_to_download = []
         installed_count = 0
-
         for model in MODELS:
             expected_file = os.path.join(model["path"], model["check_file"])
             is_installed = os.path.exists(expected_file)
@@ -262,22 +267,28 @@ class ModelDownloaderDialog(QDialog):
             item_layout.addWidget(name_lbl)
             item_layout.addStretch()
             item_layout.addWidget(status_lbl)
-            
             self.scroll_layout.addWidget(item_widget)
 
         total = len(MODELS)
         if installed_count == total:
-            self.summary_label.setText(f"All {total} models are correctly installed!")
+            self.summary_label.setText(f"All {total} models are correctly installed at {MODELS_DIR}!")
             self.btn_download.hide()
+            self.btn_extract.hide()
         else:
-            self.summary_label.setText(f"{total - installed_count} model(s) are missing and need to be downloaded.")
+            self.summary_label.setText(f"{total - installed_count} model(s) are missing. Select a method to install them.")
             self.btn_download.setEnabled(True)
+            self.btn_extract.setEnabled(True)
 
     def start_download(self):
         if not self.models_to_download:
             return
+        
+        reply = QMessageBox.question(self, "Download Models", "This requires an active internet connection and may download several gigabytes. Continue?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.No:
+            return
 
         self.btn_download.setEnabled(False)
+        self.btn_extract.setEnabled(False)
         self.btn_close.setText("Cancel")
         self.progress_bar.show()
         
@@ -286,14 +297,36 @@ class ModelDownloaderDialog(QDialog):
         self.worker.status.connect(self.update_status)
         self.worker.error.connect(self.on_error)
         self.worker.finished_all.connect(self.on_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
 
-    def update_progress(self, downloaded, total):
+    def start_extraction(self):
+        zip_path, _ = QFileDialog.getOpenFileName(self, "Select Models ZIP", "", "ZIP Files (*.zip)")
+        if not zip_path:
+            return
+
+        self.btn_download.setEnabled(False)
+        self.btn_extract.setEnabled(False)
+        self.btn_close.setText("Cancel")
+        self.progress_bar.show()
+        self.progress_bar.setValue(0)
+        
+        extract_target = BASE_DIR
+        
+        self.worker = ExtractWorker(zip_path, extract_target)
+        self.worker.progress.connect(self.update_progress)
+        self.worker.status.connect(self.update_status)
+        self.worker.error.connect(self.on_error)
+        self.worker.finished_all.connect(self.on_finished)
+        self.worker.finished.connect(self.worker.deleteLater)
+        self.worker.start()
+
+    def update_progress(self, current, total):
         if total > 0:
             self.progress_bar.setMaximum(total)
-            self.progress_bar.setValue(downloaded)
+            self.progress_bar.setValue(current)
         else:
-            self.progress_bar.setMaximum(0) # Indeterminate mode for HF
+            self.progress_bar.setMaximum(0) # Indeterminate
             self.progress_bar.setValue(0)
 
     def update_status(self, text):
@@ -305,10 +338,9 @@ class ModelDownloaderDialog(QDialog):
 
     def on_finished(self):
         self.btn_close.setText("Close")
-        self.btn_download.hide()
         self.progress_bar.hide()
         self.status_label.setStyleSheet("color: #10b981; font-size: 12px; font-weight: bold;")
-        self.check_models() # Refresh list
+        self.check_models()
 
     def close_dialog(self):
         if self.worker and self.worker.isRunning():

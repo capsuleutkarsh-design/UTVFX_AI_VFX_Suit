@@ -12,7 +12,8 @@ class InterceptStream:
         self.buffer = ""
 
     def write(self, message):
-        self.original_stream.write(message)
+        if self.original_stream is not None:
+            self.original_stream.write(message)
         self.buffer += message
         if "\n" in self.buffer:
             lines = self.buffer.split("\n")
@@ -22,7 +23,8 @@ class InterceptStream:
             self.buffer = lines[-1]
 
     def flush(self):
-        self.original_stream.flush()
+        if self.original_stream is not None:
+            self.original_stream.flush()
         if self.buffer.strip():
             self.logger.log(self.level, self.buffer)
             self.buffer = ""
@@ -54,8 +56,10 @@ def setup_global_logger():
     root_logger.addHandler(file_handler)
     
     # Intercept stdout and stderr
-    sys.stdout = InterceptStream(sys.stdout, root_logger, logging.INFO)
-    sys.stderr = InterceptStream(sys.stderr, root_logger, logging.ERROR)
+    if not isinstance(sys.stdout, InterceptStream):
+        sys.stdout = InterceptStream(sys.stdout, root_logger, logging.INFO)
+    if not isinstance(sys.stderr, InterceptStream):
+        sys.stderr = InterceptStream(sys.stderr, root_logger, logging.ERROR)
     
     logging.info(f"Global Logger Initialized. Project: {getattr(SettingsManager(), 'current_project_name', 'Untitled')}")
     

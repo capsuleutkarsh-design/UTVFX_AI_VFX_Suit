@@ -54,4 +54,4 @@ Used for temporal masking refinement in Super Matte.
   - Place these files directly in: `models/VideoMaMa/`
 
 ---
-*Note: If you run the pre-built Windows Installer setup, you can simply put all these models into a single `.zip` file and select it during installation to automatically extract them to the right places.*
+*Note: To install these offline, you can simply put all these models into a single `.zip` file. After installing the application, open it and use the in-app **Model Setup/Downloader** tool to select this ZIP file. It will automatically extract them to the right places.*

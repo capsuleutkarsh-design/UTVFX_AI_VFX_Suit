@@ -1,6 +1,14 @@
 import sys
 import os
 
+# Detect if PyInstaller bootloader is being used to run a script (e.g., ai_bridge_server)
+if getattr(sys, 'frozen', False) and len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
+    import runpy
+    script_path = sys.argv[1]
+    sys.argv.pop(0)  # Remove the executable name so the script sees itself as argv[0]
+    runpy.run_path(script_path, run_name="__main__")
+    sys.exit(0)
+
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import json
 
@@ -70,10 +78,12 @@ class VFXCoreWindow(QMainWindow):
     def check_models(self):
         try:
             from first_setup import MODELS
+            from utvfx.core.settings_manager import SettingsManager
+            base_dir = os.path.dirname(SettingsManager().models_dir)
             missing = []
             for item in MODELS:
                 if item["type"] == "file":
-                    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["path"])
+                    path = os.path.join(base_dir, item["path"])
                     if not os.path.exists(path):
                         missing.append(item["name"])
                 elif item["type"] == "zip_extract":
@@ -94,13 +104,13 @@ class VFXCoreWindow(QMainWindow):
                         if not found:
                             missing.append(item["name"])
                 elif item["type"] == "hf_repo":
-                    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), item["local_dir"])
+                    path = os.path.join(base_dir, item["local_dir"])
                     if not os.path.exists(path):
                         missing.append(item["name"])
                         
             if missing:
                 QMessageBox.warning(self, "Missing AI Models", 
-                    f"The following required AI models/binaries are missing:\n\n{chr(10).join(missing)}\n\nPlease run 'python first_setup.py' or open Settings to download them to avoid crashes.")
+                    f"The following required AI models/binaries are missing:\n\n{chr(10).join(missing)}\n\nPlease go to Settings -> Offline Model Importer and select your models ZIP file to avoid crashes.")
         except Exception as e:
             print(f"Failed to validate models on startup: {e}")
 
@@ -481,12 +491,13 @@ class VFXCoreWindow(QMainWindow):
         # Clean up temporary interactive files
         try:
             import glob
-            temp_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspace", "temp")
-            for f in glob.glob(os.path.join(temp_dir, "utvfx_*")):
-                try:
-                    os.remove(f)
-                except Exception:
-                    pass
+            temp_dir = SettingsManager().get("temp_dir")
+            if temp_dir and os.path.exists(temp_dir):
+                for f in glob.glob(os.path.join(temp_dir, "utvfx_*")):
+                    try:
+                        os.remove(f)
+                    except Exception:
+                        pass
         except Exception:
             pass
                     
@@ -543,7 +554,7 @@ if __name__ == "__main__":
         splash_pixmap = QPixmap(splash_image_path)
         splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
         splash.show()
-        splash.showMessage("Initializing Core VFX Engine...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
+        splash.showMessage("Initializing Core VFX Engine...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.white)
         app.processEvents()
     else:
         splash = None

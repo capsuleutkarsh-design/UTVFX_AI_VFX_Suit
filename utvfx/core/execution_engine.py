@@ -139,7 +139,7 @@ class ExecutionEngine(QObject):
         return sorted_nodes
 
     def _get_node_by_id(self, node_id):
-        if not hasattr(self, "_node_index") or len(getattr(self, "_node_index", {})) != len(self.scene.nodes):
+        if not hasattr(self, "_node_index") or len(getattr(self, "_node_index", {})) != len(self.scene.nodes) or node_id not in getattr(self, "_node_index", {}):
             self._node_index = {n.node_id: n for n in self.scene.nodes}
         return self._node_index.get(node_id)
 
@@ -194,6 +194,14 @@ class ExecutionEngine(QObject):
         with getattr(self, "_interaction_workers_lock", threading.Lock()):
             if hasattr(self, "_interaction_workers") and w in self._interaction_workers:
                 self._interaction_workers.remove(w)
+                
+        # Explicitly delete C++ QThread object to prevent memory leaks
+        try:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(1000, w.deleteLater)
+        except Exception:
+            pass
+            
         self._clear_vram()
 
     @Slot(str, str, int, object)
@@ -218,7 +226,7 @@ class ExecutionEngine(QObject):
         params = getattr(node, "params", {})
         hash_params = {k: v for k, v in params.items() if k not in ["active_layer_id", "ui_scroll_position"]}
         try:
-            params_str = json.dumps(hash_params, sort_keys=True)
+            params_str = json.dumps(hash_params, sort_keys=True, default=str)
         except Exception:
             params_str = str(hash_params)
         hasher.update(params_str.encode('utf-8'))
@@ -652,7 +660,7 @@ class ExecutionEngine(QObject):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(2000, worker.deleteLater)
             
-        self._clear_vram()
+        # self._clear_vram() # Removed to prevent aggressive GPU cache trashing
             
         # Free persistent bridge memory between node renders to prevent 8GB OOM
         if self.is_executing_pipeline:

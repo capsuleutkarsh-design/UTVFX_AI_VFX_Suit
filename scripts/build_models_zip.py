@@ -2,13 +2,14 @@ import os
 import zipfile
 
 def create_models_zip():
+    os.makedirs("releases", exist_ok=True)
     zip_filename = "releases/UTVFX_Models.zip"
     
     # Define which extensions to look for
     model_exts = ('.pth', '.pt', '.safetensors', '.onnx', '.bin')
     
     # Define directories to search
-    search_dirs = ['models']
+    search_dirs = ['models', 'plugins']
     
     # Find all local model files
     local_models = {}

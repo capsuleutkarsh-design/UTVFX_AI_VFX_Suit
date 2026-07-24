@@ -54,8 +54,9 @@ def build_param_widget(panel, param, color):
         h_layout = QHBoxLayout()
         h_layout.setContentsMargins(0,0,0,0)
         
-        slider = QSlider(Qt.Horizontal)
-        is_float = isinstance(param["step"], float)
+        slider = QSlider(Qt.Orientation.Horizontal)
+        step_val = param.get("step", param.get("value", 1))
+        is_float = isinstance(step_val, float)
         mult = 100 if is_float else 1
         
         slider.setRange(int(param["min"] * mult), int(param["max"] * mult))
@@ -69,7 +70,7 @@ def build_param_widget(panel, param, color):
         
         val_lbl = QLabel(str(val))
         val_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono'; font-weight: bold; font-size: 12px; min-width: 50px; background: transparent; border: none;")
-        val_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         
         def on_change(v, l=val_lbl, m=mult, p=pid):
             actual_v = v / m

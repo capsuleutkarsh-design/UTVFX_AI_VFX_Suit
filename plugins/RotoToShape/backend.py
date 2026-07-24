@@ -31,6 +31,10 @@ def bbox_iou(boxA, boxB):
 
     return interArea / unionArea
 
+def bbox_center_dist(boxA, boxB):
+    cA = (boxA[0] + boxA[2]/2.0, boxA[1] + boxA[3]/2.0)
+    cB = (boxB[0] + boxB[2]/2.0, boxB[1] + boxB[3]/2.0)
+    return ((cA[0]-cB[0])**2 + (cA[1]-cB[1])**2)**0.5
 
 
 class RotoToShapeWorker(BaseWorker):
@@ -48,7 +52,7 @@ class RotoToShapeWorker(BaseWorker):
             return val.lower() in ('true', '1', 'yes')
         return bool(val)
 
-    def _resample_polygon(self, polygon, num_points, curvature_weight=5.0):
+    def _resample_polygon(self, polygon, num_points, curvature_weight=5.0, frame_size=None):
         # polygon: shape (N, 1, 2)
         pts = polygon.reshape(-1, 2).astype(np.float32)
         if len(pts) < 2:
@@ -83,6 +87,20 @@ class RotoToShapeWorker(BaseWorker):
         
         # Density is based on arc length weighted by curvature
         density = dists * (1.0 + curvature_weight * angle)
+        
+        if frame_size is not None:
+            w, h = frame_size
+            margin = 3
+            pts_wrap_temp = np.vstack([pts, pts[0:1]])
+            for i in range(len(pts)):
+                p1 = pts_wrap_temp[i]
+                p2 = pts_wrap_temp[i+1]
+                on_left = (p1[0] <= margin and p2[0] <= margin)
+                on_right = (p1[0] >= w - margin and p2[0] >= w - margin)
+                on_top = (p1[1] <= margin and p2[1] <= margin)
+                on_bottom = (p1[1] >= h - margin and p2[1] >= h - margin)
+                if on_left or on_right or on_top or on_bottom:
+                    density[i] *= 0.05
         
         cum_density = np.concatenate([[0], np.cumsum(density)])
         total_density = cum_density[-1]
@@ -128,10 +146,16 @@ class RotoToShapeWorker(BaseWorker):
             px, py = pts[i]
             nx, ny = normal[i]
             
-            best_val = -1
+            cx, cy = int(round(px)), int(round(py))
+            if 0 <= cx < w and 0 <= cy < h:
+                best_val = grad_mag[cy, cx]
+            else:
+                best_val = -1
             best_pt = (px, py)
             
             for step in range(-search_radius, search_radius + 1):
+                if step == 0:
+                    continue
                 sx = px + nx * step
                 sy = py + ny * step
                 
@@ -238,7 +262,14 @@ class RotoToShapeWorker(BaseWorker):
                 grad_y = cv2.Sobel(img, cv2.CV_32F, 0, 1, ksize=3)
                 grad_mag = np.sqrt(grad_x**2 + grad_y**2)
                 
-                _, thresh = cv2.threshold(img, 127, 255, cv2.THRESH_BINARY)
+                edge_threshold = int(self.params.get("edge_threshold", 127))
+                _, thresh = cv2.threshold(img, edge_threshold, 255, cv2.THRESH_BINARY)
+                
+                # Use morphological operations to clean up noisy edge thresholding if needed
+                kernel = np.ones((3,3), np.uint8)
+                thresh = cv2.morphologyEx(thresh, cv2.MORPH_OPEN, kernel)
+                thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
                 contours, hierarchy = cv2.findContours(thresh, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
                 
                 valid_contours = []
@@ -267,62 +298,44 @@ class RotoToShapeWorker(BaseWorker):
                     prev_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
                     
                     best_cnt_idx = -1
-                    max_iou = -1.0
+                    best_score = -1.0
                     for c_idx, cnt in enumerate(valid_contours):
                         if c_idx in used_contours: continue
                         iou = bbox_iou(prev_bbox, valid_bboxes[c_idx])
-                        if iou > max_iou:
-                            max_iou = iou
+                        dist = bbox_center_dist(prev_bbox, valid_bboxes[c_idx])
+                        
+                        max_dim = max(prev_bbox[2], prev_bbox[3], valid_bboxes[c_idx][2], valid_bboxes[c_idx][3])
+                        dist_score = max(0, 1.0 - dist / (max_dim + 1e-5))
+                        score = max(iou, dist_score)
+                        
+                        if score > best_score:
+                            best_score = score
                             best_cnt_idx = c_idx
                             
-                    if best_cnt_idx != -1 and max_iou >= iou_threshold:
+                    if best_cnt_idx != -1 and best_score >= iou_threshold:
                         cnt = valid_contours[best_cnt_idx]
                         used_contours.add(best_cnt_idx)
                         
-                        # Apply Optical Flow Tracking (PyrLK) to prevent sliding
-                        tracked_pts_np = prev_pts_np
-                        if prev_gray is not None:
-                            try:
-                                tracked_pts, st, err = cv2.calcOpticalFlowPyrLK(
-                                    prev_gray, curr_gray, prev_pts_np, None, 
-                                    winSize=(21, 21), maxLevel=3, 
-                                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
-                                )
-                                # Keep valid points
-                                tracked_pts_np = np.where(st == 1, tracked_pts, prev_pts_np)
-                            except Exception as e:
-                                pass # fallback to previous points if flow fails
+                        num_points = len(prev_pts)
+                        frame_size = (all_shapes["format_width"], all_shapes["format_height"])
+                        resampled = self._resample_polygon(cnt, num_points, curvature_weight, frame_size)
                         
-                        if epsilon > 0:
-                            cnt = cv2.approxPolyDP(cnt, epsilon, True)
-                            
-                        # Snap tracked points to the true edge via _snap_to_gradient
-                        snapped_pts = self._snap_to_gradient(tracked_pts_np, grad_mag, edge_snap_radius)
+                        # Find best cyclic shift to align starting point of resampled contour with prev_pts
+                        best_shift = 0
+                        min_dist_sum = float('inf')
+                        for shift in range(num_points):
+                            rolled = np.roll(resampled, shift, axis=0)
+                            dist_sum = np.sum(np.linalg.norm(rolled - prev_pts_np, axis=1))
+                            if dist_sum < min_dist_sum:
+                                min_dist_sum = dist_sum
+                                best_shift = shift
+                                
+                        aligned_resampled = np.roll(resampled, best_shift, axis=0)
                         
-                        cnt_pts = cnt.reshape(-1, 2).astype(np.float32)
-                        projected_pts = np.zeros_like(snapped_pts)
-                        for pt_idx in range(len(snapped_pts)):
-                            pt = snapped_pts[pt_idx]
-                            best_dist = float('inf')
-                            best_proj = pt
-                            for i in range(len(cnt_pts)):
-                                p1 = cnt_pts[i]
-                                p2 = cnt_pts[(i+1)%len(cnt_pts)]
-                                v = p2 - p1
-                                w = pt - p1
-                                v_sq = np.dot(v, v)
-                                if v_sq == 0:
-                                    proj = p1
-                                else:
-                                    t = np.clip(np.dot(w, v) / v_sq, 0.0, 1.0)
-                                    proj = p1 + t * v
-                                dist = np.linalg.norm(pt - proj)
-                                if dist < best_dist:
-                                    best_dist = dist
-                                    best_proj = proj
-                            projected_pts[pt_idx] = best_proj
+                        # Snap aligned points to edge gradient
+                        snapped_pts = self._snap_to_gradient(aligned_resampled, grad_mag, edge_snap_radius)
                         
-                        current_frame_shapes[shape_id] = projected_pts.tolist()
+                        current_frame_shapes[shape_id] = snapped_pts.tolist()
                         lost_shapes_count[shape_id] = 0
                     else:
                         lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
@@ -335,7 +348,10 @@ class RotoToShapeWorker(BaseWorker):
                             cnt = cv2.approxPolyDP(cnt, epsilon, True)
                         perimeter = cv2.arcLength(cnt, True)
                         num_points = max(8, int(perimeter / auto_point_spacing)) if point_mode == "Auto (Adaptive)" else target_points
-                        resampled = self._resample_polygon(cnt, num_points, curvature_weight)
+                        if point_mode == "Auto (Adaptive)":
+                            num_points = min(num_points, 80)
+                        frame_size = (all_shapes["format_width"], all_shapes["format_height"])
+                        resampled = self._resample_polygon(cnt, num_points, curvature_weight, frame_size)
                         resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius)
                         
                         prefix = "Hole" if valid_is_hole[c_idx] else "Shape"
@@ -376,7 +392,11 @@ class RotoToShapeWorker(BaseWorker):
                             pts_prev = np.array(all_shapes[prev_f][sid])
                             pts_next = np.array(all_shapes[next_f][sid])
                             if len(pts_prev) == num_pts and len(pts_next) == num_pts:
-                                smoothed_pts = (pts_prev + pts_np + pts_next) / 3.0
+                                # Only smooth if the points haven't moved too wildly (e.g. tracking jumped)
+                                dist_prev = np.mean(np.linalg.norm(pts_prev - pts_np, axis=1))
+                                dist_next = np.mean(np.linalg.norm(pts_next - pts_np, axis=1))
+                                if dist_prev < 20 and dist_next < 20:
+                                    smoothed_pts = (pts_prev + pts_np + pts_next) / 3.0
                     
                     smoothed_shapes[f_str][sid] = smoothed_pts.tolist()
             

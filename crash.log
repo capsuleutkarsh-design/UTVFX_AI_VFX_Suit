@@ -1,2 +1,0 @@
-[PluginManager] Error loading manifest from DepthEstimator: Expecting ',' delimiter: line 16 column 5 (char 1129)
-Shutting down... cleaning up workers and subprocesses.

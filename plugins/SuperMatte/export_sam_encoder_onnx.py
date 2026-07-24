@@ -5,7 +5,8 @@ import sys
 # Directory setup
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PLUGINS_DIR = os.path.dirname(CURRENT_DIR)
-ROOT_DIR = os.path.dirname(PLUGINS_DIR)
+from utvfx.core.settings_manager import SettingsManager
+ROOT_DIR = os.path.dirname(SettingsManager().models_dir)
 SEGMENT_ANYTHING_DIR = os.path.join(PLUGINS_DIR, "third_party", "segment-anything")
 sys.path.insert(0, SEGMENT_ANYTHING_DIR)
 

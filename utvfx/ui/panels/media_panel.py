@@ -8,7 +8,7 @@ class NodeButton(QFrame):
     clicked = Signal()
     def __init__(self, name, color, parent=None):
         super().__init__(parent)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setStyleSheet("""
             QFrame {
                 background-color: #121212;
@@ -25,15 +25,15 @@ class NodeButton(QFrame):
         
         dot = QLabel("●")
         dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none; background: transparent;")
-        dot.setAttribute(Qt.WA_TransparentForMouseEvents)
+        dot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         
         lbl = QLabel(name)
         lbl.setStyleSheet("font-family: 'Inter'; font-weight: bold; font-size: 11px; color: #fafafa; border: none; background: transparent;")
-        lbl.setAttribute(Qt.WA_TransparentForMouseEvents)
+        lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         
         plus = QLabel("+")
         plus.setStyleSheet("color: #71717a; font-weight: bold; font-size: 14px; border: none; background: transparent;")
-        plus.setAttribute(Qt.WA_TransparentForMouseEvents)
+        plus.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         
         layout.addWidget(dot)
         layout.addWidget(lbl)
@@ -67,7 +67,7 @@ class MediaPanel(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(8, 12, 8, 12)
         layout.setSpacing(8)
-        layout.setAlignment(Qt.AlignTop)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         # ─── Media Footage Section ───
         media_lbl = QLabel("🎥 MEDIA FOOTAGE")
@@ -76,7 +76,7 @@ class MediaPanel(QWidget):
         
         # Load Media Button
         btn_load = QPushButton("📁 Load Media...")
-        btn_load.setCursor(Qt.PointingHandCursor)
+        btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_load.setStyleSheet("""
             QPushButton {
                 background-color: #1e1e24;
@@ -98,7 +98,7 @@ class MediaPanel(QWidget):
         
         # Divider
         div = QFrame()
-        div.setFrameShape(QFrame.HLine)
+        div.setFrameShape(QFrame.Shape.HLine)
         div.setStyleSheet("background-color: #27272a; max-height: 1px;")
         layout.addWidget(div)
         
@@ -120,7 +120,7 @@ class MediaPanel(QWidget):
         for cat, nodes in categories.items():
             # Category Header
             cat_btn = QPushButton(f"{cat}")
-            cat_btn.setCursor(Qt.PointingHandCursor)
+            cat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
             cat_btn.setStyleSheet("""
                 QPushButton {
                     background-color: transparent;

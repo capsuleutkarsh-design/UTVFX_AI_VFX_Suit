@@ -15,8 +15,8 @@ except ImportError:
     print("huggingface_hub is required. Please install it with 'pip install huggingface_hub'")
     sys.exit(1)
 
-# Define the base directory of the software
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from utvfx.core.settings_manager import SettingsManager
+BASE_DIR = SettingsManager().project_root
 
 # Define the models and their expected locations
 MODELS = [

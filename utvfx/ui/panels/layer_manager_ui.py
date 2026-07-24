@@ -211,6 +211,7 @@ class LayerManagerWidget(QWidget):
             sam_version = "SAM 3 (ViT-B)"
         self.scan_thread = ScanWorker(client, f_path, frame_idx, text_prompt, sam_version)
         self.scan_thread.finished.connect(self.on_scan_finished)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
         # Keep a strong reference on the persistent node object so the thread 
         # doesn't get destroyed if the user clicks away and this widget dies.
         self.node._active_scan_thread = self.scan_thread

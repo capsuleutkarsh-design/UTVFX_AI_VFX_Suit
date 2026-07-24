@@ -26,16 +26,37 @@ class AIBridgeClient:
     def __init__(self):
         self.process = None
         self.lock = threading.Lock()
-        self.bridge_script = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "plugins", "SuperMatte", "sam_bridge.py"
-        )
+        
         exe_name = "python.exe" if os.name == "nt" else "python"
-        portable_py = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "python_base", exe_name)
-        if os.path.exists(portable_py):
-            self.python_exe = portable_py
+        
+        # Locate portable python_base executable
+        candidate_pythons = []
+        if getattr(sys, 'frozen', False):
+            if hasattr(sys, '_MEIPASS'):
+                candidate_pythons.append(os.path.join(sys._MEIPASS, "python_base", exe_name))
+            exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+            candidate_pythons.append(os.path.join(exe_dir, "_internal", "python_base", exe_name))
+            candidate_pythons.append(os.path.join(exe_dir, "python_base", exe_name))
+            
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        candidate_pythons.append(os.path.join(base_dir, "python_base", exe_name))
+        
+        portable_py = None
+        for py_path in candidate_pythons:
+            if os.path.exists(py_path):
+                portable_py = py_path
+                break
+                
+        if portable_py:
+            self.python_cmd = [portable_py]
         else:
-            self.python_exe = sys.executable
+            self.python_cmd = [sys.executable]
+            
+        # Locate bridge script
+        self.bridge_script = os.path.join(base_dir, "plugins", "SuperMatte", "sam_bridge.py")
+        if not os.path.exists(self.bridge_script) and getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+            self.bridge_script = os.path.join(sys._MEIPASS, "plugins", "SuperMatte", "sam_bridge.py")
+                
         self.is_ready = False
         
     def _start_server_if_needed(self, sam_version="SAM 1 (ViT-H)"):
@@ -50,65 +71,70 @@ class AIBridgeClient:
         print(f"Starting AI Bridge Server (loading {sam_version} to VRAM)...")
         env = os.environ.copy()
         env["HYDRA_FULL_ERROR"] = "1"
+        creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        
+        import socket
+        import time
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('127.0.0.1', 0))
+        self.port = s.getsockname()[1]
+        s.close()
+        
+        cmd = self.python_cmd + [self.bridge_script, "--model", sam_version, "--port", str(self.port)]
+        
         self.process = subprocess.Popen(
-            [self.python_exe, self.bridge_script, "--model", sam_version],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1, # Line buffered
-            env=env
+            env=env,
+            creationflags=creationflags
         )
         
-        # Wait for "READY" and "INITIALIZED"
-        init_event = threading.Event()
-        error_msg = [""]
-        
-        def read_init():
-            while True:
-                line = self.process.stdout.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if not line:
-                    continue
-                print(f"[AI Bridge] {line}")
-                if line == "INITIALIZED":
-                    self.is_ready = True
-                    init_event.set()
-                    break
-                elif line.startswith("ERROR"):
-                    error_msg[0] = line
-                    init_event.set()
-                    break
-
-        init_thread = threading.Thread(target=read_init, daemon=True)
-        init_thread.start()
-        
-        def read_stderr():
-            while True:
-                try:
-                    line = self.process.stderr.readline()
+        def consume_stdout(pipe):
+            try:
+                for line in iter(pipe.readline, ''):
                     if not line: break
-                    line = line.strip()
-                    if line: print(f"[AI Bridge STDERR] {line}")
-                except:
-                    break
-                    
-        stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-        stderr_thread.start()
+                    print(f"[AI Bridge STDOUT] {line.strip()}", flush=True)
+            except (ValueError, OSError): pass
+            
+        def consume_stderr(pipe):
+            try:
+                for line in iter(pipe.readline, ''):
+                    if not line: break
+                    print(f"[AI Bridge STDERR] {line.strip()}", flush=True)
+            except (ValueError, OSError): pass
+            
+        threading.Thread(target=consume_stdout, args=(self.process.stdout,), daemon=True).start()
+        threading.Thread(target=consume_stderr, args=(self.process.stderr,), daemon=True).start()
         
-        # Wait with timeout
-        if init_event.wait(timeout=120.0):
-            if self.is_ready:
-                return True
-            else:
-                print(f"Failed to initialize AI Bridge: {error_msg[0]}")
-                return False
-        else:
-            print("[AI Bridge] Timeout waiting for initialization. Subprocess may have hung.")
+        connected = False
+        self.sock = None
+        for _ in range(300):
+            try:
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.connect(('127.0.0.1', self.port))
+                self.sock_in = self.sock.makefile('r')
+                self.sock_out = self.sock.makefile('w')
+                connected = True
+                break
+            except ConnectionRefusedError:
+                if self.process.poll() is not None:
+                    err = self.process.stderr.read()
+                    print(f"[AI Bridge] Process crashed during startup: {err}")
+                    break
+                time.sleep(0.1)
+                
+        if not connected:
+            print("[AI Bridge] Failed to connect to backend server")
             self.shutdown()
             return False
+            
+        self.is_ready = True
+        return True
+
         
     def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None, sam_version="SAM 1 (ViT-H)", boxes=None, text_prompt=""):
         """
@@ -134,12 +160,11 @@ class AIBridgeClient:
                 payload["text_prompt"] = text_prompt
             
             try:
-                self.process.stdin.write(json.dumps(payload) + "\n")
-                self.process.stdin.flush()
+                print(json.dumps(payload), file=self.sock_out, flush=True)
                 
                 # Wait for response
                 while True:
-                    resp_line = self.process.stdout.readline()
+                    resp_line = self.sock_in.readline()
                     if not resp_line:
                         return None
                         
@@ -179,12 +204,12 @@ class AIBridgeClient:
             }
             
             try:
-                self.process.stdin.write(json.dumps(payload) + "\n")
-                self.process.stdin.flush()
+                self.sock_out.write(json.dumps(payload) + "\n")
+                self.sock_out.flush()
                 
                 # Wait for response
                 while True:
-                    resp_line = self.process.stdout.readline()
+                    resp_line = self.sock_in.readline()
                     if not resp_line:
                         return False
                         
@@ -230,11 +255,11 @@ class AIBridgeClient:
             }
             
             try:
-                self.process.stdin.write(json.dumps(payload) + "\n")
-                self.process.stdin.flush()
+                self.sock_out.write(json.dumps(payload) + "\n")
+                self.sock_out.flush()
                 
                 while True:
-                    resp_line = self.process.stdout.readline()
+                    resp_line = self.sock_in.readline()
                     if not resp_line:
                         return None
                         
@@ -292,10 +317,20 @@ class AIBridgeClient:
 
     def shutdown(self):
         self.is_ready = False
+        if getattr(self, 'sock_out', None) is not None:
+            try:
+                self.sock_out.write(json.dumps({"action": "shutdown"}) + "\n")
+                self.sock_out.flush()
+                self.sock.close()
+            except Exception:
+                pass
+            finally:
+                self.sock_out = None
+                self.sock_in = None
+                self.sock = None
+                
         if self.process:
             try:
-                self.process.stdin.write(json.dumps({"action": "shutdown"}) + "\n")
-                self.process.stdin.flush()
                 self.process.wait(timeout=3.0)
             except Exception:
                 pass

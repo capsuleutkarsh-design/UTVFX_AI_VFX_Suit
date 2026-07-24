@@ -39,14 +39,14 @@ class PropertiesPanel(QWidget):
         
         self.lbl_title = QLabel("NO NODE SELECTED")
         self.lbl_title.setStyleSheet("font-family: 'Space Grotesk'; font-size: 13px; font-weight: bold; color: #71717a; letter-spacing: 2px;")
-        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         h_layout.addWidget(self.lbl_title, 1)
         
         # Stretch handled by lbl_title
         main_layout.addWidget(header)
         
         from PySide6.QtWidgets import QSplitter
-        self.splitter = QSplitter(Qt.Vertical)
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
         
         # Scroll Area for properties (Top Half)
         self.scroll = QScrollArea()
@@ -58,7 +58,7 @@ class PropertiesPanel(QWidget):
         self.content_layout = QVBoxLayout(self.content_widget)
         self.content_layout.setContentsMargins(12, 12, 12, 12)
         self.content_layout.setSpacing(4)
-        self.content_layout.setAlignment(Qt.AlignTop)
+        self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         
         self.scroll.setWidget(self.content_widget)
         self.splitter.addWidget(self.scroll)
@@ -107,7 +107,7 @@ class PropertiesPanel(QWidget):
         console_header.addStretch()
         
         btn_copy = QPushButton("Copy Logs")
-        btn_copy.setCursor(Qt.PointingHandCursor)
+        btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_copy.setStyleSheet("""
             QPushButton {
                 background-color: transparent;
@@ -215,7 +215,7 @@ class PropertiesPanel(QWidget):
                 l = QVBoxLayout(w)
                 l.setContentsMargins(0,16,0,16)
                 l.setSpacing(12)
-                l.setAlignment(Qt.AlignTop)
+                l.setAlignment(Qt.AlignmentFlag.AlignTop)
                 for p in t_params:
                     l.addWidget(self._build_param_widget(p, color))
                 self.tabs.addTab(w, t_name)
@@ -242,7 +242,7 @@ class PropertiesPanel(QWidget):
         
         # Divider
         div = QFrame()
-        div.setFrameShape(QFrame.HLine)
+        div.setFrameShape(QFrame.Shape.HLine)
         div.setStyleSheet("background-color: #27272a; border: none; max-height: 1px;")
         self.content_layout.addWidget(div)
         
@@ -253,7 +253,7 @@ class PropertiesPanel(QWidget):
         exec_layout.setContentsMargins(0, 0, 0, 0)
         
         self.btn_run = QPushButton(f"Execute {self.node_def['name']}")
-        self.btn_run.setCursor(Qt.PointingHandCursor)
+        self.btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_run.setStyleSheet(f"""
             QPushButton {{
                 background-color: {color};
@@ -277,7 +277,7 @@ class PropertiesPanel(QWidget):
         exec_layout.addWidget(self.btn_run)
         
         self.btn_cancel = QPushButton("Stop")
-        self.btn_cancel.setCursor(Qt.PointingHandCursor)
+        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.setStyleSheet("""
             QPushButton {
                 background-color: #3f3f46;
