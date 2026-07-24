@@ -266,7 +266,7 @@ else:
     print("Roto shapes created successfully!")
 """
 
-    nk_content = "python {\n" + py_script + "\n}\n"
+    nk_content = "python {\n" + py_script.replace('\r\n', '\n') + "\n}\n"
     
     # Must use newline='\n' to prevent Nuke's TCL interpreter from choking on \r\n
     with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
