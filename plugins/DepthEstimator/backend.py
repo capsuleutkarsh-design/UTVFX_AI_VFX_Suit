@@ -3,6 +3,7 @@ import sys
 import cv2
 import numpy as np
 import shutil
+import torch
 from PySide6.QtCore import QThread, Signal
 
 # Add Depth-Anything-V2 repo to path so we can import it
