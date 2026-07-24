@@ -8,11 +8,15 @@ def export_roto_to_nuke(json_path, out_nk_path, interp_mode="Linear"):
     # Determine Nuke interpolation type string
     nuke_interp = "rp.AnimCurve.InterpolationType.LINEAR" if interp_mode == "Linear" else "rp.AnimCurve.InterpolationType.SMOOTH"
         
+    shapes_data_str = json.dumps(shapes)
+    
     # Create the Python script that Nuke will execute to build the roto node.
     py_script = f"""import json
 import nuke
 import nuke.rotopaint as rp
 import random
+
+shapes_data = json.loads(r'''{shapes_data_str}''')
 
 def compute_tangents(pts):
     N = len(pts)
@@ -72,13 +76,6 @@ def get_centroid_name(pts, format_width, format_height):
     if y_pos == "": return x_pos
     if x_pos == "Center": return y_pos
     return f"{{y_pos}}{{x_pos}}"
-
-try:
-    with open('{json_path.replace(chr(92), '/')}', 'r') as f:
-        shapes_data = json.load(f)
-except Exception as e:
-    nuke.message('Failed to load shapes data: ' + str(e))
-    shapes_data = {{}}
 
 frames = sorted([int(k) for k in shapes_data.keys() if str(k).isdigit()])
 if not frames:
@@ -269,34 +266,8 @@ else:
     print("Roto shapes created successfully!")
 """
 
-    out_py_path = os.path.splitext(out_nk_path)[0] + ".py"
-    py_filename = os.path.basename(out_py_path)
-    py_filename_clean = py_filename.replace('\\', '/')
+    nk_content = "python {\n" + py_script + "\n}\n"
     
-    # Write the clean Python script to standalone .py file
-    with open(out_py_path, "w", encoding="utf-8") as f:
-        f.write(py_script)
-        
-    # Use absolute path to guarantee Nuke finds the py file regardless of where the project is saved
-    out_py_path_clean = out_py_path.replace('\\', '/')
-    
-    # Write lightweight TCL .nk file that executes the .py script upon load/drag-drop
-    # Note: we use a single line exec to avoid any \r\n parsing issues in Nuke's TCL interpreter
-    nk_content = f"""python {{exec(open('{out_py_path_clean}', 'r', encoding='utf-8').read())}}
-
-NoOp {{
- name UTVFX_Roto_Generator
- note_font_size 14
- note_font_color 0x8b5cf6ff
- addUserKnob {{20 User l "UTVFX AI Roto"}}
- addUserKnob {{26 info l "" +STARTLINE T "Click below to regenerate the Roto node:"}}
- addUserKnob {{22 generate l "Generate Animated Roto" +STARTLINE T "exec(open('{out_py_path_clean}', 'r', encoding='utf-8').read())"}}
-}}
-"""
-    
+    # Must use newline='\n' to prevent Nuke's TCL interpreter from choking on \r\n
     with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
         f.write(nk_content)
-
-
-
-
