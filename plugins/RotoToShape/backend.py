@@ -335,6 +335,7 @@ class RotoToShapeWorker(BaseWorker):
             active_shapes = {}
             lost_shapes_count = {}
             next_shape_id = 0
+            all_known_shapes_pool = {}
             
             prev_gray = None
             
@@ -510,8 +511,21 @@ class RotoToShapeWorker(BaseWorker):
                         resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
                         
                         prefix = "Hole" if valid_is_hole[c_idx] else "Shape"
-                        shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
-                        next_shape_id += 1
+                        reused_id = None
+                        best_pool_dist = float('inf')
+                        cnt_centroid = np.mean(resampled, axis=0)
+                        for pool_sid, pool_pts in all_known_shapes_pool.items():
+                            if pool_sid not in current_frame_shapes and f"/{prefix}_" in pool_sid:
+                                pool_centroid = np.mean(pool_pts, axis=0)
+                                dist = np.linalg.norm(cnt_centroid - pool_centroid)
+                                if dist < best_pool_dist:
+                                    best_pool_dist = dist
+                                    reused_id = pool_sid
+                        if reused_id is not None:
+                            shape_id = reused_id
+                        else:
+                            shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
+                            next_shape_id += 1
                         
                         if generate_feather:
                             feather_pts = self._calculate_feather(resampled, img, threshold=5, max_dist=100)
@@ -521,6 +535,10 @@ class RotoToShapeWorker(BaseWorker):
                             current_frame_shapes[shape_id] = {"points": resampled.tolist(), "opacity": 1.0}
                             
                         lost_shapes_count[shape_id] = 0
+                        
+                for sid, val in current_frame_shapes.items():
+                    if val.get("opacity", 1.0) > 0:
+                        all_known_shapes_pool[sid] = np.array(val["points"], dtype=np.float32)[:, :2]
                         
                 active_shapes = {sid: val["points"] for sid, val in current_frame_shapes.items()}
                 all_shapes[f_idx_str].update(current_frame_shapes)

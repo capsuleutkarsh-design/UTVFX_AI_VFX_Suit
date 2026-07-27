@@ -182,8 +182,11 @@ else:
         shape.getAttributes().set('go', g)
         shape.getAttributes().set('bo', b)
         
-        # Set Lifetime attributes (0 = All frames, always visible across timeline)
-        shape.getAttributes().set('lft', 0.0)
+        # Set Lifetime attributes (0 = All frames, 2 = Frame range)
+        if first_frame == frames[0] and last_frame == frames[-1]:
+            shape.getAttributes().set('lft', 0.0)
+        else:
+            shape.getAttributes().set('lft', 2.0)
         shape.getAttributes().set('lfs', float(first_frame))
         shape.getAttributes().set('lfe', float(last_frame))
         
