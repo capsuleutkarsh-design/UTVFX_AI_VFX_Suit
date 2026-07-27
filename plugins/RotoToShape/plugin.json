@@ -3,7 +3,7 @@
     "plugin_type": "roto_to_shape",
     "category": "🎭 Matte",
     "color": "#8b5cf6",
-    "inputs": ["Alpha Matte"],
+    "inputs": ["Video Plate", "Alpha Matte"],
     "outputs": ["Shape Data"],
     "parameters": [
         {"id": "point_mode", "name": "Point Mode", "type": "select", "value": "Auto (Adaptive)", "options": ["Auto (Adaptive)", "Fixed"]},

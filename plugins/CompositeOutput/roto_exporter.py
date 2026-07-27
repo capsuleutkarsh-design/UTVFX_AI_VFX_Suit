@@ -7,16 +7,49 @@ def export_roto_to_nuke(json_path, out_nk_path, interp_mode="Linear"):
         
     # Determine Nuke interpolation type string
     nuke_interp = "rp.AnimCurve.InterpolationType.LINEAR" if interp_mode == "Linear" else "rp.AnimCurve.InterpolationType.SMOOTH"
-        
-    shapes_data_str = json.dumps(shapes)
+    json_path_escaped = json_path.replace('\\', '/')
+    embedded_json = json.dumps(shapes)
     
     # Create the Python script that Nuke will execute to build the roto node.
     py_script = f"""import json
+import os
 import nuke
 import nuke.rotopaint as rp
 import random
 
-shapes_data = json.loads(r'''{shapes_data_str}''')
+json_file = r'{json_path_escaped}'
+shapes_data = None
+if os.path.exists(json_file):
+    try:
+        with open(json_file, 'r') as f:
+            shapes_data = json.load(f)
+    except Exception:
+        pass
+
+if not shapes_data:
+    try:
+        if '/cache/' in json_file.replace('\\\\', '/'):
+            cache_root = json_file.replace('\\\\', '/').split('/cache/')[0] + '/cache/'
+            if os.path.exists(cache_root):
+                for sub in os.listdir(cache_root):
+                    candidate = os.path.join(cache_root, sub, 'roto_shapes', 'shapes.json')
+                    if os.path.exists(candidate):
+                        with open(candidate, 'r') as f:
+                            shapes_data = json.load(f)
+                        break
+    except Exception:
+        pass
+
+if not shapes_data:
+    try:
+        raw_json = '''{embedded_json}'''
+        shapes_data = json.loads(raw_json)
+    except Exception:
+        pass
+
+if not shapes_data:
+    nuke.message('shapes.json not found and embedded data failed to load.')
+    shapes_data = {{}}
 
 def compute_tangents(pts):
     N = len(pts)
@@ -79,7 +112,7 @@ def get_centroid_name(pts, format_width, format_height):
 
 frames = sorted([int(k) for k in shapes_data.keys() if str(k).isdigit()])
 if not frames:
-    nuke.message('No shape data found.')
+    print('No shape data found in shapes.json.')
 else:
     format_w = shapes_data.get("format_width", 1920)
     format_h = shapes_data.get("format_height", 1080)
@@ -108,7 +141,6 @@ else:
     # Calculate depth values for layer sorting
     shape_depths = {{}}
     for sid in unique_shape_ids:
-        # Find first frame the shape has depth data
         depth_vals = []
         for f in frames:
             if sid in shapes_data[str(f)]:
@@ -150,8 +182,8 @@ else:
         shape.getAttributes().set('go', g)
         shape.getAttributes().set('bo', b)
         
-        # Set Lifetime attributes
-        shape.getAttributes().set('lft', 4.0) # 4 = Frame Range
+        # Set Lifetime attributes (0 = All frames, always visible across timeline)
+        shape.getAttributes().set('lft', 0.0)
         shape.getAttributes().set('lfs', float(first_frame))
         shape.getAttributes().set('lfe', float(last_frame))
         
@@ -167,24 +199,87 @@ else:
                 shapes_layer.append(shape)
                 
             nuke_shapes[sid] = shape
+
+    def is_keyframe_needed(shapes_data, sid, f, frames, dev_thresh=0.4):
+        idx = frames.index(f)
+        if idx == 0 or idx == len(frames) - 1:
+            return True
             
-    # Animate points and opacity on every frame
+        prev_f = str(frames[idx - 1])
+        next_f = str(frames[idx + 1])
+        curr_f = str(f)
+        
+        if sid not in shapes_data[prev_f] or sid not in shapes_data[next_f]:
+            return True
+            
+        pts_prev = shapes_data[prev_f][sid]
+        pts_curr = shapes_data[curr_f][sid]
+        pts_next = shapes_data[next_f][sid]
+        
+        pts_prev = pts_prev["points"] if isinstance(pts_prev, dict) else pts_prev
+        pts_curr = pts_curr["points"] if isinstance(pts_curr, dict) else pts_curr
+        pts_next = pts_next["points"] if isinstance(pts_next, dict) else pts_next
+        
+        if len(pts_prev) != len(pts_curr) or len(pts_next) != len(pts_curr):
+            return True
+            
+        for i in range(len(pts_curr)):
+            p0 = pts_prev[i]
+            p1 = pts_curr[i]
+            p2 = pts_next[i]
+            
+            t0 = p0[2] if len(p0) > 2 else "smooth"
+            t1 = p1[2] if len(p1) > 2 else "smooth"
+            t2 = p2[2] if len(p2) > 2 else "smooth"
+            if t1 != t0 or t1 != t2:
+                return True
+                
+            exp_x = 0.5 * (p0[0] + p2[0])
+            exp_y = 0.5 * (p0[1] + p2[1])
+            err = ((p1[0] - exp_x)**2 + (p1[1] - exp_y)**2)**0.5
+            if err > dev_thresh:
+                return True
+                
+            if len(p0) >= 5 and len(p1) >= 5 and len(p2) >= 5:
+                exp_fx = 0.5 * (float(p0[3]) + float(p2[3]))
+                exp_fy = 0.5 * (float(p0[4]) + float(p2[4]))
+                err_f = ((float(p1[3]) - exp_fx)**2 + (float(p1[4]) - exp_fy)**2)**0.5
+                if err_f > dev_thresh:
+                    return True
+                    
+        return False
+            
+    # Animate points and opacity on keyframes
     for f in frames:
         f_data = shapes_data[str(f)]
-        for sid, val in f_data.items():
-            if str(sid) not in nuke_shapes:
+        for sid_str, shape in nuke_shapes.items():
+            if sid_str in f_data:
+                if not is_keyframe_needed(shapes_data, sid_str, f, frames, dev_thresh=0.4):
+                    continue
+                val = f_data[sid_str]
+                pts = val["points"] if isinstance(val, dict) else val
+                opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
+            else:
+                opacity = 0.0
+                pts = None
+                
+            # Animate Opacity
+            try:
+                opc_curve = shape.getAttributes().getAnimCurve('opc')
+                opc_curve.addKey(f, float(opacity))
+                opc_curve.keys()[-1].interpolationType = {nuke_interp}
+            except Exception:
+                pass
+                
+            if pts is None:
                 continue
                 
-            shape = nuke_shapes[str(sid)]
-            pts = val["points"] if isinstance(val, dict) else val
-            opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
-            
             left_tangents, right_tangents = compute_tangents(pts)
-            
-            # Animate Opacity
-            opc_curve = shape.getAttributes().getAnimCurve('opc')
-            opc_curve.addKey(f, float(opacity))
-            opc_curve.keys()[-1].interpolationType = {nuke_interp}
+            if len(pts[0]) >= 5:
+                f_pts = [[pt[3], pt[4], pt[2] if len(pt) > 2 else "smooth"] for pt in pts]
+                f_left_tangents, f_right_tangents = compute_tangents(f_pts)
+            else:
+                f_left_tangents, f_right_tangents = None, None
             
             for i, pt in enumerate(pts):
                 if i >= len(shape):
@@ -218,9 +313,28 @@ else:
                     cv.featherCenter.getPositionAnimCurve(1).addKey(f, fy - pt[1])
                     cv.featherCenter.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
                     cv.featherCenter.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
+                    
+                    if f_left_tangents is not None and i < len(f_left_tangents):
+                        fltx, flty = f_left_tangents[i]
+                        frtx, frty = f_right_tangents[i]
+                        try:
+                            cv.featherLeftTangent.getPositionAnimCurve(0).addKey(f, -fltx)
+                            cv.featherLeftTangent.getPositionAnimCurve(1).addKey(f, -flty)
+                            cv.featherLeftTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
+                            cv.featherLeftTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
+                            
+                            cv.featherRightTangent.getPositionAnimCurve(0).addKey(f, frtx)
+                            cv.featherRightTangent.getPositionAnimCurve(1).addKey(f, frty)
+                            cv.featherRightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
+                            cv.featherRightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
+                        except Exception:
+                            pass
                 else:
                     cv.featherCenter.getPositionAnimCurve(0).addKey(f, 0.0)
                     cv.featherCenter.getPositionAnimCurve(1).addKey(f, 0.0)
+
+    # Notify Nuke curves engine that hierarchy and animation curves have changed
+    curves.changed()
 
     # Clear the onCreate callback so it doesn't run again if the node is copied/pasted
     roto_node.knob('onCreate').setValue('')
@@ -237,9 +351,13 @@ Roto {{
  onCreate {{
 {py_script_clean}
  }}
+ addUserKnob {{20 User l "UTVFX AI Roto"}}
+ addUserKnob {{26 info l "" +STARTLINE T "If roto appears as a single frame after paste,\nclick below to rebuild animated curves:"}}
+ addUserKnob {{22 rebuild l "Rebuild Animated Roto" +STARTLINE T {{
+{py_script_clean}
+ }}}}
 }}"""
 
-    
     # Must use newline='\n' to prevent Nuke's TCL interpreter from choking on \r\n
     with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
         f.write(nk_content)

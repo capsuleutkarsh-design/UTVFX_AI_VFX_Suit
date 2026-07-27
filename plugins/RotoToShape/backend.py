@@ -41,6 +41,7 @@ class RotoToShapeWorker(BaseWorker):
     def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
         super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
         self.mask_path = inputs.get("Alpha Matte")
+        self.media_path = inputs.get("Video Plate") or inputs.get("Media Plate")
 
 
     @staticmethod
@@ -154,20 +155,34 @@ class RotoToShapeWorker(BaseWorker):
             out_dir = n if val1 < val2 else -n
             
             f_pt = pt.copy()
+            prev_val = int(img[min(h-1, max(0, int(pt[1]))), min(w-1, max(0, int(pt[0])))])
+            min_val = prev_val
+            min_pt = pt.copy()
+            
             for step in range(1, max_dist):
                 test_pt = pt + out_dir * step
                 tx, ty = int(test_pt[0]), int(test_pt[1])
                 if tx < 0 or tx >= w or ty < 0 or ty >= h:
+                    f_pt = [min(w - 1, max(0, tx)), min(h - 1, max(0, ty))]
+                    break
+                curr_val = int(img[ty, tx])
+                if curr_val <= threshold:
                     f_pt = test_pt
                     break
-                if img[ty, tx] <= threshold:
-                    f_pt = test_pt
+                if curr_val < min_val:
+                    min_val = curr_val
+                    min_pt = test_pt.copy()
+                # Monotonicity check: if alpha intensity increases significantly (hitting another matte or noise), stop at local alpha minimum
+                if curr_val > min_val + 15:
+                    f_pt = min_pt
                     break
+            else:
+                f_pt = min_pt
             feather_pts.append(f_pt)
             
         return np.array(feather_pts)
 
-    def _snap_to_gradient(self, pts, grad_mag, snap_radius=2):
+    def _snap_to_gradient(self, pts, grad_mag, snap_radius=2, img=None, core_threshold=0):
         h, w = grad_mag.shape
         snapped = np.copy(pts)
         
@@ -188,9 +203,11 @@ class RotoToShapeWorker(BaseWorker):
             
             cx, cy = int(round(px)), int(round(py))
             if 0 <= cx < w and 0 <= cy < h:
-                best_val = grad_mag[cy, cx]
+                best_val = float(grad_mag[cy, cx])
+                if img is not None and core_threshold > 0 and img[cy, cx] < core_threshold:
+                    best_val *= 0.1
             else:
-                best_val = -1
+                best_val = -1.0
             best_pt = (px, py)
             
             for step in range(-search_radius, search_radius + 1):
@@ -203,7 +220,9 @@ class RotoToShapeWorker(BaseWorker):
                 iy = int(round(sy))
                 
                 if 0 <= ix < w and 0 <= iy < h:
-                    val = grad_mag[iy, ix]
+                    val = float(grad_mag[iy, ix])
+                    if img is not None and core_threshold > 0 and img[iy, ix] < core_threshold:
+                        val *= 0.1
                     if val > best_val:
                         best_val = val
                         best_pt = (sx, sy)
@@ -212,6 +231,36 @@ class RotoToShapeWorker(BaseWorker):
             
         return snapped
 
+    def _conform_to_contour(self, tracked_pts, prev_pts, status, cnt, img_w, img_h):
+        """
+        Conforms optical flow tracked points to the actual matched contour boundary,
+        resampling the contour cleanly and finding the optimal cyclic alignment to preserve
+        vertex order and prevent self-intersecting lines or out-of-bounds errors.
+        """
+        num_points = len(tracked_pts)
+        if num_points == 0 or len(cnt) < 2:
+            return tracked_pts
+            
+        resampled = self._resample_polygon(cnt, num_points, curvature_weight=5.0, frame_size=(img_w, img_h))
+        
+        status_flat = status.reshape(-1) if status is not None else np.ones(num_points, dtype=int)
+        valid_mask = (status_flat == 1) & ~np.isnan(tracked_pts[:, 0]) & ~np.isnan(tracked_pts[:, 1]) & (tracked_pts[:, 0] >= 0) & (tracked_pts[:, 0] < img_w) & (tracked_pts[:, 1] >= 0) & (tracked_pts[:, 1] < img_h)
+        ref_pts = np.where(valid_mask[:, None], tracked_pts, prev_pts)
+        
+        ref_centroid = np.mean(ref_pts, axis=0)
+        res_centroid = np.mean(resampled, axis=0)
+        ref_pts_centered = ref_pts - ref_centroid + res_centroid
+        
+        best_k = 0
+        best_dist = float('inf')
+        for k in range(num_points):
+            shifted = np.roll(resampled, -k, axis=0)
+            dist = np.mean(np.linalg.norm(shifted - ref_pts_centered, axis=1))
+            if dist < best_dist:
+                best_dist = dist
+                best_k = k
+                
+        return np.roll(resampled, -best_k, axis=0)
 
 
     def run_task(self):
@@ -259,10 +308,25 @@ class RotoToShapeWorker(BaseWorker):
             self.log_message.emit(self.node_id, f"Processing layer: {layer_name}")
             
             frames = sorted([f for f in os.listdir(layer_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
-            if first_frame > 0:
-                frames = frames[first_frame:]
-            if last_frame > 0:
-                frames = frames[:last_frame - first_frame + 1]
+            filtered_frames = []
+            for i, f_name in enumerate(frames):
+                match = re.search(r'(\d+)\.\w+$', f_name)
+                f_idx = int(match.group(1)) if match else i
+                
+                if first_frame > 0:
+                    if first_frame >= 100 and f_idx < first_frame:
+                        continue
+                    elif first_frame < 100 and i < first_frame:
+                        continue
+                        
+                if last_frame > 0:
+                    if last_frame >= 100 and f_idx > last_frame:
+                        continue
+                    elif last_frame < 100 and i > last_frame:
+                        continue
+                        
+                filtered_frames.append(f_name)
+            frames = filtered_frames
                 
             total_frames = len(frames)
             if total_frames == 0:
@@ -331,67 +395,107 @@ class RotoToShapeWorker(BaseWorker):
                 current_frame_shapes = {}
                 used_contours = set()
                 
-                # Optical flow image prep
-                # Blur slightly to create gradients for PyrLK
-                curr_gray = cv2.GaussianBlur(img, (15, 15), 0)
+                # Optical flow / Image prep
+                curr_gray = None
+                if self.media_path and os.path.isdir(self.media_path):
+                    search_dirs = [self.media_path]
+                    for item in os.listdir(self.media_path):
+                        subpath = os.path.join(self.media_path, item)
+                        if os.path.isdir(subpath):
+                            search_dirs.append(subpath)
+                    for d in search_dirs:
+                        for f in os.listdir(d):
+                            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr')):
+                                m = re.search(r'(\d+)\.\w+$', f)
+                                if (m and int(m.group(1)) == f_idx) or (not m and str(f_idx) in f):
+                                    media_img = cv2.imread(os.path.join(d, f), cv2.IMREAD_UNCHANGED)
+                                    if media_img is not None:
+                                        if len(media_img.shape) == 3:
+                                            curr_gray = cv2.cvtColor(media_img, cv2.COLOR_BGR2GRAY)
+                                        elif len(media_img.shape) == 4:
+                                            curr_gray = cv2.cvtColor(media_img, cv2.COLOR_BGRA2GRAY)
+                                        else:
+                                            curr_gray = media_img.copy()
+                                        if curr_gray.dtype != np.uint8:
+                                            curr_gray = (np.clip(curr_gray, 0, 1) * 255).astype(np.uint8) if curr_gray.dtype == np.float32 else (curr_gray / 256).astype(np.uint8)
+                                        break
+                        if curr_gray is not None:
+                            break
+                if curr_gray is None:
+                    curr_gray = cv2.GaussianBlur(img, (15, 15), 0)
+                    
+                lk_params = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
                 
                 for shape_id, prev_pts in active_shapes.items():
                     prev_pts_np = np.array(prev_pts, dtype=np.float32)
-                    main_pts_np = prev_pts_np[:, :2]
-                    x_min, y_min = np.min(main_pts_np, axis=0)
-                    x_max, y_max = np.max(main_pts_np, axis=0)
-                    prev_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
+                    main_pts_np = np.ascontiguousarray(prev_pts_np[:, :2]).reshape(-1, 1, 2)
                     
                     best_cnt_idx = -1
                     best_score = -1.0
-                    for c_idx, cnt in enumerate(valid_contours):
-                        if c_idx in used_contours: continue
-                        iou = bbox_iou(prev_bbox, valid_bboxes[c_idx])
-                        dist = bbox_center_dist(prev_bbox, valid_bboxes[c_idx])
+                    
+                    if prev_gray is not None:
+                        next_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, main_pts_np, None, **lk_params)
+                        next_pts = next_pts.reshape(-1, 2)
+                        status_flat = status.reshape(-1) if status is not None else np.ones(len(next_pts), dtype=int)
+                        valid_idx = (status_flat == 1) & ~np.isnan(next_pts[:, 0]) & ~np.isnan(next_pts[:, 1]) & (next_pts[:, 0] >= 0) & (next_pts[:, 0] < grad_mag.shape[1]) & (next_pts[:, 1] >= 0) & (next_pts[:, 1] < grad_mag.shape[0])
+                        valid_next = next_pts[valid_idx] if np.sum(valid_idx) >= 4 else next_pts
                         
-                        max_dim = max(prev_bbox[2], prev_bbox[3], valid_bboxes[c_idx][2], valid_bboxes[c_idx][3])
-                        dist_score = max(0, 1.0 - dist / (max_dim + 1e-5))
-                        score = max(iou, dist_score)
+                        x_min, y_min = np.min(valid_next, axis=0)
+                        x_max, y_max = np.max(valid_next, axis=0)
+                        tracked_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
                         
-                        if score > best_score:
-                            best_score = score
-                            best_cnt_idx = c_idx
+                        prev_main = prev_pts_np[:, :2]
+                        px_min, py_min = np.min(prev_main, axis=0)
+                        px_max, py_max = np.max(prev_main, axis=0)
+                        prev_bbox = (px_min, py_min, px_max - px_min, py_max - py_min)
+                        
+                        for c_idx, cnt in enumerate(valid_contours):
+                            if c_idx in used_contours: continue
+                            iou_trk = bbox_iou(tracked_bbox, valid_bboxes[c_idx])
+                            iou_prv = bbox_iou(prev_bbox, valid_bboxes[c_idx])
+                            iou = max(iou_trk, iou_prv)
                             
-                    if best_cnt_idx != -1 and best_score >= iou_threshold:
-                        cnt = valid_contours[best_cnt_idx]
-                        used_contours.add(best_cnt_idx)
-                        
-                        num_points = len(prev_pts)
-                        frame_size = (all_shapes["format_width"], all_shapes["format_height"])
-                        resampled = self._resample_polygon(cnt, num_points, curvature_weight, frame_size)
-                        
-                        # Find best cyclic shift to align starting point of resampled contour with prev_pts
-                        best_shift = 0
-                        min_dist_sum = float('inf')
-                        for shift in range(num_points):
-                            rolled = np.roll(resampled, shift, axis=0)
-                            dist_sum = np.sum(np.linalg.norm(rolled - main_pts_np, axis=1))
-                            if dist_sum < min_dist_sum:
-                                min_dist_sum = dist_sum
-                                best_shift = shift
+                            dist_trk = bbox_center_dist(tracked_bbox, valid_bboxes[c_idx])
+                            dist_prv = bbox_center_dist(prev_bbox, valid_bboxes[c_idx])
+                            dist = min(dist_trk, dist_prv)
+                            
+                            max_dim = max(tracked_bbox[2], tracked_bbox[3], prev_bbox[2], prev_bbox[3], valid_bboxes[c_idx][2], valid_bboxes[c_idx][3])
+                            dist_score = max(0, 1.0 - dist / (max_dim + 1e-5))
+                            score = max(iou, dist_score)
+                            
+                            if score > best_score:
+                                best_score = score
+                                best_cnt_idx = c_idx
                                 
-                        aligned_resampled = np.roll(resampled, best_shift, axis=0)
-                        
-                        # Snap aligned points to edge gradient
-                        snapped_pts = self._snap_to_gradient(aligned_resampled, grad_mag, edge_snap_radius)
-                        
-                        if generate_feather:
-                            feather_pts = self._calculate_feather(snapped_pts, img, threshold=5, max_dist=100)
-                            combined = np.hstack([snapped_pts, feather_pts])
-                            current_frame_shapes[shape_id] = combined.tolist()
-                        else:
-                            current_frame_shapes[shape_id] = snapped_pts.tolist()
+                        if best_cnt_idx != -1 and best_score >= iou_threshold:
+                            used_contours.add(best_cnt_idx)
                             
-                        lost_shapes_count[shape_id] = 0
+                            matched_cnt = valid_contours[best_cnt_idx]
+                            img_h, img_w = grad_mag.shape
+                            conformed_pts = self._conform_to_contour(next_pts, prev_pts_np[:, :2], status, matched_cnt, img_w, img_h)
+                            snapped_pts = self._snap_to_gradient(conformed_pts, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
+                            
+                            if generate_feather:
+                                feather_pts = self._calculate_feather(snapped_pts, img, threshold=5, max_dist=100)
+                                combined = np.hstack([snapped_pts, feather_pts])
+                                current_frame_shapes[shape_id] = {"points": combined.tolist(), "opacity": 1.0}
+                            else:
+                                current_frame_shapes[shape_id] = {"points": snapped_pts.tolist(), "opacity": 1.0}
+                                
+                            lost_shapes_count[shape_id] = 0
+                        else:
+                            lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
+                            if lost_shapes_count[shape_id] <= max_missing_frames:
+                                next_pts[:, 0] = np.clip(next_pts[:, 0], 0, grad_mag.shape[1] - 1)
+                                next_pts[:, 1] = np.clip(next_pts[:, 1], 0, grad_mag.shape[0] - 1)
+                                if generate_feather:
+                                    dummy_feather = np.copy(next_pts)
+                                    combined_lost = np.hstack([next_pts, dummy_feather])
+                                    current_frame_shapes[shape_id] = {"points": combined_lost.tolist(), "opacity": 0.0}
+                                else:
+                                    current_frame_shapes[shape_id] = {"points": next_pts.tolist(), "opacity": 0.0}
                     else:
-                        lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
-                        if lost_shapes_count[shape_id] <= max_missing_frames:
-                            current_frame_shapes[shape_id] = prev_pts
+                        pass
                             
                 for c_idx, cnt in enumerate(valid_contours):
                     if c_idx not in used_contours:
@@ -403,23 +507,22 @@ class RotoToShapeWorker(BaseWorker):
                             num_points = min(num_points, 80)
                         frame_size = (all_shapes["format_width"], all_shapes["format_height"])
                         resampled = self._resample_polygon(cnt, num_points, curvature_weight, frame_size)
-                        resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius)
+                        resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
                         
                         prefix = "Hole" if valid_is_hole[c_idx] else "Shape"
-                        # Namespace shape with layer
                         shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
                         next_shape_id += 1
                         
                         if generate_feather:
                             feather_pts = self._calculate_feather(resampled, img, threshold=5, max_dist=100)
                             combined = np.hstack([resampled, feather_pts])
-                            current_frame_shapes[shape_id] = combined.tolist()
+                            current_frame_shapes[shape_id] = {"points": combined.tolist(), "opacity": 1.0}
                         else:
-                            current_frame_shapes[shape_id] = resampled.tolist()
+                            current_frame_shapes[shape_id] = {"points": resampled.tolist(), "opacity": 1.0}
                             
                         lost_shapes_count[shape_id] = 0
                         
-                active_shapes = current_frame_shapes.copy()
+                active_shapes = {sid: val["points"] for sid, val in current_frame_shapes.items()}
                 all_shapes[f_idx_str].update(current_frame_shapes)
                 prev_gray = curr_gray
                 
@@ -436,7 +539,10 @@ class RotoToShapeWorker(BaseWorker):
             
             for f_idx in frames_present:
                 f_str = str(f_idx)
-                for sid, pts in all_shapes[f_str].items():
+                for sid, val in all_shapes[f_str].items():
+                    pts = val["points"] if isinstance(val, dict) else val
+                    opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
+                    
                     pts_np = np.array(pts)
                     num_pts = len(pts_np)
                     
@@ -447,16 +553,15 @@ class RotoToShapeWorker(BaseWorker):
                         prev_f = str(frames_present[idx - 1])
                         next_f = str(frames_present[idx + 1])
                         if sid in all_shapes[prev_f] and sid in all_shapes[next_f]:
-                            pts_prev = np.array(all_shapes[prev_f][sid])
-                            pts_next = np.array(all_shapes[next_f][sid])
-                            if len(pts_prev) == num_pts and len(pts_next) == num_pts:
-                                # Only smooth if the points haven't moved too wildly (e.g. tracking jumped)
+                            pts_prev = np.array(all_shapes[prev_f][sid]["points"] if isinstance(all_shapes[prev_f][sid], dict) else all_shapes[prev_f][sid])
+                            pts_next = np.array(all_shapes[next_f][sid]["points"] if isinstance(all_shapes[next_f][sid], dict) else all_shapes[next_f][sid])
+                            if len(pts_prev) == num_pts and len(pts_next) == num_pts and pts_prev.shape == pts_np.shape and pts_next.shape == pts_np.shape:
                                 dist_prev = np.mean(np.linalg.norm(pts_prev - pts_np, axis=1))
                                 dist_next = np.mean(np.linalg.norm(pts_next - pts_np, axis=1))
                                 if dist_prev < 20 and dist_next < 20:
                                     smoothed_pts = (pts_prev + pts_np + pts_next) / 3.0
                     
-                    smoothed_shapes[f_str][sid] = smoothed_pts.tolist()
+                    smoothed_shapes[f_str][sid] = {"points": smoothed_pts.tolist(), "opacity": opacity}
             
             all_shapes = smoothed_shapes
             
@@ -469,7 +574,9 @@ class RotoToShapeWorker(BaseWorker):
         frames_present = sorted([int(k) for k in all_shapes.keys() if str(k).isdigit()])
         for f_idx in frames_present:
             f_str = str(f_idx)
-            for sid, pts in all_shapes[f_str].items():
+            for sid, val in all_shapes[f_str].items():
+                pts = val["points"] if isinstance(val, dict) else val
+                opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
                 pts_np = np.array(pts, dtype=np.float32)
                 has_feather = pts_np.shape[1] == 4
                 main_pts = pts_np[:, :2]
@@ -501,7 +608,7 @@ class RotoToShapeWorker(BaseWorker):
                     else:
                         pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
                     
-                all_shapes[f_str][sid] = pts_with_type
+                all_shapes[f_str][sid] = {"points": pts_with_type, "opacity": opacity}
 
         # --- Preview Generation ---
         if os.path.exists(self.mask_path):
@@ -526,7 +633,11 @@ class RotoToShapeWorker(BaseWorker):
                         if len(mask_img.shape) == 2:
                             mask_img = cv2.cvtColor(mask_img, cv2.COLOR_GRAY2BGR)
                             
-                        for sid, pts_with_type in all_shapes[str(f_idx)].items():
+                        for sid, val in all_shapes[str(f_idx)].items():
+                            pts_with_type = val["points"] if isinstance(val, dict) else val
+                            opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
+                            if opacity == 0.0:
+                                continue
                             is_hole = "Hole_" in sid.split('/')[-1]
                             color = (0, 0, 255) if is_hole else (0, 255, 0)
                             
