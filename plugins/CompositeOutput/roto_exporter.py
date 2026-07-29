@@ -203,11 +203,86 @@ else:
                 
             nuke_shapes[sid] = shape
 
+    def rdp_shape(shape_frames, sid, dev_thresh=2.0):
+        if len(shape_frames) <= 2:
+            return shape_frames
+            
+        def get_pts_vec(f):
+            val = shapes_data[str(f)][sid]
+            pts = val["points"] if isinstance(val, dict) else val
+            vec = []
+            for p in pts:
+                vec.extend([p[0], p[1]])
+            return vec
+            
+        def point_line_dist(v, v1, v2):
+            import math
+            max_d = 0.0
+            l2 = sum((v2[i] - v1[i])**2 for i in range(len(v1)))
+            if l2 == 0:
+                for i in range(0, len(v), 2):
+                    d = math.sqrt((v[i] - v1[i])**2 + (v[i+1] - v1[i+1])**2)
+                    if d > max_d: max_d = d
+                return max_d
+                
+            t = sum((v[i] - v1[i]) * (v2[i] - v1[i]) for i in range(len(v))) / l2
+            t = max(0.0, min(1.0, t))
+            
+            for i in range(0, len(v), 2):
+                proj_x = v1[i] + t * (v2[i] - v1[i])
+                proj_y = v1[i+1] + t * (v2[i+1] - v1[i+1])
+                d = math.sqrt((v[i] - proj_x)**2 + (v[i+1] - proj_y)**2)
+                if d > max_d: max_d = d
+            return max_d
+
+        def rdp_recursive(start_idx, end_idx):
+            if end_idx <= start_idx + 1:
+                return []
+                
+            max_dist = 0.0
+            max_idx = -1
+            
+            v1 = get_pts_vec(shape_frames[start_idx])
+            v2 = get_pts_vec(shape_frames[end_idx])
+            
+            for i in range(start_idx + 1, end_idx):
+                v = get_pts_vec(shape_frames[i])
+                if len(v) != len(v1) or len(v) != len(v2):
+                    return list(range(start_idx + 1, end_idx))
+                
+                d = point_line_dist(v, v1, v2)
+                if d > max_dist:
+                    max_dist = d
+                    max_idx = i
+                    
+            if max_dist > dev_thresh:
+                left = rdp_recursive(start_idx, max_idx)
+                right = rdp_recursive(max_idx, end_idx)
+                return left + [max_idx] + right
+            else:
+                return []
+                
+        res = set([0, len(shape_frames)-1])
+        for idx in rdp_recursive(0, len(shape_frames)-1):
+            res.add(idx)
+            
+        return sorted([shape_frames[i] for i in res])
+
+    shape_kfs = {{}}
+    for sid_str in nuke_shapes.keys():
+        sframes = [f for f in frames if sid_str in shapes_data[str(f)]]
+        if sframes:
+            shape_kfs[sid_str] = set(rdp_shape(sframes, sid_str, dev_thresh=1.5))
+        else:
+            shape_kfs[sid_str] = set()
+
     # Animate points and opacity on active frames
     for f in frames:
         f_data = shapes_data[str(f)]
         for sid_str, shape in nuke_shapes.items():
             if sid_str in f_data:
+                if f not in shape_kfs[sid_str]:
+                    continue
                 val = f_data[sid_str]
                 pts = val["points"] if isinstance(val, dict) else val
                 opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
