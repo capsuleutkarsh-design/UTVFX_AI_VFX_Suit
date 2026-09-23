@@ -286,12 +286,14 @@ class RotoToShapeWorker(BaseWorker):
         out_dir = os.path.join(self.cache_dir, "roto_shapes")
         os.makedirs(out_dir, exist_ok=True)
         
+        # SuperMatte writes one matte per layer to alpha/<layer>/ next to its combined Matte/ folder;
+        # each layer becomes its own set of shapes.
         layers_to_process = []
-        sam_masks_dir = os.path.join(os.path.dirname(self.mask_path), "sam_masks")
-        if os.path.isdir(sam_masks_dir):
-            for item in os.listdir(sam_masks_dir):
-                item_path = os.path.join(sam_masks_dir, item)
-                if os.path.isdir(item_path):
+        alpha_dir = os.path.join(os.path.dirname(os.path.normpath(self.mask_path)), "alpha")
+        if os.path.isdir(alpha_dir):
+            for item in sorted(os.listdir(alpha_dir)):
+                item_path = os.path.join(alpha_dir, item)
+                if os.path.isdir(item_path) and any(f.lower().endswith(".png") for f in os.listdir(item_path)):
                     layers_to_process.append({"name": item, "dir": item_path})
         
         if not layers_to_process:
@@ -307,26 +309,14 @@ class RotoToShapeWorker(BaseWorker):
             
             self.log_message.emit(self.node_id, f"Processing layer: {layer_name}")
             
-            frames = sorted([f for f in os.listdir(layer_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr'))])
-            filtered_frames = []
-            for i, f_name in enumerate(frames):
-                match = re.search(r'(\d+)\.\w+$', f_name)
-                f_idx = int(match.group(1)) if match else i
-                
-                if first_frame > 0:
-                    if first_frame >= 100 and f_idx < first_frame:
-                        continue
-                    elif first_frame < 100 and i < first_frame:
-                        continue
-                        
-                if last_frame > 0:
-                    if last_frame >= 100 and f_idx > last_frame:
-                        continue
-                    elif last_frame < 100 and i > last_frame:
-                        continue
-                        
-                filtered_frames.append(f_name)
-            frames = filtered_frames
+            from utvfx.core.plate import find_sequence
+            sequence = find_sequence(layer_dir)  # sorted by frame number, not by name
+            if self.frame_range:
+                sequence = [sequence[i] for i in self.positions(len(sequence))]
+            # First/Last frame are plate frame numbers; 0 means no limit.
+            sequence = [(n, f) for n, f in sequence
+                        if (first_frame <= 0 or n >= first_frame) and (last_frame <= 0 or n <= last_frame)]
+            frames = [os.path.basename(f) for _, f in sequence]
                 
             total_frames = len(frames)
             if total_frames == 0:
@@ -336,6 +326,9 @@ class RotoToShapeWorker(BaseWorker):
             lost_shapes_count = {}
             next_shape_id = 0
             all_known_shapes_pool = {}
+            plate_frames = {}
+            if self.media_path and os.path.isdir(self.media_path):
+                plate_frames = dict(find_sequence(self.media_path))
             
             prev_gray = None
             
@@ -398,30 +391,13 @@ class RotoToShapeWorker(BaseWorker):
                 
                 # Optical flow / Image prep
                 curr_gray = None
-                if self.media_path and os.path.isdir(self.media_path):
-                    search_dirs = [self.media_path]
-                    for item in os.listdir(self.media_path):
-                        subpath = os.path.join(self.media_path, item)
-                        if os.path.isdir(subpath):
-                            search_dirs.append(subpath)
-                    for d in search_dirs:
-                        for f in os.listdir(d):
-                            if f.lower().endswith(('.png', '.jpg', '.jpeg', '.tif', '.exr')):
-                                m = re.search(r'(\d+)\.\w+$', f)
-                                if (m and int(m.group(1)) == f_idx) or (not m and str(f_idx) in f):
-                                    media_img = cv2.imread(os.path.join(d, f), cv2.IMREAD_UNCHANGED)
-                                    if media_img is not None:
-                                        if len(media_img.shape) == 3:
-                                            curr_gray = cv2.cvtColor(media_img, cv2.COLOR_BGR2GRAY)
-                                        elif len(media_img.shape) == 4:
-                                            curr_gray = cv2.cvtColor(media_img, cv2.COLOR_BGRA2GRAY)
-                                        else:
-                                            curr_gray = media_img.copy()
-                                        if curr_gray.dtype != np.uint8:
-                                            curr_gray = (np.clip(curr_gray, 0, 1) * 255).astype(np.uint8) if curr_gray.dtype == np.float32 else (curr_gray / 256).astype(np.uint8)
-                                        break
-                        if curr_gray is not None:
-                            break
+                if f_idx in plate_frames:
+                    from utvfx.core.image_utils import load_frame
+                    media_img = load_frame(plate_frames[f_idx])
+                    if media_img is not None:
+                        curr_gray = cv2.cvtColor(media_img[..., :3], cv2.COLOR_BGR2GRAY)
+                        if curr_gray.shape != img.shape:
+                            curr_gray = cv2.resize(curr_gray, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_AREA)
                 if curr_gray is None:
                     curr_gray = cv2.GaussianBlur(img, (15, 15), 0)
                     
@@ -514,15 +490,23 @@ class RotoToShapeWorker(BaseWorker):
                         reused_id = None
                         best_pool_dist = float('inf')
                         cnt_centroid = np.mean(resampled, axis=0)
+                        cnt_size = float(np.max(np.ptp(resampled, axis=0)))
                         for pool_sid, pool_pts in all_known_shapes_pool.items():
                             if pool_sid not in current_frame_shapes and f"/{prefix}_" in pool_sid:
-                                pool_centroid = np.mean(pool_pts, axis=0)
-                                dist = np.linalg.norm(cnt_centroid - pool_centroid)
-                                if dist < best_pool_dist:
+                                dist = np.linalg.norm(cnt_centroid - np.mean(pool_pts, axis=0))
+                                # Only the same object coming back: close to where it was lost.
+                                reach = max(cnt_size, float(np.max(np.ptp(pool_pts, axis=0))))
+                                if dist < best_pool_dist and dist <= reach:
                                     best_pool_dist = dist
                                     reused_id = pool_sid
                         if reused_id is not None:
                             shape_id = reused_id
+                            # Nuke keys every point of a shape: a reused shape keeps its point count.
+                            count = len(all_known_shapes_pool[reused_id])
+                            if count != len(resampled):
+                                resampled = self._resample_polygon(cnt, count, curvature_weight, frame_size)
+                                resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius, img=img,
+                                                                   core_threshold=(240 if generate_feather else 0))
                         else:
                             shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
                             next_shape_id += 1
@@ -615,16 +599,16 @@ class RotoToShapeWorker(BaseWorker):
                 else:
                     angle = np.zeros(len(main_pts))
                     
+                # Image pixel (x, y) covers [x, x+1) from the top; in Nuke its centre is
+                # (x + 0.5, height - y - 0.5) with the origin at the bottom left.
                 for j, pt in enumerate(main_pts):
-                    y_flipped = format_h - pt[1]
                     curve_type = "cusp" if angle[j] > corner_rad else "smooth"
-                    
+                    x, y_flipped = float(pt[0]) + 0.5, float(format_h - pt[1]) - 0.5
                     if has_feather:
-                        fx = pts_np[j, 2]
-                        fy_flipped = format_h - pts_np[j, 3]
-                        pts_with_type.append([float(pt[0]), float(y_flipped), curve_type, float(fx), float(fy_flipped)])
+                        fx, fy_flipped = float(pts_np[j, 2]) + 0.5, float(format_h - pts_np[j, 3]) - 0.5
+                        pts_with_type.append([x, y_flipped, curve_type, fx, fy_flipped])
                     else:
-                        pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
+                        pts_with_type.append([x, y_flipped, curve_type])
                     
                 all_shapes[f_str][sid] = {"points": pts_with_type, "opacity": opacity}
 
@@ -660,7 +644,7 @@ class RotoToShapeWorker(BaseWorker):
                             color = (0, 0, 255) if is_hole else (0, 255, 0)
                             
                             # unflip Y just for preview
-                            draw_pts = np.array([[pt[0], format_h - pt[1]] for pt in pts_with_type], dtype=np.int32)
+                            draw_pts = np.array([[pt[0] - 0.5, format_h - pt[1] - 0.5] for pt in pts_with_type], dtype=np.int32)
                             if len(draw_pts) > 0:
                                 cv2.polylines(mask_img, [draw_pts], isClosed=True, color=color, thickness=2)
                                 

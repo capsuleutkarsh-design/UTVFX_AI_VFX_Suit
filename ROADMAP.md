@@ -35,7 +35,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 
 - [x] MediaPlate (M8)
 - [x] SuperMatte (C3, C4, H13). Core/edge split and multi-channel EXR go with Unified Output (Pass 3)
-- [ ] RotoToShape (H17)
+- [x] RotoToShape (H17)
 - [ ] CorridorKey (H14)
 - [ ] Depth (H15)
 - [ ] AI Roto (H16)

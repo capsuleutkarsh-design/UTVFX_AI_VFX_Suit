@@ -36,7 +36,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
 | H16 | AI Roto | Depth units and direction wrong: hides limbs in front | 2 | | ☐ |
-| H17 | RotoToShape | Reused shape IDs change point count and the exporter truncates. Layers merged (wrong folder) | 2 | | ☐ |
+| H17 | RotoToShape | Reused shape IDs change point count and the exporter truncates. Layers merged (wrong folder) | 2 | | ☑ |
 | H18 | 3D Tracker | COLMAP/GLOMAP binaries not shipped. "SuperPoint" is really SIFT. Moving objects not masked → rebuild on Automated Tracker | 2 | | ◐ COLMAP 4.2.0 (with the global mapper) installed and solving; rebuild on the Automated Tracker in Pass 2 |
 | H19 | Unified Output | Gamma 2.2 applied to alpha and depth. "16-bit float" writes 32-bit. sRGB values in EXR. Mattes land in Y, not A | 3 | | ☐ |
 
