@@ -32,7 +32,7 @@ class TestRegression(unittest.TestCase):
         node = self.window.node_scene.nodes[0]
         
         self.assertIn("screen_color", node.params)
-        self.assertEqual(node.params["screen_color"], "green")
+        self.assertEqual(node.params["screen_color"], "auto")  # the keyer detects green or blue by default
         
         self.assertTrue(self.window.undo_stack.canUndo())
         self.window.undo_stack.undo()

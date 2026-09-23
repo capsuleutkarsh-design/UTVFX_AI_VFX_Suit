@@ -135,6 +135,8 @@ def output_path(node, port_name=None, want="image", cache_dir=None, _visited=Non
         folders = ALPHA_FOLDERS[ptype]
     else:
         folders = outputs.get(port_name) or next(iter(outputs.values()), ["."])
+        if ptype == "corridor_keyer" and getattr(node, "params", {}).get("foreground_output") == "Straight RGB":
+            folders = ["Output/FG", "Output/Processed"]
     for folder in folders:
         candidate = node_cache if folder == "." else os.path.normpath(os.path.join(node_cache, folder))
         if has_media(candidate):

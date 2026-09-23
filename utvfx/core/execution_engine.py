@@ -278,18 +278,6 @@ class ExecutionEngine(QObject):
 
 
 
-    def _map_corridor_key_params(self, params):
-        mapped = dict(params)
-        if "clean_islands" in mapped:
-            mapped["auto_despeckle"] = mapped["clean_islands"]
-        if "despeckle_thresh" in mapped:
-            mapped["despeckle_size"] = mapped["despeckle_thresh"]
-        if "detail_intensity" in mapped:
-            mapped["refiner_scale"] = mapped["detail_intensity"]
-        if "proc_res" in mapped:
-            mapped["image_size"] = mapped["proc_res"]
-        return mapped
-
     def execute_node(self, node_id):
         """Render node_id and everything upstream. Returns False if the request was refused."""
         target_node = self._get_node_by_id(node_id)
@@ -417,8 +405,6 @@ class ExecutionEngine(QObject):
                 inp_name = inp if isinstance(inp, str) else inp.get("name", "")
                 resolved_inputs[inp_name] = resolve_input(node, inp_name, self.cache_dir)
                     
-            if plugin == "corridor_keyer":
-                params = self._map_corridor_key_params(params)
                 
             self.log_message.emit(node_id, f"Starting execution for {manifest.get('name', plugin)}. Cache: {node_cache}")
             

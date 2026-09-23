@@ -122,6 +122,14 @@ def to_scene_linear(pixels, space):
     return _join(rgb, alpha)
 
 
+def convert(pixels, src, dst):
+    """Convert float pixels between two colour spaces of the config. Alpha passes through."""
+    rgb, alpha = _split(pixels)
+    if src != dst:
+        rgb = _transform(rgb, lambda d, s: oiio.ImageBufAlgo.colorconvert(d, s, src, dst))
+    return _join(rgb, alpha)
+
+
 def to_display(pixels, space):
     """Convert float pixels in `space` to display-referred 0-1 (what the AI and the viewer see).
 

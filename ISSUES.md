@@ -33,7 +33,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☑ |
 | H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ☑ plate loading, EXR colour tags, float pixel probe; OCIO node itself is M9 (Pass 2) |
 | H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☑ |
-| H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
+| H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☑ Keys the display plate or (option) the linear master; all 16 settings do real work (despill limit patched in, matte median/soften/anti-flicker, denoise, guide grow/shrink); auto/green/blue with pinned blue weights; every EXR linear (FG was sRGB); In/Out; Straight/Premult choice feeds the next node; OpenCV EXR codec enabled (engine could never write its EXRs); log handler leak fixed. Verified on 1080 and 4K ACES plates |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
 | H16 | AI Roto | Depth units and direction wrong: hides limbs in front | 2 | | ☐ |
 | H17 | RotoToShape | Reused shape IDs change point count and the exporter truncates. Layers merged (wrong folder) | 2 | | ☑ |

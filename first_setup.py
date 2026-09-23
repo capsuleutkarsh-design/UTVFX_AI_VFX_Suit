@@ -62,6 +62,7 @@ REV = {
     "sam2_hf": "e6a8e8809b8f1bfa2238b6d080f3d05cc76bd251",
     "vitmatte": "6a58ad7646403c1df626fbd746900aec7361ea1d",
     "corridorkey": "f6386ddf042d8e92aeb5fd16cb9b101cff508195",
+    "corridorkey_blue": "51e6ccaa4b703f54be20a72ac2c37784fb9ba1cd",
     "birefnet": "e2bf8e4460fc8fa32bba5ea4d94b3233d367b0e4",
     "birefnet_matting": "eccde0a8cbdce7ac5fecfeb06340fe7b949e85d9",
     "birefnet_portrait": "b6561965a70070d9143fd9e558f6ca3c481510db",
@@ -130,6 +131,12 @@ MODELS = [
      "url": _hf("nikopueringer/CorridorKey_v1.0", REV["corridorkey"], "CorridorKey_v1.0.safetensors"),
      "path": "models/CorridorKey/CorridorKey_v1.0.safetensors",
      "sha256": "74d614f7d92fc559a118c30a7deadedc3cacd8ef83dcb85a030d0bed7af8b20b", "size": 398849256},
+    # Blue-screen weights: used when Screen Color is "blue" (or "auto" finds a blue screen).
+    # Without them the engine would fetch the latest upload at run time, unpinned.
+    {"name": "CorridorKey (Blue)", "type": "file",
+     "url": _hf("nikopueringer/CorridorKeyBlue_1.0", REV["corridorkey_blue"], "CorridorKeyBlue_1.0.safetensors"),
+     "path": "models/CorridorKey/CorridorKeyBlue_1.0.safetensors",
+     "sha256": "43bc5f6a08a9e5effe5d633d0d84bb0aff91037b35ab85d16cd812b38c5cac23", "size": 398849256},
 
     # BiRefNet. Its repos ship model code (birefnet.py) that transformers runs with
     # trust_remote_code, so the revision is pinned and the app never downloads it again

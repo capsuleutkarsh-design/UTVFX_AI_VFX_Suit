@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("OPENCV_IO_ENABLE_OPENEXR", "1")  # as main.py does, before cv2 loads
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
