@@ -183,6 +183,14 @@ QSpinBox::up-button, QSpinBox::down-button, QDoubleSpinBox::up-button, QDoubleSp
 QComboBox::drop-down {{ border: none; width: 18px; }}
 QComboBox::down-arrow {{ image: url("{_ASSETS}/combo-arrow.svg"); width: 10px; height: 6px; }}
 QLineEdit[role="mono"] {{ font-family: "{FONT_MONO}", "Consolas", monospace; }}
+QLineEdit[role="number"] {{
+    font-family: "{FONT_MONO}", "Consolas", monospace;
+    background: {BG_INPUT}; border: 1px solid transparent; border-radius: 3px;
+    padding: 1px 4px; color: {TEXT};
+}}
+QLineEdit[role="number"]:hover {{ border-color: {BORDER_SOFT}; }}
+QLineEdit[role="number"]:focus {{ border-color: {ACCENT}; }}
+QTabBar[role="compact"]::tab {{ padding: 5px 8px; }}
 QComboBox QAbstractItemView {{
     background: {BG_HEADER}; border: 1px solid {BORDER}; selection-background-color: {ACCENT_MUTED}; padding: 2px;
 }}

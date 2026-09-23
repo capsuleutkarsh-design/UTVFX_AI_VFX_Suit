@@ -5,6 +5,25 @@ from PySide6.QtCore import Qt, QPointF
 from utvfx.ui import theme
 
 
+def port_direction(port):
+    """Unit vector a wire leaves `port` along."""
+    if getattr(port.node, "plugin_type", None) == "dot_node":
+        return QPointF(0, 1) if port.is_output else QPointF(0, -1)
+    return QPointF(1, 0) if port.is_output else QPointF(-1, 0)
+
+
+def _reach(direction, pos1, pos2):
+    """Tangent length: half the gap along the tangent's axis, at least 40 px.
+
+    Vertical (Dot) tangents stay short when the ends are close, so a Dot right
+    under its source does not loop.
+    """
+    if direction.x() != 0:
+        return max(abs(pos2.x() - pos1.x()) * 0.5, 40.0)
+    gap = abs(pos2.y() - pos1.y())
+    return max(gap * 0.5, min(40.0, gap * 0.5 + 12.0))
+
+
 class ConnectionItem(QGraphicsPathItem):
     """A plain cubic bezier wire between two ports."""
     def __init__(self, port1, port2=None):
@@ -32,20 +51,13 @@ class ConnectionItem(QGraphicsPathItem):
         path = QPainterPath()
         path.moveTo(pos1)
 
-        # Control points for the cubic bezier
-        dx = abs(pos2.x() - pos1.x()) * 0.5
-        dx = max(dx, 40.0)
-
-        cp1_x = pos1.x() + dx if self.port1.is_output else pos1.x() - dx
-
-        if self.port2:
-            cp2_x = pos2.x() + dx if self.port2.is_output else pos2.x() - dx
-        else:
-            cp2_x = pos2.x() - dx if self.port1.is_output else pos2.x() + dx
-
+        # Each end leaves along its port's direction: sideways for node ports,
+        # up/down for a Dot (input on top, output below).
+        d1 = port_direction(self.port1)
+        d2 = port_direction(self.port2) if self.port2 else QPointF(-d1.x(), -d1.y())
         path.cubicTo(
-            QPointF(cp1_x, pos1.y()),
-            QPointF(cp2_x, pos2.y()),
+            pos1 + d1 * _reach(d1, pos1, pos2),
+            pos2 + d2 * _reach(d2, pos1, pos2),
             pos2
         )
         self.setPath(path)

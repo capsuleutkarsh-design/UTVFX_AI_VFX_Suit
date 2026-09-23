@@ -29,8 +29,10 @@ class ThumbnailGeneratorThread(QThread):
         
         cap = None
         files = []
-        if self.is_sequence and os.path.isdir(self.media_path):
-            files = sorted([f for f in os.listdir(self.media_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx'))])
+        if self.is_sequence:
+            # Same frame order as the player, so thumbnails sit under their frames
+            from utvfx.playback.video_player import sequence_files
+            files = sequence_files(self.media_path)[0]
         elif not self.is_sequence:
             cap = cv2.VideoCapture(self.media_path)
             
@@ -39,7 +41,7 @@ class ThumbnailGeneratorThread(QThread):
             
             frame = None
             if self.is_sequence and i < len(files):
-                path = os.path.join(self.media_path, files[i])
+                path = files[i]
                 from utvfx.core.image_utils import load_frame
                 frame = load_frame(path)
             elif cap:
@@ -118,6 +120,15 @@ class TimelineWidget(QWidget):
         self._total_frames = max(1, total)
         self._start_frame = start_frame
         self.update()
+
+    @staticmethod
+    def index_for_frame_number(number, start_frame, total_frames):
+        """Timeline position for a plate frame number (1025 on a plate from 1001 -> 24), clamped."""
+        return max(0, min(int(number) - int(start_frame), max(0, int(total_frames) - 1)))
+
+    def frame_number(self, index=None):
+        """Plate frame number shown for a timeline position (the current one by default)."""
+        return (self._current_frame if index is None else index) + self._start_frame
 
     def set_media_path(self, media_path, is_sequence):
         if self._thumbnail_thread:

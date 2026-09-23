@@ -5,10 +5,13 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QPushButton, QRadioButton, QFileDialog, QColorDialog,
     QGroupBox, QSizePolicy
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 
 from utvfx.ui import icons, theme
+from utvfx.ui.number_field import NumberField
+from utvfx.ui.param_undo import push_param
+from utvfx.ui.swatch import SwatchButton
 
 # Width of the label column, so every parameter row lines up.
 LABEL_WIDTH = 140
@@ -33,14 +36,6 @@ def sentence_case(text):
         return word
 
     return re.sub(r"[A-Za-z]+", visit, text)
-
-
-def _swatch_style(colour):
-    return (
-        f"QPushButton {{ background: {colour}; border: 1px solid {theme.BORDER_SOFT};"
-        f" border-radius: 2px; padding: 0; }}"
-        f"QPushButton:hover {{ border-color: {theme.TEXT_DIM}; }}"
-    )
 
 
 def build_param_widget(panel, param, color):
@@ -75,91 +70,132 @@ def build_param_widget(panel, param, color):
     # Get value from node params, fallback to default
     if not hasattr(panel.current_node, "params"):
         panel.current_node.params = {}
-        
-    val = panel.current_node.params.get(pid, param["value"])
-    
+
+    node = panel.current_node
+    val = node.params.get(pid, param["value"])
+
+    def current(p=pid):
+        return node.params.get(p, param["value"])
+
+    def push(new_val, description=None, old_val=None):
+        """One undoable edit of this parameter (skipped when nothing changed)."""
+        old = current() if old_val is None else old_val
+        return push_param(node, pid, old, new_val, description or f"Change {label_text.lower()}")
+
+    # Every row can be re-synced from the node (after undo/redo) without a rebuild.
+    container.param_id = pid
+    container.sync = lambda value: None
+    container.flush = lambda: None
+
     if ptype == "slider":
         h_layout = QHBoxLayout()
-        h_layout.setContentsMargins(0,0,0,0)
-        
-        slider = QSlider(Qt.Orientation.Horizontal)
+        h_layout.setContentsMargins(0, 0, 0, 0)
+        h_layout.setSpacing(6)
+
         step_val = param.get("step", param.get("value", 1))
-        is_float = isinstance(step_val, float)
+        is_float = isinstance(step_val, float) or isinstance(param.get("value"), float)
         mult = 100 if is_float else 1
-        
-        slider.setRange(int(param["min"] * mult), int(param["max"] * mult))
-        slider.setValue(int(val * mult))
+        step = param.get("step") or (0.01 if is_float else 1)
+
+        def to_value(slider_pos):
+            return slider_pos / mult if is_float else int(slider_pos)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(int(round(param["min"] * mult)), int(round(param["max"] * mult)))
+        slider.setSingleStep(max(1, int(round(step * mult))))
+        slider.setPageStep(max(1, int(round(step * mult)) * 10))
+        slider.setValue(int(round(val * mult)))
         if tooltip:
             slider.setToolTip(tooltip)
 
-        val_lbl = theme.set_role(QLabel(f"{val:.2f}" if mult == 100 else str(val)), "mono")
-        val_lbl.setMinimumWidth(44)
-        val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        
-        def on_change(v, l=val_lbl, m=mult, p=pid):
-            actual_v = v / m
-            l.setText(f"{actual_v:.2f}" if m == 100 else str(int(actual_v)))
-            panel.current_node.params[p] = actual_v
-            
-        def on_press(p=pid):
-            slider.old_val = panel.current_node.params.get(p, param["value"])
-            
-        def on_release(m=mult, p=pid):
-            actual_v = slider.value() / m
-            if hasattr(slider, 'old_val') and slider.old_val != actual_v:
-                scene = panel.current_node.scene()
-                if scene and scene.undo_stack:
-                    from utvfx.core.commands import ChangeParamCommand
-                    cmd = ChangeParamCommand(panel.current_node, p, slider.old_val, actual_v)
-                    scene.undo_stack.push(cmd)
-            
-        slider.valueChanged.connect(on_change)
-        slider.sliderPressed.connect(on_press)
-        slider.sliderReleased.connect(on_release)
-        
-        h_layout.addWidget(slider)
-        h_layout.addWidget(val_lbl)
-        layout.addLayout(h_layout)
-        
+        field = NumberField(val, param["min"], param["max"], step, 2 if is_float else 0)
+
+        # One undo command per gesture: a handle drag, a number-field drag or entry,
+        # or a burst of wheel / arrow-key / groove-click steps (debounced).
+        gesture = {"old": None}
+        settle = QTimer(slider)
+        settle.setSingleShot(True)
+        settle.setInterval(400)
+
+        def begin():
+            if gesture["old"] is None:
+                gesture["old"] = current()
+
+        def finish():
+            settle.stop()
+            old, gesture["old"] = gesture["old"], None
+            if old is not None:
+                push(current(), old_val=old)
+
+        def set_live(value):
+            node.params[pid] = value
+
+        def on_slider_value(pos):
+            value = to_value(pos)
+            if not slider.isSliderDown():
+                begin()          # wheel, keys or a groove click
+                settle.start()
+            set_live(value)
+            field.setValue(value)
+
+        def on_field_value(value):
+            value = value if is_float else int(value)
+            begin()
+            set_live(value)
+            slider.blockSignals(True)
+            slider.setValue(int(round(value * mult)))
+            slider.blockSignals(False)
+
+        def on_field_committed(_old, _new):
+            finish()
+
+        slider.sliderPressed.connect(begin)
+        slider.sliderReleased.connect(finish)
+        slider.valueChanged.connect(on_slider_value)
+        settle.timeout.connect(finish)
+        field.valueChanged.connect(on_field_value)
+        field.committed.connect(on_field_committed)
+
+        def sync(value):
+            if gesture["old"] is not None:
+                return  # mid-gesture: the widget is the source of truth
+            slider.blockSignals(True)
+            slider.setValue(int(round(value * mult)))
+            slider.blockSignals(False)
+            field.setValue(value)
+
+        container.sync = sync
+        container.flush = finish
+        container.slider = slider
+        container.field = field
+
+        h_layout.addWidget(slider, 1)
+        h_layout.addWidget(field)
+        layout.addLayout(h_layout, 1)
+
     elif ptype == "text" or ptype == "file" or ptype == "folder":
         line = QLineEdit(str(val))
         if tooltip:
             line.setToolTip(tooltip)
 
         def text_changed(t, p=pid):
-            old_val = panel.current_node.params.get(p, param["value"])
-            
-            if panel.current_node.plugin_type == "media_plate" and p == "plate_file":
-                from utvfx.core.settings_manager import SettingsManager
-                sm = SettingsManager()
-                if sm.current_project_name == "Untitled":
-                    import os, re
-                    basename = os.path.basename(t)
-                    name, ext = os.path.splitext(basename)
-                    shot_name = name
-                    if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
-                        clean_name = re.sub(r'[\._-]?\d+$', '', name)
-                        if clean_name:
-                            shot_name = clean_name
-                        else:
-                            folder_name = os.path.basename(os.path.dirname(t))
-                            if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
-                                shot_name = folder_name
-                    sm.set_project_name(shot_name)
-                    window = panel.window()
-                    if hasattr(window, "set_project_title"):
-                        window.set_project_title(shot_name)
+            if str(current()) == t:
+                return  # focus left an unchanged field
 
-            scene = panel.current_node.scene()
-            if scene and scene.undo_stack:
-                from utvfx.core.commands import ChangeParamCommand
-                cmd = ChangeParamCommand(panel.current_node, p, old_val, t)
-                scene.undo_stack.push(cmd)
-            else:
-                panel.current_node.params[p] = t
-                
+            if node.plugin_type == "media_plate" and p == "plate_file":
+                _name_untitled_project(panel, t)
+
+            push(t)
+
         line.editingFinished.connect(lambda: text_changed(line.text()))
-        
+
+        def sync(value, l=line):
+            if not l.hasFocus() and l.text() != str(value):
+                l.setText(str(value))
+
+        container.sync = sync
+        container.line = line
+
         if ptype == "file" or ptype == "folder":
             line.setPlaceholderText("Select " + ("file" if ptype == "file" else "folder") + " path…")
             h = QHBoxLayout()
@@ -168,24 +204,24 @@ def build_param_widget(panel, param, color):
             btn.setIcon(icons.icon("folder" if ptype == "folder" else "open"))
             btn.setToolTip("Browse")
 
-            def open_file(*args, l=line, p=pid, is_folder=(ptype=="folder")):
+            def open_file(*args, l=line, p=pid, is_folder=(ptype == "folder")):
                 if is_folder:
                     path = QFileDialog.getExistingDirectory(panel, "Select folder")
                 else:
                     path, _ = QFileDialog.getOpenFileName(panel, "Select file")
-                    
+
                 if path:
                     l.setText(path)
                     text_changed(path, p)
-                    
+
             btn.clicked.connect(open_file)
-            
+
             h.addWidget(line)
             h.addWidget(btn)
             layout.addLayout(h)
         else:
             layout.addWidget(line)
-            
+
     elif ptype == "select":
         combo = QComboBox()
         combo.addItems(param["options"])
@@ -194,95 +230,107 @@ def build_param_widget(panel, param, color):
         if tooltip:
             combo.setToolTip(tooltip)
 
-        def combo_changed(t, p=pid):
-            old_val = panel.current_node.params.get(p, param["value"])
-            scene = panel.current_node.scene()
-            if scene and scene.undo_stack:
-                from utvfx.core.commands import ChangeParamCommand
-                cmd = ChangeParamCommand(panel.current_node, p, old_val, t)
-                scene.undo_stack.push(cmd)
-            else:
-                panel.current_node.params[p] = t
-                
-        combo.currentTextChanged.connect(combo_changed)
+        combo.currentTextChanged.connect(lambda t: push(t))
+
+        def sync(value, c=combo):
+            c.blockSignals(True)
+            c.setCurrentText(str(value))
+            c.blockSignals(False)
+
+        container.sync = sync
+        container.combo = combo
         layout.addWidget(combo)
-        
+
     elif ptype == "checkbox":
         chk = QCheckBox()
         chk.setChecked(bool(val))
         if tooltip:
             chk.setToolTip(tooltip)
 
-        def checkbox_changed(checked, p=pid):
-            old_val = panel.current_node.params.get(p, param["value"])
-            scene = panel.current_node.scene()
-            if scene and scene.undo_stack:
-                from utvfx.core.commands import ChangeParamCommand
-                cmd = ChangeParamCommand(panel.current_node, p, old_val, checked)
-                scene.undo_stack.push(cmd)
-            else:
-                panel.current_node.params[p] = checked
-                
-        chk.toggled.connect(checkbox_changed)
+        chk.toggled.connect(lambda checked: push(checked))
+
+        def sync(value, c=chk):
+            c.blockSignals(True)
+            c.setChecked(bool(value))
+            c.blockSignals(False)
+
+        container.sync = sync
+        container.checkbox = chk
         layout.addWidget(chk)
         layout.addStretch()
-        
+
     elif ptype == "radio":
         h = QHBoxLayout()
-        h.setContentsMargins(0,0,0,0)
+        h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(12)
+        buttons = []
         for opt in param["options"]:
             rb = QRadioButton(opt)
             if str(val) == opt:
                 rb.setChecked(True)
-                
-            def radio_changed(checked, o=opt, p=pid):
+
+            def radio_changed(checked, o=opt):
                 if checked:
-                    old_val = panel.current_node.params.get(p, param["value"])
-                    scene = panel.current_node.scene()
-                    if scene and scene.undo_stack:
-                        from utvfx.core.commands import ChangeParamCommand
-                        cmd = ChangeParamCommand(panel.current_node, p, old_val, o)
-                        scene.undo_stack.push(cmd)
-                    else:
-                        panel.current_node.params[p] = o
-                        
+                    push(o)
+
             rb.toggled.connect(radio_changed)
+            buttons.append(rb)
             h.addWidget(rb)
         h.addStretch()
         layout.addLayout(h)
-        
+
+        def sync(value, bs=buttons):
+            for b in bs:
+                b.blockSignals(True)
+                b.setChecked(b.text() == str(value))
+                b.blockSignals(False)
+
+        container.sync = sync
+
     elif ptype == "layer_manager":
         from utvfx.ui.panels.layer_manager_ui import LayerManagerWidget
-        layer_mgr = LayerManagerWidget(panel.current_node, pid, color)
+        layer_mgr = LayerManagerWidget(node, pid, color)
         layer_mgr.setMinimumHeight(120)
         layout.addWidget(layer_mgr)
-        
+        container.sync = lambda value: layer_mgr.sync()
+        container.layer_manager = layer_mgr
+
     elif ptype == "color":
-        btn = QPushButton()
+        btn = SwatchButton(val)
         btn.setFixedSize(28, 20)
-        btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn.setToolTip(str(val))
-        btn.setStyleSheet(_swatch_style(val))
-        
-        def choose_color(checked=False, b=btn, p=pid, init_color=val):
-            c = QColorDialog.getColor(QColor(panel.current_node.params.get(p, init_color)), panel, "Select colour")
+
+        def choose_color(checked=False, b=btn):
+            c = QColorDialog.getColor(QColor(current()), panel, "Select colour")
             if c.isValid():
-                h_color = c.name()
-                b.setStyleSheet(_swatch_style(h_color))
-                b.setToolTip(h_color)
-                
-                old_val = panel.current_node.params.get(p, param["value"])
-                scene = panel.current_node.scene()
-                if scene and scene.undo_stack:
-                    from utvfx.core.commands import ChangeParamCommand
-                    cmd = ChangeParamCommand(panel.current_node, p, old_val, h_color)
-                    scene.undo_stack.push(cmd)
-                else:
-                    panel.current_node.params[p] = h_color
-                
+                b.setColour(c.name())
+                push(c.name())
+
         btn.clicked.connect(choose_color)
+        container.sync = lambda value, b=btn: b.setColour(value)
         layout.addWidget(btn)
         layout.addStretch()
-        
+
     return container
+
+
+def _name_untitled_project(panel, plate_path):
+    """Name an untitled project after the plate the user just picked."""
+    import os
+    from utvfx.core.settings_manager import SettingsManager
+    sm = SettingsManager()
+    if sm.current_project_name != "Untitled":
+        return
+    name, ext = os.path.splitext(os.path.basename(plate_path))
+    shot_name = name
+    if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
+        clean_name = re.sub(r'[\._-]?\d+$', '', name)
+        if clean_name:
+            shot_name = clean_name
+        else:
+            folder_name = os.path.basename(os.path.dirname(plate_path))
+            if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
+                shot_name = folder_name
+    sm.set_project_name(shot_name)
+    window = panel.window()
+    if hasattr(window, "set_project_title"):
+        window.set_project_title(shot_name)

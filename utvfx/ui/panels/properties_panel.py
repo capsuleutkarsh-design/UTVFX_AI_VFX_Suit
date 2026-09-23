@@ -5,10 +5,12 @@ from PySide6.QtWidgets import (
 )
 from utvfx.ui import icons, theme
 from utvfx.ui.panels.param_widgets import build_param_widget, sentence_case
+from utvfx.ui.swatch import Swatch
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont, QColor
 import os
 import json
+import shiboken6
 from utvfx.core.data_model import NODES_REGISTRY
 
 class PropertiesPanel(QWidget):
@@ -22,6 +24,8 @@ class PropertiesPanel(QWidget):
         self.console_widget = None
         self.node_logs = {} # node_id -> list of log messages
         self.node_progress = {} # node_id -> int
+        self._param_rows = {}  # param id -> row widget with sync()/flush()
+        self._built_for = None  # (id(node), plugin_type) the rows were built for
         
         self.setup_ui()
 
@@ -40,8 +44,7 @@ class PropertiesPanel(QWidget):
         h_layout.setContentsMargins(10, 0, 10, 0)
         h_layout.setSpacing(theme.SPACING)
 
-        self.category_chip = QFrame()
-        self.category_chip.setFixedSize(10, 10)
+        self.category_chip = Swatch(theme.NODE_CATEGORY_COLOURS["utility"], 10)
         self.category_chip.hide()
         h_layout.addWidget(self.category_chip)
 
@@ -116,6 +119,14 @@ class PropertiesPanel(QWidget):
         main_layout.addWidget(self.splitter)
 
     def _clear_layout(self, layout):
+        # Close any slider gesture still waiting to become an undo step.
+        for row in getattr(self, "_param_rows", {}).values():
+            try:
+                row.flush()
+            except RuntimeError:
+                pass  # widget already gone
+        self._param_rows = {}
+        self._built_for = None
         while layout.count():
             child = layout.takeAt(0)
             if child.widget():
@@ -123,15 +134,43 @@ class PropertiesPanel(QWidget):
             elif child.layout():
                 self._clear_layout(child.layout())
 
+    def _sync_rows(self):
+        """Show the node's current values in the existing widgets. False if a rebuild is needed."""
+        node = self.current_node
+        if node is None or self._built_for != (id(node), node.plugin_type) or not self._param_rows:
+            return False
+        try:
+            if node.scene() is None:
+                return False  # removed from the graph (undo of an add)
+        except RuntimeError:
+            return False  # the item itself is gone
+        defaults = {p["id"]: p["value"] for p in (self.node_def or {}).get("parameters", [])}
+        try:
+            for pid, row in self._param_rows.items():
+                row.sync(node.params.get(pid, defaults.get(pid)))
+        except RuntimeError:
+            return False  # a row was deleted under us
+        return True
+
     @Slot()
     def refresh_ui(self):
+        """Called after undo/redo and engine updates: update values in place.
+
+        Rebuilding the panel here would destroy the widget under the mouse and
+        drop the click that caused the edit, so only rebuild when the node changed.
+        """
         if getattr(self, "current_node", None):
+            if not shiboken6.isValid(self.current_node):
+                self.set_node(None)  # the node's item was deleted (window closing)
+                return
+            if self._sync_rows():
+                return
             current_tab = 0
             if getattr(self, "tabs", None) is not None:
                 current_tab = self.tabs.currentIndex()
-                
+
             self.set_node(self.current_node)
-            
+
             if getattr(self, "tabs", None) is not None and current_tab < self.tabs.count():
                 self.tabs.setCurrentIndex(current_tab)
 
@@ -140,13 +179,14 @@ class PropertiesPanel(QWidget):
         self.lbl_title.setText(text)
         theme.set_role(self.lbl_title, role)
         if chip_colour:
-            self.category_chip.setStyleSheet(
-                f"background: {chip_colour}; border: 1px solid {theme.BORDER}; border-radius: 2px;")
+            self.category_chip.setColour(chip_colour)
             self.category_chip.show()
         else:
             self.category_chip.hide()
 
     def set_node(self, node_item):
+        if node_item is not None and node_item is self.current_node and self._sync_rows():
+            return  # same node selected again: keep the widgets (and the tab)
         self.current_node = node_item
 
         # Clear existing
@@ -179,10 +219,9 @@ class PropertiesPanel(QWidget):
             self.tabs.setUsesScrollButtons(False)
             self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
             self.tabs.tabBar().setExpanding(False)
-            # Layout only: slightly tighter tabs so a five-tab node still fits
-            # the panel's 420 px minimum width (long names elide; tooltips hold
-            # the full name).
-            self.tabs.tabBar().setStyleSheet("QTabBar::tab { padding: 5px 8px; }")
+            # Tighter tabs so a five-tab node still fits the panel's 420 px
+            # minimum width (long names elide; tooltips hold the full name).
+            theme.set_role(self.tabs.tabBar(), "compact")
             tab_dict = {}
             for param in params:
                 t_name = param.get("tab", "General")
@@ -210,13 +249,16 @@ class PropertiesPanel(QWidget):
 
         # Add execution section if applicable
         self._build_execution_section(color)
+        self._built_for = (id(node_item), node_item.plugin_type)
 
         # Force a layout recalculation to prevent the panel from clipping its contents
         self.content_widget.adjustSize()
         self.content_layout.update()
 
     def _build_param_widget(self, param, color):
-        return build_param_widget(self, param, color)
+        row = build_param_widget(self, param, color)
+        self._param_rows[param["id"]] = row
+        return row
 
     def _build_execution_section(self, color):
         self.content_layout.addSpacing(12)

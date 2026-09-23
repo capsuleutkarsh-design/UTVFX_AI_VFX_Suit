@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, Signal, QPointF, QRectF
 from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPixmap, QImage
 
 from utvfx.ui import theme
+from utvfx.ui.param_undo import layers_of, push_layers
 
 # Checkerboard behind transparent pixels (image content, so plain neutral greys).
 CHECKER_DARK = theme.CHECKER_DARK
@@ -24,6 +25,7 @@ class InteractiveVideoCanvas(QWidget):
         self.pan_y = 0.0
         
         self.is_interactive = False
+        self.node = None  # the node whose click points are edited (set by the viewport)
         self.current_frame = 0
         self.mask_layers = []
         self.active_layer_id = None
@@ -95,16 +97,70 @@ class InteractiveVideoCanvas(QWidget):
             self.current_mask_overlay = qimage
             self.update()
 
+    # ---- click points (edited through undo) ---------------------------------------
+    @staticmethod
+    def _points_by_key(layers):
+        return {
+            (layer["id"], frame): points
+            for layer in layers or []
+            for frame, points in (layer.get("keyframes") or {}).items()
+        }
+
+    def _active_layer(self, layers=None):
+        layers = self.mask_layers if layers is None else layers
+        return next((l for l in layers if l["id"] == self.active_layer_id), None)
+
+    def sync_layers(self, layers, active_layer_id):
+        """Show `layers` (the node's mask_layers), e.g. after an edit, undo or redo.
+
+        Masks cached for frames whose points changed are dropped, and the current
+        frame's mask is requested again if its points changed.
+        """
+        layers = layers if layers is not None else []
+        old = self._points_by_key(self.mask_layers)
+        new = self._points_by_key(layers)
+        changed = {k for k in old.keys() | new.keys() if old.get(k) != new.get(k)}
+        for key in changed:
+            self.mask_overlays.pop(key, None)
+
+        self.mask_layers = layers
+        self.active_layer_id = active_layer_id
+        self.current_mask_overlay = self.mask_overlays.get((active_layer_id, self.current_frame))
+
+        active = self._active_layer()
+        keyframes = (active or {}).get("keyframes") or {}
+        self.keyframes_changed.emit(list(keyframes.keys()))
+        points = keyframes.get(self.current_frame)
+        if (active_layer_id, self.current_frame) in changed and points:
+            self.interaction_requested.emit(self.current_frame, points)
+        self.update()
+
+    def _edit_points(self, edit, description):
+        """Apply `edit(points)` to the active layer on the current frame, as one undo step."""
+        pid = "mask_layers"
+        node = self.node
+        if node is None or not hasattr(node, "params"):
+            return False
+        layers = layers_of(node, pid)
+        active = self._active_layer(layers)
+        if active is None:
+            return False
+        keyframes = active.setdefault("keyframes", {})
+        points = edit(list(keyframes.get(self.current_frame, [])))
+        if points:
+            keyframes[self.current_frame] = points
+        else:
+            keyframes.pop(self.current_frame, None)
+        if push_layers(node, layers, description, pid):
+            self.sync_layers(node.params.get(pid), node.params.get("active_layer_id", self.active_layer_id))
+            return True
+        return False
+
+    def add_point(self, point, description="Add point"):
+        return self._edit_points(lambda pts: pts + [point], description)
+
     def clear_current_frame_points(self):
-        active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-        if active_layer and "keyframes" in active_layer and self.current_frame in active_layer["keyframes"]:
-            del active_layer["keyframes"][self.current_frame]
-            cache_key = (self.active_layer_id, self.current_frame)
-            if cache_key in self.mask_overlays:
-                del self.mask_overlays[cache_key]
-            self.current_mask_overlay = None
-            self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-            self.update()
+        self._edit_points(lambda pts: [], "Clear points")
 
     def wheelEvent(self, event):
         # Zoom in/out with mouse scroll
@@ -199,12 +255,8 @@ class InteractiveVideoCanvas(QWidget):
                     norm_y = click_y / drawn_h
                     
                     tool_mode = "Point"
-                    p = self.parent()
-                    while p:
-                        if hasattr(p, "current_node") and p.current_node:
-                            tool_mode = p.current_node.params.get("tool_mode", "Point")
-                            break
-                        p = p.parent()
+                    if self.node is not None:
+                        tool_mode = getattr(self.node, "params", {}).get("tool_mode", "Point")
                         
                     if tool_mode == "Box":
                         self.drag_start_pos = (norm_x, norm_y)
@@ -214,20 +266,9 @@ class InteractiveVideoCanvas(QWidget):
                         return
                     
                     is_positive = (event.modifiers() != Qt.ShiftModifier)
-                    
-                    active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-                    if active_layer:
-                        if "keyframes" not in active_layer:
-                            active_layer["keyframes"] = {}
-                        if self.current_frame not in active_layer["keyframes"]:
-                            active_layer["keyframes"][self.current_frame] = []
-                            
-                        active_layer["keyframes"][self.current_frame].append((norm_x, norm_y, is_positive))
-                        self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-                        
-                        # Emit interaction request for live preview
-                        self.interaction_requested.emit(self.current_frame, active_layer["keyframes"][self.current_frame])
-                        self.update()
+                    # One undo step; sync_layers then asks for a live preview of the mask.
+                    self.add_point((norm_x, norm_y, is_positive),
+                                   "Add point" if is_positive else "Add exclude point")
             
         super().mousePressEvent(event)
 
@@ -241,16 +282,7 @@ class InteractiveVideoCanvas(QWidget):
             y2 = max(self.drag_start_pos[1], self.drag_current_pos[1])
             
             if x2 - x1 > 0.01 and y2 - y1 > 0.01:
-                active_layer = next((l for l in self.mask_layers if l["id"] == self.active_layer_id), None)
-                if active_layer:
-                    if "keyframes" not in active_layer:
-                        active_layer["keyframes"] = {}
-                    if self.current_frame not in active_layer["keyframes"]:
-                        active_layer["keyframes"][self.current_frame] = []
-                        
-                    active_layer["keyframes"][self.current_frame].append((x1, y1, x2, y2, "box"))
-                    self.keyframes_changed.emit(list(active_layer["keyframes"].keys()))
-                    self.interaction_requested.emit(self.current_frame, active_layer["keyframes"][self.current_frame])
+                self.add_point((x1, y1, x2, y2, "box"), "Add box")
             self.update()
             return
             
@@ -342,6 +374,8 @@ class InteractiveVideoCanvas(QWidget):
         if self.is_interactive:
             for layer in self.mask_layers:
                 is_active = (layer["id"] == self.active_layer_id)
+                if not is_active and not layer.get("enabled", True):
+                    continue  # hidden layer
                 
                 # (Points from inactive layers will be drawn dimmed/smaller below)
                 points = layer.get("keyframes", {}).get(self.current_frame, [])

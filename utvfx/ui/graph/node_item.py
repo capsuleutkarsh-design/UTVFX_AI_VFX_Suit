@@ -175,12 +175,13 @@ class DotNodeItem(QGraphicsObject):
         painter.restore()
 
     def itemChange(self, change, value):
-        if change == QGraphicsItem.ItemPositionChange:
+        # After the move, not before it, so wires end on the Dot's new position.
+        if change == QGraphicsItem.ItemPositionHasChanged:
             for port in self.inputs + self.outputs:
                 for conn in port.connections:
                     conn.update_path()
         return super().itemChange(change, value)
-        
+
     def toggle_disable(self):
         self.is_disabled = not self.is_disabled
         self.update()
