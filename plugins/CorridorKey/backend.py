@@ -13,6 +13,28 @@ if SYSTEM_DIR not in sys.path:
 
 from utvfx.bridge.base_worker import BaseWorker
 
+
+def _use_shared_models_dir():
+    """Point the vendored CorridorKey and BiRefNet modules at the suite's models folder."""
+    from utvfx.core.settings_manager import SettingsManager
+    import CorridorKeyModule.backend as ck_backend
+    import BiRefNetModule.wrapper as birefnet_wrapper
+    from transformers import AutoModelForImageSegmentation
+
+    models_dir = SettingsManager().models_dir
+    ck_backend.CHECKPOINT_DIR = os.path.join(models_dir, "CorridorKey")
+    birefnet_wrapper.base_folder = os.path.join(models_dir, "BiRefNet")
+
+    # BiRefNet ships its model code with its weights; newer transformers only loads it with trust_remote_code.
+    class _BiRefNetLoader:
+        @staticmethod
+        def from_pretrained(path, **kwargs):
+            kwargs["trust_remote_code"] = True
+            return AutoModelForImageSegmentation.from_pretrained(path, **kwargs)
+
+    birefnet_wrapper.AutoModelForImageSegmentation = _BiRefNetLoader
+
+
 class CorridorKeyWorker(BaseWorker):
     def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
         super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
@@ -30,6 +52,7 @@ class CorridorKeyWorker(BaseWorker):
 
     def run_task(self):
         from clip_manager import ClipAsset, ClipEntry, InferenceSettings, run_inference, run_birefnet
+        _use_shared_models_dir()
         import logging
         
         # Setup logging to route to UI

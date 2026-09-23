@@ -216,7 +216,13 @@ class SuperMatteWorker(BaseWorker):
                     transformers.utils.FLAX_WEIGHTS_NAME = "flax_model.msgpack"
                 
                 from plugins.CorridorKey.System.VideoMaMaInferenceModule.inference import load_videomama_model
-                videomama_pipeline = load_videomama_model(device=device)
+                from utvfx.core.settings_manager import SettingsManager
+                videomama_dir = os.path.join(SettingsManager().models_dir, "VideoMaMa")
+                videomama_pipeline = load_videomama_model(
+                    base_model_path=os.path.join(videomama_dir, "stable-video-diffusion-img2vid-xt"),
+                    unet_checkpoint_path=videomama_dir,
+                    device=device,
+                )
                 use_videomama = True
             elif refiner_mode == "MEMatte" or refiner_mode == "MEMatte (Local)":
                 import sys
