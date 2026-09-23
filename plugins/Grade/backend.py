@@ -1,102 +1,68 @@
+"""Grade: Nuke's Grade in scene-linear ACEScg, on the full-quality frames, alpha untouched.
+
+    A = multiply * (gain - lift) / (whitepoint - blackpoint)
+    B = offset + lift - A * blackpoint
+    out = (A * in + B) ** (1 / gamma)     (gamma only on positive values)
+"""
 import os
-import cv2
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
+
 from utvfx.bridge.base_worker import BaseWorker
+from utvfx.core import colour, image_nodes
+
+
+def grade(rgb, blackpoint=0.0, whitepoint=1.0, lift=0.0, gain=1.0, multiply=1.0, offset=0.0, gamma=1.0,
+          black_clamp=True, white_clamp=False):
+    a = multiply * (gain - lift) / (whitepoint - blackpoint if abs(whitepoint - blackpoint) > 1e-6 else 1e-6)
+    b = offset + lift - a * blackpoint
+    out = a * rgb + b
+    if gamma != 1.0:
+        out = np.where(out > 0, np.power(np.maximum(out, 0), 1.0 / max(gamma, 1e-6)), out)
+    if black_clamp:
+        out = np.maximum(out, 0.0)
+    if white_clamp:
+        out = np.minimum(out, 1.0)
+    return out.astype(np.float32)
+
 
 class GradeWorker(BaseWorker):
     def run_task(self):
-        self.progress_update.emit(self.node_id, 0, 100)
-        
-        # Get parameters
-        blackpoint = float(self.params.get("blackpoint", 0.0))
-        whitepoint = float(self.params.get("whitepoint", 1.0))
-        lift = float(self.params.get("lift", 0.0))
-        gain = float(self.params.get("gain", 1.0))
-        multiply = float(self.params.get("multiply", 1.0))
-        offset = float(self.params.get("offset", 0.0))
-        gamma = float(self.params.get("gamma", 1.0))
-        
-        # Resolve input media
-        input_media = self.inputs.get("Image")
-        if not input_media or not os.path.exists(input_media):
-            raise Exception("No upstream media found to grade.")
-            
-        is_sequence = os.path.isdir(input_media)
-        if is_sequence:
-            files = sorted([f for f in os.listdir(input_media) if os.path.isfile(os.path.join(input_media, f))])
-            if not files:
-                raise Exception("Input directory is empty.")
-        else:
-            files = [os.path.basename(input_media)]
-            input_media = os.path.dirname(input_media)
-            
-        total = len(files)
-        
-        # Calculate grade constants
-        A = multiply * (gain - lift) / max(whitepoint - blackpoint, 1e-5)
-        B = offset + lift - A * blackpoint
-        gamma_inv = 1.0 / max(gamma, 1e-5)
-        
-        import concurrent.futures
-        
-        cv2.setNumThreads(0)  # Prevent OpenCV internal thread thrashing
-        
-        def process_frame(f):
+        p = self.params
+        values = {k: float(p.get(k, d)) for k, d in (("blackpoint", 0.0), ("whitepoint", 1.0), ("lift", 0.0),
+                                                     ("gain", 1.0), ("multiply", 1.0), ("offset", 0.0),
+                                                     ("gamma", 1.0))}
+        values["black_clamp"] = bool(p.get("black_clamp", True))
+        values["white_clamp"] = bool(p.get("white_clamp", False))
+        unpremult = bool(p.get("unpremult", False))
+
+        frames = image_nodes.Frames(self.inputs.get("Image"), cancelled=lambda: self.is_cancelled)
+        sequence = [frames.sequence[i] for i in self.positions(len(frames.sequence))]
+        out = image_nodes.start_output(self.cache_dir)
+        total = len(sequence)
+        self.log_message.emit(self.node_id, f"Grading {total} frames in ACEScg ({frames.colourspace} input).")
+
+        def work(item):
+            number, path = item
             if self.is_cancelled:
-                return False, None
-                
-            if "OPENCV_IO_ENABLE_OPENEXR" not in os.environ:
-                os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
-            os.environ["OPENCV_IO_MAX_THREADS"] = "1" # Prevent OpenEXR thread explosion
-            
-            in_path = os.path.join(input_media, f)
-            out_path = os.path.join(self.cache_dir, f)
-            
-            img = cv2.imread(in_path, cv2.IMREAD_UNCHANGED)
-            if img is None:
-                return False, f"Failed to read {f}"
-                
-            is_float = img.dtype in [np.float32, np.float64]
-            is_16bit = img.dtype == np.uint16
-            
-            if not is_float:
-                if is_16bit:
-                    img_f = img.astype(np.float32) / 65535.0
-                else:
-                    img_f = img.astype(np.float32) / 255.0
+                return
+            rgb, alpha = frames.read(path)
+            if unpremult and alpha is not None:
+                safe = np.where(alpha > 1e-6, alpha, 1.0)
+                rgb = grade(rgb / safe, **values) * np.where(alpha > 1e-6, alpha, 0.0)
             else:
-                img_f = img.astype(np.float32)
-                
-            out = A * img_f + B
-            
-            if gamma != 1.0:
-                out = np.where(out > 0, np.power(out, gamma_inv), 0)
-                
-            if not is_float:
-                if is_16bit:
-                    out = np.clip(out * 65535.0, 0, 65535).astype(np.uint16)
-                else:
-                    out = np.clip(out * 255.0, 0, 255).astype(np.uint8)
-                    
-            cv2.imwrite(out_path, out)
-            return True, None
-            
-        completed = 0
-        
-        # Limit to 6 workers to prevent disk I/O bottleneck and thread explosion
-        workers = min(6, os.cpu_count() or 4)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(process_frame, f) for f in files]
-            for future in concurrent.futures.as_completed(futures):
-                if self.is_cancelled:
-                    self.log_message.emit(self.node_id, "Grade cancelled by user.")
-                    break
-                success, error_msg = future.result()
-                if not success and error_msg:
-                    self.log_message.emit(self.node_id, error_msg)
-                completed += 1
-                if completed % max(1, total // 20) == 0 or completed == total:
-                    pct = int(completed / total * 100)
-                    self.progress_update.emit(self.node_id, pct, 100)
-            
-        self.log_message.emit(self.node_id, "Grading completed.")
+                rgb = grade(rgb, **values)
+            image_nodes.write_frame(out, number, rgb, alpha, colour.SCENE_LINEAR)
+
+        done = 0
+        with ThreadPoolExecutor(max(2, min(6, (os.cpu_count() or 4) - 2))) as pool:
+            for _ in pool.map(work, sequence):
+                done += 1
+                self.progress_update.emit(self.node_id, done, total + 1)
+        if self.is_cancelled:
+            return
+        image_nodes.publish(self.cache_dir, colour.SCENE_LINEAR, frames.working_scale,
+                            cancelled=lambda: self.is_cancelled)
+        self.progress_update.emit(self.node_id, total + 1, total + 1)
+        self.log_message.emit(self.node_id, "Grade complete.")

@@ -22,22 +22,25 @@ NODE_HELP_DATA = {
         }
     },
     "grade": {
-        "description": "The <b>Grade</b> node allows you to perform basic linear color correction, similar to Nuke's Grade node.",
+        "description": "The <b>Grade</b> node is Nuke's Grade: it works in scene-linear ACEScg on the full-quality frames (highlights above 1 are kept) and never changes alpha. The result is a new plate, so AI nodes after it see the graded picture and the Output node gets the graded EXRs.",
         "params": {
-            "blackpoint": "Defines the darkest point of the image. Values below this are crushed to black.",
-            "whitepoint": "Defines the brightest point of the image. Values above this are blown out to white.",
-            "lift": "Lifts the dark areas, effectively changing the black level without affecting pure whites.",
-            "gain": "Multiplies the entire image, brightening or darkening whites while anchoring blacks.",
-            "multiply": "Scales the color values mathematically.",
-            "offset": "Adds a constant value to all pixels, shifting the entire histogram.",
-            "gamma": "Adjusts the midtones of the image via a power curve (non-linear)."
+            "blackpoint": "This input value becomes black (0).",
+            "whitepoint": "This input value becomes white (1).",
+            "lift": "Raises or lowers the blacks while white stays where it is.",
+            "gain": "Scales the whites while black stays where it is.",
+            "multiply": "Multiplies every value (brightness in linear light).",
+            "offset": "Adds a value to every pixel.",
+            "gamma": "Bends the midtones; applied to positive values only.",
+            "black_clamp": "Clamps results below 0, as Nuke does by default.",
+            "white_clamp": "Clamps results above 1. This removes highlight detail.",
+            "unpremult": "For premultiplied RGBA such as the keyer's output: grades the colour without darkening or brightening the soft edges."
         }
     },
     "ocio_colorspace": {
-        "description": "The <b>OCIO Colorspace</b> node handles color transforms using the OpenColorIO standard. Use it to correctly linearize inputs or convert for final display.",
+        "description": "The <b>OCIO ColorSpace</b> node converts pictures with the OpenColorIO config (the ACES studio config unless the OCIO variable names another). Its result is tagged with the new colour space, so the viewer shows it correctly and the Output node writes it as it is.",
         "params": {
-            "in_space": "The color space of the incoming image (e.g., sRGB for standard JPEGs, linear for EXRs).",
-            "out_space": "The target color space to convert the image into."
+            "in_space": "Auto uses the colour space the input is tagged with. Choosing one reinterprets the input's pixels, for footage that was tagged wrongly (for video, set it on the Media Plate).",
+            "out_space": "The colour space to convert to, or a display with its view transform (ACES SDR Video or Un-tone-mapped) for display-referred deliveries."
         }
     },
     "ai_depth_estimator": {

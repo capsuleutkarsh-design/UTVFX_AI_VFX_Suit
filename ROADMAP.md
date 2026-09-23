@@ -39,7 +39,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] CorridorKey (H14)
 - [x] Depth (H15)
 - [x] AI Roto (H16)
-- [ ] Grade / OCIO (M9)
+- [x] Grade / OCIO (M9)
 - [ ] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)
 
 ## Pass 3: Export

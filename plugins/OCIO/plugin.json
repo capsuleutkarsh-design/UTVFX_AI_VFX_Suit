@@ -3,11 +3,68 @@
     "plugin_type": "ocio_colorspace",
     "category": "Color",
     "color": "#ec4899",
-    "inputs": ["Image"],
-    "outputs": ["Image"],
+    "inputs": [
+        "Image"
+    ],
+    "outputs": [
+        "Image"
+    ],
     "parameters": [
-        {"id": "in_space", "name": "Input Color Space", "type": "select", "value": "linear", "options": ["linear", "sRGB", "Rec709", "ACEScg"]},
-        {"id": "out_space", "name": "Output Color Space", "type": "select", "value": "sRGB", "options": ["linear", "sRGB", "Rec709", "ACEScg"]}
+        {
+            "id": "in_space",
+            "name": "Input Colour Space",
+            "type": "select",
+            "value": "Auto",
+            "options": [
+                "Auto",
+                "ACES2065-1",
+                "ACEScg",
+                "ACEScct",
+                "Linear Rec.709 (sRGB)",
+                "sRGB Encoded Rec.709 (sRGB)",
+                "Gamma 2.4 Encoded Rec.709",
+                "ARRI LogC3 (EI800)",
+                "ARRI LogC4",
+                "S-Log3 S-Gamut3",
+                "S-Log3 S-Gamut3.Cine",
+                "Log3G10 REDWideGamutRGB",
+                "V-Log V-Gamut",
+                "CanonLog3 CinemaGamut D55",
+                "Apple Log",
+                "ADX10"
+            ],
+            "tooltip": "Auto uses the colour space the input is tagged with. Choose one to reinterpret the input's pixels as that space."
+        },
+        {
+            "id": "out_space",
+            "name": "Output",
+            "type": "select",
+            "value": "ACEScg",
+            "options": [
+                "ACES2065-1",
+                "ACEScg",
+                "ACEScct",
+                "Linear Rec.709 (sRGB)",
+                "sRGB Encoded Rec.709 (sRGB)",
+                "Gamma 2.4 Encoded Rec.709",
+                "ARRI LogC3 (EI800)",
+                "ARRI LogC4",
+                "S-Log3 S-Gamut3",
+                "S-Log3 S-Gamut3.Cine",
+                "Log3G10 REDWideGamutRGB",
+                "V-Log V-Gamut",
+                "CanonLog3 CinemaGamut D55",
+                "Apple Log",
+                "ADX10",
+                "Display: sRGB - Display / ACES 1.0 - SDR Video",
+                "Display: sRGB - Display / Un-tone-mapped",
+                "Display: Rec.1886 Rec.709 - Display / ACES 1.0 - SDR Video",
+                "Display: Rec.1886 Rec.709 - Display / Un-tone-mapped",
+                "Display: Display P3 - Display / ACES 1.0 - SDR Video",
+                "Display: Display P3 - Display / Un-tone-mapped"
+            ],
+            "tooltip": "A colour space, or a display with its view transform (for display-referred deliveries)."
+        }
     ],
     "worker_module": "plugins.OCIO.backend",
     "worker_class": "OCIOWorker"

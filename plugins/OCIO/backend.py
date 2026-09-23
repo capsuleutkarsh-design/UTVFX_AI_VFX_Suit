@@ -1,80 +1,82 @@
+"""OCIO ColorSpace: convert with the app's OpenColorIO config (ACES studio config by default).
+
+Input: Auto takes the colour space the input is tagged with; choosing one reinterprets
+the input's pixels as that space (for footage that was tagged wrongly).
+Output: any colour space of the config, or a display with its view transform (for
+delivering display-referred files). The result is tagged with its colour space, so the
+viewer and the next nodes read it correctly, and the Output node writes it as it is.
+"""
 import os
+from concurrent.futures import ThreadPoolExecutor
+
 import OpenImageIO as oiio
+
 from utvfx.bridge.base_worker import BaseWorker
+from utvfx.core import colour, image_nodes
+
+# Names used by projects saved before the node read the OCIO config.
+LEGACY = {"linear": colour.LINEAR_REC709, "sRGB": colour.SRGB, "Rec709": colour.REC709_VIDEO}
+DISPLAY_PREFIX = "Display: "  # out_space options like "Display: sRGB - Display / ACES 1.0 - SDR Video"
+
+
+def parse_output(value):
+    """(colour space, None) or (display, view) for an out_space option."""
+    if value.startswith(DISPLAY_PREFIX):
+        display, view = value[len(DISPLAY_PREFIX):].split(" / ", 1)
+        return display, view
+    return value, None
+
+
+def check_names(in_space, out_value):
+    names = set(colour._config_names())
+    if in_space != colour.AUTO and in_space not in names:
+        raise Exception(f"'{in_space}' is not a colour space of the OCIO config.")
+    target, view = parse_output(out_value)
+    if view is None and target not in names:
+        raise Exception(f"'{target}' is not a colour space of the OCIO config.")
+    if view is not None:
+        config = oiio.ColorConfig()
+        if target not in config.getDisplayNames() or view not in config.getViewNames(target):
+            raise Exception(f"'{target}' / '{view}' is not a display and view of the OCIO config.")
+
 
 class OCIOWorker(BaseWorker):
     def run_task(self):
-        self.progress_update.emit(self.node_id, 0, 100)
-        
-        # Get parameters
-        in_space = self.params.get("in_space", "linear")
-        out_space = self.params.get("out_space", "sRGB")
-        
-        if in_space == out_space:
-            self.log_message.emit(self.node_id, "Input and Output color spaces are the same. No conversion needed.")
-            
-        # Resolve input media
-        input_media = self.inputs.get("Image")
-        if not input_media or not os.path.exists(input_media):
-            raise Exception("No upstream media found to convert.")
-            
-        is_sequence = os.path.isdir(input_media)
-        if is_sequence:
-            files = sorted([f for f in os.listdir(input_media) if os.path.isfile(os.path.join(input_media, f))])
-            if not files:
-                raise Exception("Input directory is empty.")
-        else:
-            files = [os.path.basename(input_media)]
-            input_media = os.path.dirname(input_media)
-            
-        total = len(files)
-        
-        import concurrent.futures
-        import shutil
-        
-        def process_frame(f):
+        in_space = LEGACY.get(self.params.get("in_space"), self.params.get("in_space", colour.AUTO))
+        out_value = LEGACY.get(self.params.get("out_space"), self.params.get("out_space", colour.SCENE_LINEAR))
+        check_names(in_space, out_value)
+        target, view = parse_output(out_value)
+
+        frames = image_nodes.Frames(self.inputs.get("Image"), cancelled=lambda: self.is_cancelled)
+        if in_space != colour.AUTO and frames.decoded:
+            raise Exception("A video plate is already decoded; set its colour space on the Media Plate instead.")
+        # Reinterpreting: the input files' own pixel values are taken as in_space.
+        source = frames.colourspace if in_space == colour.AUTO else in_space
+        sequence = [frames.sequence[i] for i in self.positions(len(frames.sequence))]
+        out = image_nodes.start_output(self.cache_dir)
+        total = len(sequence)
+        what = f"{target} ({view})" if view else target
+        self.log_message.emit(self.node_id, f"Converting {total} frames: {source} -> {what}.")
+
+        def work(item):
+            number, path = item
             if self.is_cancelled:
-                return False, None
-                
-            in_path = os.path.join(input_media, f)
-            out_path = os.path.join(self.cache_dir, f)
-            
-            if in_space == out_space:
-                shutil.copy2(in_path, out_path)
-                return True, None
-            
-            buf = oiio.ImageBuf(in_path)
-            if buf.has_error:
-                return False, f"Failed to read {f}: {buf.geterror()}"
-            
-            # Apply Color Convert
-            success = oiio.ImageBufAlgo.colorconvert(buf, buf, in_space, out_space)
-            if not success:
-                return False, f"Color conversion failed for {f}: {oiio.geterror()}"
-            
-            # Write out
-            buf.write(out_path)
-            return True, None
-            
-        completed = 0
-        
-        # Limit to 6 workers to prevent disk I/O bottleneck
-        # and limit internal OIIO threads per frame
-        oiio.attribute("threads", 1)
-        workers = min(6, os.cpu_count() or 4)
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [executor.submit(process_frame, f) for f in files]
-            for future in concurrent.futures.as_completed(futures):
-                if self.is_cancelled:
-                    self.log_message.emit(self.node_id, "OCIO conversion cancelled by user.")
-                    break
-                success, error_msg = future.result()
-                if not success and error_msg:
-                    self.log_message.emit(self.node_id, error_msg)
-                completed += 1
-                if completed % max(1, total // 20) == 0 or completed == total:
-                    pct = int(completed / total * 100)
-                    self.progress_update.emit(self.node_id, pct, 100)
-                    
-        self.log_message.emit(self.node_id, "OCIO Conversion completed.")
+                return
+            rgb, alpha = frames.read(path, source)
+            if view:
+                rgb = colour._transform(rgb, lambda d, s: oiio.ImageBufAlgo.ociodisplay(
+                    d, s, target, view, colour.SCENE_LINEAR))
+            else:
+                rgb = colour.convert(rgb, colour.SCENE_LINEAR, target)
+            image_nodes.write_frame(out, number, rgb, alpha, target)
+
+        done = 0
+        with ThreadPoolExecutor(max(2, min(6, (os.cpu_count() or 4) - 2))) as pool:
+            for _ in pool.map(work, sequence):
+                done += 1
+                self.progress_update.emit(self.node_id, done, total + 1)
+        if self.is_cancelled:
+            return
+        image_nodes.publish(self.cache_dir, target, frames.working_scale, cancelled=lambda: self.is_cancelled)
+        self.progress_update.emit(self.node_id, total + 1, total + 1)
+        self.log_message.emit(self.node_id, "OCIO conversion complete.")
