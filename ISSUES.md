@@ -12,19 +12,19 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | C2 | Camera export | `.nk` / Blender `.py` written with literal `\n`. Exporter reads `sparse/0`, tracker writes `sparse/`. Camera axis flip doesn't match the points. Keys on 1..N, not plate frames | 3 | `test_nuke_camera_export_has_line_breaks` | ☐ |
 | C3 | SuperMatte | ViTMatte padding never cropped: 1080-row plates crash, 4K mattes shift ~16 px | 2 | `test_vitmatte_alpha_matches_plate_size` | ☐ |
 | C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☐ |
-| C5 | Undo | Redo creates a new node id. Older commands hold dead objects. Undo after delete segfaults | 1 | `test_add_node_keeps_id_through_undo_redo` | ☐ |
-| C6 | Projects | Click keyframes come back as string keys after reload. Timeline paint crashes, points vanish or duplicate | 1 | `test_keyframes_stay_ints_after_save_and_reload` | ☐ |
+| C5 | Undo | Redo creates a new node id. Older commands hold dead objects. Undo after delete segfaults | 1 | `test_add_node_keeps_id_through_undo_redo`, `test_undo_after_delete_restores_graph_without_crashing` | ☑ |
+| C6 | Projects | Click keyframes come back as string keys after reload. Timeline paint crashes, points vanish or duplicate | 1 | `test_keyframes_stay_ints_after_save_and_reload` | ☑ |
 | C7 | Frame contract | Clicks stored by timeline position, looked up by file frame number. Corrections ignored on 1001 plates, one frame early on video | 1 | | ☐ |
 
 ## High: wrong results, broken features
 
 | ID | Area | Problem | Pass | Test | Status |
 |---|---|---|---|---|---|
-| H1 | Projects | Projects with a Dot node can't be saved. Dot nodes can't be deleted or selected | 1 | `test_project_with_dot_node_can_be_saved` | ☐ |
+| H1 | Projects | Projects with a Dot node can't be saved. Dot nodes can't be deleted or selected | 1 | `test_project_with_dot_node_can_be_saved` | ☑ |
 | H2 | Engine | Multi-input nodes resolve inputs by port *name*, not by wire. Unified Output and AI Roto get the wrong frames | 1 | | ☐ |
 | H3 | Engine | `last_state_hash.txt` counts as rendered output | 1 | `test_hash_file_alone_is_not_rendered_output` | ☐ |
 | H4 | Engine | Stop cancels only the selected node. Cancelled nodes stay "executing". Render queue hangs | 1 | | ☐ |
-| H5 | Engine | Freeze never works. Bypass/Freeze lost on reload | 1 | | ☐ |
+| H5 | Engine | Freeze never works. Bypass/Freeze lost on reload | 1 | | ◐ restored on reload and undo; Freeze flag reset still open |
 | H6 | UI | Right-click Add Node, Tab search and wire-drop search do nothing | 1 | | ☐ |
 | H7 | Engine | Timeline In/Out doesn't limit renders, only busts the cache | 1 | | ☐ |
 | H8 | Engine | Cache hash taken at end of render. Mid-render edits get marked cached | 1 | | ☐ |

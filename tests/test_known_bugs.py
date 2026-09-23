@@ -61,8 +61,8 @@ def test_vitmatte_alpha_matches_plate_size():
     assert alpha.shape == (h, w)
 
 
-@pytest.mark.xfail(reason="ISSUE-C5: redo after undo gives the node a new id, so older commands lose it")
 def test_add_node_keeps_id_through_undo_redo(node_scene):
+    """ISSUE-C5"""
     from utvfx.core.commands import AddNodeCommand
 
     cmd = AddNodeCommand(node_scene, {"plugin_type": "grade", "name": "Grade"})
@@ -73,8 +73,8 @@ def test_add_node_keeps_id_through_undo_redo(node_scene):
     assert cmd.node.node_id == first_id
 
 
-@pytest.mark.xfail(reason="ISSUE-C6: click keyframes come back as string keys after save and reload")
 def test_keyframes_stay_ints_after_save_and_reload(node_scene):
+    """ISSUE-C6"""
     node = node_scene.add_node("SuperMatte", "super_matte")
     node.params = {"mask_layers": [{"id": "l1", "keyframes": {5: [[0.5, 0.5, True]]}}]}
     saved = json.loads(json.dumps(node_scene.to_dict()))
@@ -83,8 +83,8 @@ def test_keyframes_stay_ints_after_save_and_reload(node_scene):
     assert all(isinstance(k, int) for k in keys)
 
 
-@pytest.mark.xfail(reason="ISSUE-H1: projects containing a Dot node cannot be saved")
 def test_project_with_dot_node_can_be_saved(node_scene):
+    """ISSUE-H1"""
     node_scene.add_node("Dot", "dot_node")
     json.dumps(node_scene.to_dict())
 
@@ -97,3 +97,33 @@ def test_hash_file_alone_is_not_rendered_output(tmp_path):
     (tmp_path / "abc").mkdir()
     (tmp_path / "abc" / "last_state_hash.txt").write_text("deadbeef")
     assert get_cached_output(node, cache_dir=str(tmp_path)) is None
+
+
+def test_undo_after_delete_restores_graph_without_crashing(node_scene):
+    """ISSUE-C5: add A and B, connect, delete B, then undo everything (used to segfault)."""
+    from PySide6.QtGui import QUndoStack
+    from utvfx.core.commands import AddNodeCommand, ConnectCommand, DeleteNodeCommand
+
+    stack = QUndoStack(node_scene)
+    node_scene.undo_stack = stack
+    stack.push(AddNodeCommand(node_scene, {"plugin_type": "media_plate", "name": "Plate"}))
+    stack.push(AddNodeCommand(node_scene, {"plugin_type": "grade", "name": "Grade"}))
+    plate, grade = node_scene.nodes
+    stack.push(ConnectCommand(node_scene, plate.outputs[0], grade.inputs[0]))
+    stack.push(DeleteNodeCommand(node_scene, grade))
+    assert len(node_scene.nodes) == 1 and not node_scene.connections
+
+    stack.undo()  # delete
+    assert len(node_scene.nodes) == 2 and len(node_scene.connections) == 1
+    stack.undo()  # connect
+    assert not node_scene.connections
+    stack.undo()  # add grade
+    stack.undo()  # add plate
+    assert not node_scene.nodes
+
+    for _ in range(4):
+        stack.redo()
+    assert len(node_scene.nodes) == 1 and node_scene.nodes[0].plugin_type == "media_plate"
+    stack.undo()
+    assert [n.plugin_type for n in node_scene.nodes] == ["media_plate", "grade"]
+    assert len(node_scene.connections) == 1

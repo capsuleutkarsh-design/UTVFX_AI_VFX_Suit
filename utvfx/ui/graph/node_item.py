@@ -92,11 +92,29 @@ class DotNodeItem(QGraphicsObject):
         self.inputs = []
         self.outputs = []
         self.is_disabled = False
-        
+        self.is_frozen = False
+        self.params = {}
+
         self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable | QGraphicsItem.ItemSendsGeometryChanges)
         self.setAcceptHoverEvents(True)
         self.setZValue(1)
-        
+
+    def to_dict(self):
+        return {
+            "node_id": self.node_id,
+            "name": self.name,
+            "plugin_type": self.plugin_type,
+            "color": self.accent_color.name(),
+            "x": self.pos().x(),
+            "y": self.pos().y(),
+            "disabled": self.is_disabled,
+            "frozen": False,
+            "params": self.params,
+        }
+
+    def set_execution_state(self, executing, progress=0):
+        pass  # a Dot only passes its input through
+
     def add_input(self, name):
         port = PortItem(name, is_output=False, parent=self)
         self.inputs.append(port)

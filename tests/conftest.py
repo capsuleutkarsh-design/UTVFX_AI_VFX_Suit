@@ -54,4 +54,12 @@ def hdr_exr_sequence(tmp_path):
 def node_scene(qapp):
     from utvfx.ui.graph.scene import NodeScene
 
-    return NodeScene()
+    scene = NodeScene()
+    yield scene
+    # Tear down inside Qt, not whenever Python's GC gets to it; a scene collected
+    # during a later test's event processing crashes the interpreter.
+    scene.clear()
+    scene.nodes.clear()
+    scene.connections.clear()
+    scene.deleteLater()
+    qapp.processEvents()

@@ -72,7 +72,7 @@ def read_image(path):
     buf = oiio.ImageBuf(path)
     if buf.has_error:
         raise IOError(f"Cannot read {path}: {buf.geterror()}")
-    pixels = buf.get_pixels(oiio.FLOAT)
+    pixels = buf.get_pixels(oiio.TypeFloat)
     if pixels.ndim == 2:
         pixels = pixels[..., None]
     return pixels, buf.spec()
@@ -83,7 +83,7 @@ def _transform(rgb, fn):
     dst = oiio.ImageBuf()
     if not fn(dst, src):
         raise RuntimeError(f"Colour transform failed: {dst.geterror() or oiio.geterror()}")
-    return dst.get_pixels(oiio.FLOAT)
+    return dst.get_pixels(oiio.TypeFloat)
 
 
 def _split(pixels):

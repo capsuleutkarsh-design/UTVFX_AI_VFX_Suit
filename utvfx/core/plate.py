@@ -124,7 +124,7 @@ def _write_jpg(path, rgb8):
 def _write_exr(path, rgb):
     import OpenImageIO as oiio
     h, w = rgb.shape[:2]
-    spec = oiio.ImageSpec(w, h, 3, oiio.HALF)
+    spec = oiio.ImageSpec(w, h, 3, oiio.TypeHalf)
     spec.attribute("compression", "piz")
     spec.attribute("oiio:ColorSpace", colour.SCENE_LINEAR)
     out = oiio.ImageOutput.create(path)

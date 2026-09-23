@@ -8,6 +8,15 @@ from utvfx.ui.graph.port import PortItem
 from utvfx.ui.graph.constants import BG_COLOR
 
 
+def restore_params(params):
+    """Undo what JSON does to node params: click keyframes are keyed by timeline position (int)."""
+    for layer in params.get("mask_layers", []) or []:
+        keyframes = layer.get("keyframes")
+        if isinstance(keyframes, dict):
+            layer["keyframes"] = {int(k): v for k, v in keyframes.items()}
+    return params
+
+
 class NodeScene(QGraphicsScene):
     """The graph canvas scene."""
     
@@ -106,7 +115,7 @@ class NodeScene(QGraphicsScene):
             
         # Record positions of selected nodes for Move command
         for node in self.selectedItems():
-            if isinstance(node, VFXNodeItem):
+            if isinstance(node, (VFXNodeItem, DotNodeItem)):
                 node.old_pos = node.pos()
                 
         super().mousePressEvent(event)
@@ -180,7 +189,7 @@ class NodeScene(QGraphicsScene):
         if self.undo_stack:
             from utvfx.core.commands import MoveNodeCommand, DisconnectCommand, ConnectCommand
             for node in self.selectedItems():
-                if isinstance(node, VFXNodeItem) and hasattr(node, "old_pos") and node.old_pos is not None:
+                if isinstance(node, (VFXNodeItem, DotNodeItem)) and hasattr(node, "old_pos") and node.old_pos is not None:
                     if node.old_pos != node.pos():
                         # Auto-Insertion (Drop-on-Wire)
                         if len(self.selectedItems()) == 1 and node.inputs and node.outputs:
@@ -211,7 +220,7 @@ class NodeScene(QGraphicsScene):
             if self.undo_stack:
                 from utvfx.core.commands import DeleteNodeCommand, DisconnectCommand
                 for item in list(self.selectedItems()):
-                    if isinstance(item, VFXNodeItem):
+                    if isinstance(item, (VFXNodeItem, DotNodeItem)):
                         cmd = DeleteNodeCommand(self, item)
                         self.undo_stack.push(cmd)
                     elif isinstance(item, ConnectionItem):
@@ -255,7 +264,7 @@ class NodeScene(QGraphicsScene):
         if self.undo_stack:
             from utvfx.core.commands import DeleteNodeCommand, DisconnectCommand
             for item in list(self.selectedItems()):
-                if isinstance(item, VFXNodeItem):
+                if isinstance(item, (VFXNodeItem, DotNodeItem)):
                     cmd = DeleteNodeCommand(self, item)
                     self.undo_stack.push(cmd)
                 elif isinstance(item, ConnectionItem):
@@ -333,7 +342,9 @@ class NodeScene(QGraphicsScene):
                 pos=(n_data.get("x", 0), n_data.get("y", 0)),
                 node_id=n_data.get("node_id")
             )
-            node.params = n_data.get("params", {})
+            node.params = restore_params(n_data.get("params", {}))
+            node.is_disabled = n_data.get("disabled", False)
+            node.is_frozen = n_data.get("frozen", False)
             
         # Recreate connections
         for c_data in data.get("connections", []):
