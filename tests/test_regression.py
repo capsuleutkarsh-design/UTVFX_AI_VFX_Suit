@@ -16,6 +16,13 @@ class TestRegression(unittest.TestCase):
     def setUp(self):
         self.window = VFXCoreWindow()
 
+    def tearDown(self):
+        # Close for real, so the window's start-up timers cannot fire during a later test.
+        self.window.undo_stack.setClean()
+        self.window.close()
+        self.window.deleteLater()
+        self.app.processEvents()
+
     def test_node_spawning_and_undo_redo(self):
         initial_node_count = len(self.window.node_scene.nodes)
         self.assertEqual(initial_node_count, 0)

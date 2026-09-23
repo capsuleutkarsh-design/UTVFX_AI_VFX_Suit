@@ -28,16 +28,16 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H6 | UI | Right-click Add Node, Tab search and wire-drop search do nothing | 1 | `tests/test_wiring.py` | ☑ |
 | H7 | Engine | Timeline In/Out doesn't limit renders, only busts the cache | 1 | `tests/test_engine.py` | ◐ engine passes the range and caches by it; each node must honour it (Pass 2 checklist) |
 | H8 | Engine | Cache hash taken at end of render. Mid-render edits get marked cached | 1 | | ☑ |
-| H9 | Security | BiRefNet runs its own code with an unpinned revision, re-downloaded on every run | 1 | | ☐ |
-| H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☐ |
-| H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☐ |
+| H9 | Security | BiRefNet runs its own code with an unpinned revision, re-downloaded on every run | 1 | | ☑ |
+| H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☑ |
+| H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☑ |
 | H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ◐ ACES config and plate loading done; OCIO node and viewer left |
 | H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☐ |
 | H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
 | H16 | AI Roto | Depth units and direction wrong: hides limbs in front | 2 | | ☐ |
 | H17 | RotoToShape | Reused shape IDs change point count and the exporter truncates. Layers merged (wrong folder) | 2 | | ☐ |
-| H18 | 3D Tracker | COLMAP/GLOMAP binaries not shipped. "SuperPoint" is really SIFT. Moving objects not masked → rebuild on Automated Tracker | 2 | | ☐ |
+| H18 | 3D Tracker | COLMAP/GLOMAP binaries not shipped. "SuperPoint" is really SIFT. Moving objects not masked → rebuild on Automated Tracker | 2 | | ◐ COLMAP 4.2.0 (with the global mapper) installed and solving; rebuild on the Automated Tracker in Pass 2 |
 | H19 | Unified Output | Gamma 2.2 applied to alpha and depth. "16-bit float" writes 32-bit. sRGB values in EXR. Mattes land in Y, not A | 3 | | ☐ |
 
 ## Medium
@@ -46,11 +46,11 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 |---|---|---|---|---|
 | M1 | Projects | Save As loses previous renders (cache tied to project name) | 1 | ☑ |
 | M2 | Projects | No "save changes?" on close. Load wipes the graph before parsing. Save not atomic | 1 | ☑ plus autosave/recovery, relink and Settings folders |
-| M3 | AI bridge | Blocking shutdown on UI thread after every node. No socket timeout. Startup race. Errors not shown | 1 | ☐ |
+| M3 | AI bridge | Blocking shutdown on UI thread after every node. No socket timeout. Startup race. Errors not shown | 1 | ☑ |
 | M4 | Logging | `run.bat` overwrites crash.log. No faulthandler. 15 silent `except: pass` | 1 | ☑ (bridge ones go with M3) |
-| M5 | Playback | No frame cache. Video seek on every frame. Wipe decodes on UI thread. VRAM readout never shows | 1 | ☐ |
-| M6 | Downloads | Partial files count as installed. No hashes. No timeouts | 1 | ☐ |
-| M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☐ |
+| M5 | Playback | No frame cache. Video seek on every frame. Wipe decodes on UI thread. VRAM readout never shows | 1 | ☑ |
+| M6 | Downloads | Partial files count as installed. No hashes. No timeouts | 1 | ☑ |
+| M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☑ |
 | M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ◐ sequence grouping, TIFF, fps and default fixed in the plate module |
 | M9 | OCIO / Grade | Rec709 fails silently. Grade changes alpha | 2 | ☐ |
 | M10 | Roto export | Lifetime attribute names unverified in Nuke. Wrong JSON can be loaded. Path quoting unsafe | 3 | ☐ |

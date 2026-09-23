@@ -45,7 +45,6 @@ class TrackerWorker(BaseWorker):
         bin_dir = os.path.join(os.path.dirname(__file__), "bin")
         colmap_dir = os.path.join(bin_dir, "colmap-x64-windows-cuda")
         colmap_exe = os.path.join(colmap_dir, "bin", "colmap.exe")
-        glomap_exe = os.path.join(bin_dir, "glomap-x64-windows-cuda", "bin", "glomap.exe")
         
         # Setup environment variables for colmap to mimic COLMAP.bat
         colmap_env = os.environ.copy()
@@ -105,39 +104,31 @@ class TrackerWorker(BaseWorker):
         self.progress_update.emit(self.node_id, 50, 100)
 
         # 3. Mapper (Sparse Reconstruction)
+        use_incremental = self.engine != "glomap"
         if self.engine == "glomap":
-            self.log_message.emit(self.node_id, "Sparse Reconstruction with GLOMAP (Fast)...")
-            
-            # GLOMAP requires a schema patch because it is compiled with an older COLMAP C++ codebase.
-            # Specifically, the pose_priors table in COLMAP 4.1.0 removed the image_id column.
-            # GLOMAP's database reader prepares a SELECT statement expecting image_id, which causes a fatal SQL logic error.
+            # COLMAP 4.2 includes GLOMAP as its global mapper: same database, no separate binary.
+            # It needs focal-length priors, so estimate them from the matches first (COLMAP's advice).
+            self.log_message.emit(self.node_id, "Estimating focal length for the global mapper...")
             try:
-                import sqlite3
-                conn = sqlite3.connect(db_path)
-                
-                # Drop and recreate pose_priors with the legacy schema expected by GLOMAP.
-                conn.execute("DROP TABLE IF EXISTS pose_priors")
-                conn.execute("CREATE TABLE pose_priors (image_id INTEGER PRIMARY KEY NOT NULL, position BLOB, coordinate_system INTEGER NOT NULL, position_covariance BLOB, FOREIGN KEY(image_id) REFERENCES images(image_id) ON DELETE CASCADE)")
-                
-                conn.commit()
-                conn.close()
+                self._run_cmd([colmap_exe, "view_graph_calibrator", "--database_path", db_path], env=colmap_env)
             except Exception as e:
-                self.log_message.emit(self.node_id, f"Warning: GLOMAP DB Patch failed: {e}")
-
-            # GLOMAP mapper command
+                self.log_message.emit(self.node_id, f"Focal length estimate skipped: {e}")
+            self.log_message.emit(self.node_id, "Sparse reconstruction with COLMAP's global mapper (GLOMAP)...")
             map_cmd = [
-                glomap_exe, "mapper",
+                colmap_exe, "global_mapper",
                 "--database_path", db_path,
                 "--image_path", image_dir,
-                "--output_path", sparse_dir
+                "--output_path", sparse_dir,
+                "--GlobalMapper.tri_min_angle", str(min_tri_angle),
             ]
-            
-            glomap_dir = os.path.dirname(os.path.dirname(glomap_exe))
-            glomap_env = os.environ.copy()
-            glomap_env["PATH"] = os.path.join(glomap_dir, "bin") + os.pathsep + glomap_env.get("PATH", "")
-            
-            if not self._run_cmd(map_cmd, env=glomap_env): return
-        else:
+            try:
+                self._run_cmd(map_cmd, env=colmap_env)
+            except Exception as e:
+                if self.is_cancelled:
+                    return
+                self.log_message.emit(self.node_id, f"Global mapper could not solve this shot ({e}). Trying the incremental mapper...")
+                use_incremental = True
+        if use_incremental:
             self.log_message.emit(self.node_id, "Sparse Reconstruction with COLMAP (Incremental)...")
             # COLMAP mapper command with custom triangulation & BA iteration limits
             map_cmd = [
@@ -154,7 +145,14 @@ class TrackerWorker(BaseWorker):
 
         # 4. Export TXT (COLMAP model_converter)
         self.log_message.emit(self.node_id, "Exporting sparse reconstruction to TXT...")
-        model_0_dir = os.path.join(sparse_dir, "0")
+        # COLMAP can split a shot into several models; export the one with the most registered frames.
+        models = [os.path.join(sparse_dir, d) for d in os.listdir(sparse_dir)
+                  if os.path.isfile(os.path.join(sparse_dir, d, "images.bin"))]
+        model_0_dir = max(models, key=lambda d: os.path.getsize(os.path.join(d, "images.bin")), default=None)
+        if model_0_dir is None:
+            raise RuntimeError("COLMAP could not reconstruct a camera from this shot.")
+        if len(models) > 1:
+            self.log_message.emit(self.node_id, f"COLMAP found {len(models)} separate pieces; using the largest ({os.path.basename(model_0_dir)}).")
         if os.path.exists(model_0_dir):
             self._run_cmd([
                 colmap_exe, "model_converter",

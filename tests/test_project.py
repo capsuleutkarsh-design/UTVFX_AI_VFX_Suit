@@ -129,3 +129,13 @@ def test_unhandled_errors_and_native_crashes_are_logged(tmp_path, monkeypatch):
     finally:
         logger.shutdown_logger()
         faulthandler.enable(file=sys.__stderr__)  # pytest's own crash reporting
+
+
+@pytest.mark.parametrize("path, name", [
+    (r"C:\shots\sh010_plate.1001.exr", "sh010_plate"),
+    (r"C:\shots\sh020\1001.exr", "sh020"),
+    (r"C:\shots\renders\1001.exr", "1001"),
+    (r"C:\shots\interview_cam_a.mov", "interview_cam_a"),
+])
+def test_shot_name_from_plate_path(path, name):
+    assert project.shot_name_from_path(path) == name

@@ -282,6 +282,8 @@ class VFXCoreWindow(QMainWindow):
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self.update_system_stats)
         self.stats_timer.start(1000)
+        from utvfx.core import gpu_monitor
+        gpu_monitor.start()
 
     def set_project_title(self, name):
         self._project_name = os.path.splitext(os.path.basename(name))[0] or "untitled"
@@ -300,25 +302,17 @@ class VFXCoreWindow(QMainWindow):
         self.setWindowTitle(f"{name}{' *' if dirty else ''} — {APP_NAME}")
 
     def update_system_stats(self):
+        from utvfx.core import gpu_monitor
+        parts = []
         try:
             import psutil
-            cpu = psutil.cpu_percent()
-            mem = psutil.virtual_memory().percent
-            
-            # Use torch for VRAM if available
-            gpu_str = ""
-            try:
-                import torch
-                if torch.cuda.is_available():
-                    gpu_util = torch.cuda.utilization()
-                    vram_mb = torch.cuda.memory_allocated() / 1024 / 1024
-                    gpu_str = f" | GPU: {gpu_util}% | VRAM: {vram_mb:.0f} MB"
-            except ImportError:
-                pass
-            
-            self.lbl_stats.setText(f"CPU: {cpu}% | RAM: {mem}%{gpu_str} | engine / PySide6 (Qt6)")
+            parts.append(f"CPU {psutil.cpu_percent():.0f}%")
+            parts.append(f"RAM {psutil.virtual_memory().percent:.0f}%")
         except ImportError:
-            self.lbl_stats.setText("project / alpha_seq_012   |   engine / PySide6 (Qt6) [psutil missing]")
+            pass
+        if gpu_monitor.reading():
+            parts.append(gpu_monitor.reading())
+        self.lbl_stats.setText("   ".join(parts))
 
     def setup_connections(self):
         self.media_panel.add_node_requested.connect(self.spawn_node)
@@ -410,21 +404,8 @@ class VFXCoreWindow(QMainWindow):
         if plugin_type == "media_plate" and "plate_file" in params:
             sm = SettingsManager()
             if sm.current_project_name == "Untitled":
-                import re
-                file_path = params["plate_file"]
-                basename = os.path.basename(file_path)
-                name, ext = os.path.splitext(basename)
-                shot_name = name
-                
-                if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
-                    clean_name = re.sub(r'[\._-]?\d+$', '', name)
-                    if clean_name:
-                        shot_name = clean_name
-                    else:
-                        folder_name = os.path.basename(os.path.dirname(file_path))
-                        if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
-                            shot_name = folder_name
-                            
+                from utvfx.core.project import shot_name_from_path
+                shot_name = shot_name_from_path(params["plate_file"])
                 sm.set_project_name(shot_name)
                 self.set_project_title(shot_name)
             

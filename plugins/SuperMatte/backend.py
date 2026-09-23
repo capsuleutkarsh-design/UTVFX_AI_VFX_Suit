@@ -330,7 +330,8 @@ class SuperMatteWorker(BaseWorker):
         from utvfx.bridge.ai_bridge_client import AIBridgeClient
         client = AIBridgeClient.get_instance()
         
-        mask_layers = self.params.get("mask_layers", [])
+        # Layers hidden with the eye toggle are not rendered.
+        mask_layers = [l for l in self.params.get("mask_layers", []) if l.get("enabled", True)]
         if not mask_layers:
             self.log_message.emit(self.node_id, "No mask layers defined. Yielding empty output.")
             return
@@ -444,7 +445,7 @@ class SuperMatteWorker(BaseWorker):
                     
             self.log_message.emit(self.node_id, "Running SAMURAI Memory Video Tracking...")
             if not client.track_video(frames_dir, 0, prompts, alpha_dir, sam_version):
-                raise Exception("SAMURAI Video Tracking failed. Check terminal for bridge errors.")
+                raise Exception(f"SAMURAI tracking failed: {client.last_error or 'no reason given'}")
             
             if not getattr(self, "is_sequence", False):
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
@@ -548,7 +549,7 @@ class SuperMatteWorker(BaseWorker):
                     )
                     
                     if qimage is None or not os.path.exists(sam_mask_path):
-                        raise Exception(f"SAM Inference failed or timed out for {layer_name}.")
+                        raise Exception(f"SAM failed on {layer_name}, frame {frame_idx}: {client.last_error or 'no mask was written'}")
                     
                 sam_mask = cv2.imread(sam_mask_path, cv2.IMREAD_GRAYSCALE)
                 

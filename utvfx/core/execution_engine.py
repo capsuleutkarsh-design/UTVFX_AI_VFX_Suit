@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 
 class InteractionWorker(QThread):
     """Offloads the fast interactive inference (e.g. SAM clicks) to prevent UI freezing."""
-    finished = Signal(str, str, int, QImage)  # node_id, layer_id, frame_idx, mask_qimage
+    mask_ready = Signal(str, str, int, QImage)  # node_id, layer_id, frame_idx, mask_qimage
     error = Signal(str, str)             # node_id, error_message
     
     def __init__(self, node_id, plugin_type, node_params, frame_idx, points, media_path, temp_dir):
@@ -84,9 +84,11 @@ class InteractionWorker(QThread):
                     return
                 
             if mask_qimage is not None:
-                self.finished.emit(self.node_id, self.layer_id, self.frame_idx, mask_qimage)
+                self.mask_ready.emit(self.node_id, self.layer_id, self.frame_idx, mask_qimage)
             else:
-                self.error.emit(self.node_id, "AI Engine failed to generate preview mask.")
+                from utvfx.bridge.ai_bridge_client import AIBridgeClient
+                reason = AIBridgeClient.get_instance().last_error or "no reason given"
+                self.error.emit(self.node_id, f"The AI engine could not make a preview: {reason}")
                 
             # Cleanup temp frame
             try:
@@ -99,6 +101,12 @@ class InteractionWorker(QThread):
             import traceback
             tb_str = traceback.format_exc()
             self.error.emit(self.node_id, f"Interaction error: {str(e)}\n\nTraceback:\n{tb_str}")
+
+# Nodes that talk to the separate SAM engine process.
+BRIDGE_USERS = {"super_matte"}
+# Nodes that load large models inside the app process.
+GPU_HEAVY_IN_PROCESS = {"super_matte", "corridor_keyer", "ai_depth_estimator", "ai_roto", "sfm_tracker"}
+
 
 class ExecutionEngine(QObject):
     """Orchestrates node execution, manages caching, and routes data."""
@@ -127,6 +135,7 @@ class ExecutionEngine(QObject):
         os.makedirs(self.temp_dir, exist_ok=True)
         self.active_workers = {}
         self._start_hashes = {}
+        self._interaction_seq = {}
         self.execution_queue = []
         self.is_executing_pipeline = False
         self.is_cancelling = False
@@ -152,6 +161,15 @@ class ExecutionEngine(QObject):
     def _get_node_by_id(self, node_id):
         # A plain scan: the graph is small, and a cached index can hand back deleted nodes.
         return next((n for n in self.scene.nodes if n.node_id == node_id), None)
+
+    def _free_bridge_for(self, plugin):
+        """Unload the SAM engine before a GPU-heavy node that does not use it; keep it otherwise."""
+        if plugin in BRIDGE_USERS or plugin not in GPU_HEAVY_IN_PROCESS:
+            return
+        from utvfx.bridge.ai_bridge_client import AIBridgeClient
+        if AIBridgeClient._instance is not None and AIBridgeClient._instance.process is not None:
+            self.log_message.emit(self.current_target_node_id or "", "Unloading the SAM engine to free GPU memory…")
+            AIBridgeClient._instance.shutdown_async()
 
     def _clear_vram(self):
         """Force cleanup of system and GPU memory."""
@@ -180,43 +198,37 @@ class ExecutionEngine(QObject):
         worker = InteractionWorker(
             node_id=node_id,
             plugin_type=node.plugin_type,
-            node_params=node.params,
+            node_params=copy.deepcopy(node.params),
             frame_idx=frame_idx,
             points=points,
             media_path=media_path,
             temp_dir=self.temp_dir
         )
-        worker.finished.connect(self._on_interaction_success)
+        # Clicks can outrun the model: number them and drop any answer that is no longer the latest.
+        seq = self._interaction_seq.get(node_id, 0) + 1
+        self._interaction_seq[node_id] = seq
+        worker.mask_ready.connect(lambda n, l, f, img, s=seq: self._on_interaction_success(n, l, f, img, s))
         worker.error.connect(self._on_interaction_error)
-        
+
         if not hasattr(self, "_interaction_workers_lock"):
             self._interaction_workers_lock = threading.Lock()
-            
         with self._interaction_workers_lock:
             self._interaction_workers = getattr(self, "_interaction_workers", [])
             self._interaction_workers.append(worker)
-            
-            worker.finished.connect(lambda *args, w=worker: self._remove_interaction_worker(w))
-            worker.error.connect(lambda *args, w=worker: self._remove_interaction_worker(w))
-            
+        # QThread.finished fires once run() has returned, so deleting then is safe.
+        worker.finished.connect(lambda w=worker: self._remove_interaction_worker(w))
+
         worker.start()
 
     def _remove_interaction_worker(self, w):
         with getattr(self, "_interaction_workers_lock", threading.Lock()):
             if hasattr(self, "_interaction_workers") and w in self._interaction_workers:
                 self._interaction_workers.remove(w)
-                
-        # Explicitly delete C++ QThread object to prevent memory leaks
-        try:
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(1000, w.deleteLater)
-        except Exception:
-            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
-            
-        self._clear_vram()
+        w.deleteLater()
 
-    @Slot(str, str, int, object)
-    def _on_interaction_success(self, node_id, layer_id, frame_idx, mask_qimage):
+    def _on_interaction_success(self, node_id, layer_id, frame_idx, mask_qimage, seq=None):
+        if seq is not None and seq != self._interaction_seq.get(node_id):
+            return  # a newer click is already on its way
         self.log_message.emit(node_id, "Fast preview generated successfully.")
         self.interactive_mask_ready.emit(node_id, layer_id, frame_idx, mask_qimage)
         
@@ -277,193 +289,6 @@ class ExecutionEngine(QObject):
         if "proc_res" in mapped:
             mapped["image_size"] = mapped["proc_res"]
         return mapped
-
-    def _build_mask_dict(self, mask_path, node_cache=None, mask_keyframes=None, video_path=None, node_id=None):
-        import cv2
-        import tempfile
-        mask_dict = {}
-        
-        # 1. First, try to generate masks from interactive keyframes
-        if node_cache and mask_keyframes:
-            sam_masks_dir = os.path.join(node_cache, "sam_masks")
-            os.makedirs(sam_masks_dir, exist_ok=True)
-            
-            from utvfx.bridge.ai_bridge_client import AIBridgeClient
-            client = AIBridgeClient.get_instance()
-            
-            # For each keyframe, extract the frame and ask SAM to generate a mask
-            for f_idx, points in mask_keyframes.items():
-                if not points: continue
-                
-                if node_id:
-                    self.log_message.emit(node_id, f"Generating high-quality SAM mask for keyframe {f_idx}...")
-                
-                f_idx = int(f_idx)
-                import uuid
-                temp_frame_path = os.path.join(self.temp_dir, f"utvfx_gen_frame_{f_idx}_{uuid.uuid4().hex}.jpg")
-                
-                # Extract frame
-                if os.path.isdir(video_path):
-                    files = sorted([f for f in os.listdir(video_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx', '.hdr'))])
-                    if 0 <= f_idx < len(files):
-                        frame_file = os.path.join(video_path, files[f_idx])
-                        from utvfx.core.image_utils import load_frame
-                        frame = load_frame(frame_file)
-                        if frame is not None:
-                            cv2.imwrite(temp_frame_path, frame)
-                else:
-                    cap = cv2.VideoCapture(video_path)
-                    if not cap.isOpened():
-                        import imageio
-                        try:
-                            reader = imageio.get_reader(video_path)
-                            frame_rgb = reader.get_data(f_idx)
-                            frame = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                            cv2.imwrite(temp_frame_path, frame)
-                        except Exception as e:
-                            self.log_message.emit(node_id, f"Failed to extract frame: {e}")
-                    else:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, f_idx)
-                        ret, frame = cap.read()
-                        if ret:
-                            cv2.imwrite(temp_frame_path, frame)
-                        cap.release()
-                    
-                if not os.path.exists(temp_frame_path):
-                    continue
-                    
-                # Setup points for AI Bridge
-                img = cv2.imread(temp_frame_path)
-                if img is None: continue
-                h, w, _ = img.shape
-                
-                pts = []
-                lbls = []
-                for nx, ny, is_pos in points:
-                    pts.append([int(nx * w), int(ny * h)])
-                    lbls.append(1 if is_pos else 0)
-                    
-                out_mask_path = os.path.join(sam_masks_dir, f"mask_{f_idx:05d}.png")
-                # Query AI Bridge
-                client.query_mask(temp_frame_path, pts, lbls, out_mask_path=out_mask_path)
-                
-                # If generated successfully, load it into mask_dict
-                if os.path.exists(out_mask_path):
-                    mask = cv2.imread(out_mask_path, cv2.IMREAD_GRAYSCALE)
-                    if mask is not None:
-                        mask_dict[f_idx] = mask
-                        
-            if mask_dict:
-                return mask_dict
-
-        # 2. Check if there are ALREADY interactively generated masks from a previous run
-        if node_cache:
-            sam_masks_dir = os.path.join(node_cache, "sam_masks")
-            if os.path.exists(sam_masks_dir):
-                for name in os.listdir(sam_masks_dir):
-                    if name.endswith(".png") and name.startswith("mask_"):
-                        try:
-                            frame_idx = int(name.split("_")[1].split(".")[0])
-                            path = os.path.join(sam_masks_dir, name)
-                            mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                            if mask is not None:
-                                mask_dict[frame_idx] = mask
-                        except Exception:
-                            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
-                
-                if mask_dict:
-                    return mask_dict
-
-        # 3. Fallback to manual mask path
-        if not mask_path or not os.path.exists(mask_path):
-            raise FileNotFoundError("Select a guide mask file before running MatteAnyone, or interactively generate one by selecting the object in the viewport.")
-
-        if node_id:
-            self.log_message.emit(node_id, f"Loading manual guide mask from: {mask_path}")
-
-        import cv2
-        mask_dict = {}
-        image_exts = {".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"}
-        video_exts = {".mp4", ".mov", ".avi", ".mkv"}
-
-        if os.path.isdir(mask_path):
-            files = []
-            for ext in image_exts:
-                files.extend(os.path.join(mask_path, name) for name in os.listdir(mask_path) if name.lower().endswith(ext))
-            for frame_idx, path in enumerate(sorted(files)):
-                mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
-                if mask is not None:
-                    mask_dict[frame_idx] = mask
-        else:
-            ext = os.path.splitext(mask_path)[1].lower()
-            if ext in image_exts:
-                mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-                if mask is not None:
-                    mask_dict[0] = mask
-            elif ext in video_exts:
-                cap = cv2.VideoCapture(mask_path)
-                if not cap.isOpened():
-                    raise RuntimeError("Failed to open MatteAnyone guide mask video.")
-                frame_idx = 0
-                try:
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret:
-                            break
-                        mask_dict[frame_idx] = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                        frame_idx += 1
-                finally:
-                    cap.release()
-            else:
-                raise ValueError(f"Unsupported MatteAnyone guide mask type: {ext}")
-
-        if not mask_dict:
-            raise RuntimeError("Guide mask contains no readable frames.")
-        
-        if node_id:
-            self.log_message.emit(node_id, f"Successfully loaded {len(mask_dict)} mask frames.")
-            
-        return mask_dict
-
-    def _prepare_tracker_input(self, media_path, node_cache):
-        if not media_path or not os.path.exists(media_path):
-            raise FileNotFoundError("Tracker input media is missing.")
-        if os.path.isdir(media_path):
-            return media_path
-
-        image_exts = {".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"}
-        video_exts = {".mp4", ".mov", ".avi", ".mkv"}
-        ext = os.path.splitext(media_path)[1].lower()
-        image_dir = os.path.join(node_cache, "tracker_images")
-
-        if os.path.exists(image_dir):
-            shutil.rmtree(image_dir)
-        os.makedirs(image_dir, exist_ok=True)
-
-        if ext in image_exts:
-            shutil.copy2(media_path, os.path.join(image_dir, os.path.basename(media_path)))
-            return image_dir
-
-        if ext in video_exts:
-            import cv2
-            cap = cv2.VideoCapture(media_path)
-            if not cap.isOpened():
-                raise RuntimeError("Failed to open tracker video input.")
-            frame_idx = 0
-            try:
-                while True:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    cv2.imwrite(os.path.join(image_dir, f"frame_{frame_idx:06d}.png"), frame)
-                    frame_idx += 1
-            finally:
-                cap.release()
-            if frame_idx == 0:
-                raise RuntimeError("Tracker video input has no readable frames.")
-            return image_dir
-
-        raise ValueError(f"Unsupported tracker input type: {ext}")
 
     def execute_node(self, node_id):
         """Render node_id and everything upstream. Returns False if the request was refused."""
@@ -535,22 +360,8 @@ class ExecutionEngine(QObject):
             from utvfx.core.settings_manager import SettingsManager
             sm = SettingsManager()
             if sm.current_project_name == "Untitled":
-                import re
-                file_path = params["plate_file"]
-                basename = os.path.basename(file_path)
-                name, ext = os.path.splitext(basename)
-                shot_name = name
-                
-                if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
-                    clean_name = re.sub(r'[\._-]?\d+$', '', name)
-                    if clean_name:
-                        shot_name = clean_name
-                    else:
-                        folder_name = os.path.basename(os.path.dirname(file_path))
-                        if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
-                            shot_name = folder_name
-                
-                sm.set_project_name(shot_name)
+                from utvfx.core.project import shot_name_from_path
+                sm.set_project_name(shot_name_from_path(params["plate_file"]))
 
         node_cache = get_node_cache(node, self.cache_dir)
         os.makedirs(node_cache, exist_ok=True)
@@ -620,6 +431,10 @@ class ExecutionEngine(QObject):
             worker.finished_success.connect(lambda n, w=worker: self._on_finished(n, w))
             worker.cancelled.connect(lambda n, w=worker: self._on_cancelled(n, w))
             worker.frame_range = self.render_range
+            if plugin in GPU_HEAVY_IN_PROCESS:
+                # Hand the GPU back once the thread has fully ended (M12).
+                worker.finished.connect(self._clear_vram)
+            self._free_bridge_for(plugin)
 
             self.active_workers[node_id] = worker
             worker.start()
@@ -686,17 +501,7 @@ class ExecutionEngine(QObject):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(2000, worker.deleteLater)
             
-        # self._clear_vram() # Removed to prevent aggressive GPU cache trashing
-            
-        # Free persistent bridge memory between node renders to prevent 8GB OOM
         if self.is_executing_pipeline:
-            try:
-                from utvfx.bridge.ai_bridge_client import AIBridgeClient
-                if AIBridgeClient._instance:
-                    AIBridgeClient._instance.shutdown()
-            except Exception:
-                logging.getLogger(__name__).debug("Ignored error", exc_info=True)
-            
             self._pump_execution_queue()
 
     @Slot(str, object)
@@ -735,4 +540,7 @@ class ExecutionEngine(QObject):
                 worker.cancel()
             else:
                 worker.is_cancelled = True
+        from utvfx.bridge.ai_bridge_client import AIBridgeClient
+        if AIBridgeClient._instance is not None:
+            AIBridgeClient._instance.cancel()
 

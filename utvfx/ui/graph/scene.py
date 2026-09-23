@@ -25,9 +25,6 @@ class NodeScene(QGraphicsScene):
     
     class Signals(QObject):
         nodeSelected = Signal(object)  # Emits node data dict
-        nodeAdded = Signal(str, str)   # node_id, plugin_type
-        nodeDeleted = Signal(str)      # node_id
-        connectionChanged = Signal()
         viewerHotkey = Signal(object, int) # node_data, key_number
         queueNodeRequested = Signal(object) # Emits the node to add to the render queue
         fileDropped = Signal(str, dict) # Emits the file path and drop location {x: float, y: float}

@@ -54,3 +54,28 @@ def test_clicks_on_later_frames_of_a_1001_plate_are_used(tmp_path, monkeypatch):
     assert by_file["frame_001001.png"] == [(15.0, 10.0)]
     assert by_file["frame_001003.png"] == [(45.0, 20.0)]  # the correction, in pixels
     assert sorted(os.listdir(tmp_path / "cache" / "Matte")) == [f"matte_{n:06d}.png" for n in (1001, 1002, 1003, 1004)]
+
+
+def test_hidden_layers_are_not_rendered(tmp_path, monkeypatch):
+    """Hiding a layer with the eye toggle keeps it out of the render."""
+    import transformers
+    from plugins.SuperMatte import backend
+    from utvfx.bridge import ai_bridge_client
+
+    plate = tmp_path / "plate"
+    plate.mkdir()
+    for n in (1001, 1002):
+        cv2.imwrite(str(plate / f"shot.{n}.png"), np.full((40, 60, 3), 90, np.uint8))
+    bridge = FakeBridge()
+    monkeypatch.setattr(ai_bridge_client.AIBridgeClient, "get_instance", staticmethod(lambda: bridge))
+    monkeypatch.setattr(transformers.VitMatteImageProcessor, "from_pretrained", staticmethod(lambda *a, **k: _Dummy()))
+    monkeypatch.setattr(transformers.VitMatteForImageMatting, "from_pretrained", staticmethod(lambda *a, **k: _Dummy()))
+    monkeypatch.setattr(backend.SuperMatteWorker, "run_vitmatte", lambda self, frame, mask, *a: mask)
+
+    params = {"mask_layers": [
+        {"id": "shown", "name": "Actor", "keyframes": {0: [[0.25, 0.25, True]]}},
+        {"id": "hidden", "name": "Prop", "enabled": False, "keyframes": {0: [[0.75, 0.75, True]]}},
+    ], "refiner_model": "ViTMatte", "sam_version": "SAM 1 (ViT-H)"}
+    worker = backend.SuperMatteWorker("n1", params, {"Video Plate": str(plate)}, str(tmp_path / "cache"), str(tmp_path))
+    worker.run_task()
+    assert all(points == [(15.0, 10.0)] for _, points in bridge.calls)  # only the visible layer's click

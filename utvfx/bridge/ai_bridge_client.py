@@ -1,35 +1,60 @@
-import os
-import sys
 import json
+import logging
+import os
+import secrets
+import socket
 import subprocess
+import sys
 import threading
-import tempfile
+import time
+import uuid
+
 import cv2
 import numpy as np
-import uuid
-from PySide6.QtGui import QImage, QColor
+from PySide6.QtGui import QImage
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utvfx.core.settings_manager import SettingsManager
 
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+log = logging.getLogger(__name__)
+
+# How long a cold start may take (loading SAM ViT-H or SAM 3 to the GPU can be slow).
+STARTUP_TIMEOUT = 600
+# Per-request limits. Video tracking has none: it is cancelled instead.
+MASK_TIMEOUT = 180
+SCAN_TIMEOUT = 600
+
+
+class BridgeCancelled(Exception):
+    pass
+
+
 class AIBridgeClient:
-    """Manages the persistent AI Bridge Server subprocess for real-time inference."""
-    
+    """Runs the SAM models in a separate process and talks to it over a local socket.
+
+    The server only accepts a connection that presents the random token it was
+    started with, so other programs on the machine cannot drive it. Every error is
+    kept in `last_error` so callers can show it instead of "check the terminal".
+    """
+
     _instance = None
-    
+
     @classmethod
     def get_instance(cls):
         if cls._instance is None:
             cls._instance = AIBridgeClient()
         return cls._instance
-        
+
     def __init__(self):
         self.process = None
+        self.sock = self.sock_in = self.sock_out = None
         self.lock = threading.Lock()
-        
+        self._cancel = threading.Event()
+        self.last_error = ""
+        self.current_sam_version = None
+        self.is_ready = False
+
         exe_name = "python.exe" if os.name == "nt" else "python"
-        
-        # Locate portable python_base executable
         candidate_pythons = []
         if getattr(sys, 'frozen', False):
             if hasattr(sys, '_MEIPASS'):
@@ -37,304 +62,227 @@ class AIBridgeClient:
             exe_dir = os.path.dirname(os.path.abspath(sys.executable))
             candidate_pythons.append(os.path.join(exe_dir, "_internal", "python_base", exe_name))
             candidate_pythons.append(os.path.join(exe_dir, "python_base", exe_name))
-            
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        candidate_pythons.append(os.path.join(base_dir, "python_base", exe_name))
-        
-        portable_py = None
-        for py_path in candidate_pythons:
-            if os.path.exists(py_path):
-                portable_py = py_path
-                break
-                
-        if portable_py:
-            self.python_cmd = [portable_py]
-        else:
-            self.python_cmd = [sys.executable]
-            
-        # Locate bridge script
-        self.bridge_script = os.path.join(base_dir, "plugins", "SuperMatte", "sam_bridge.py")
+        candidate_pythons.append(os.path.join(BASE_DIR, "python_base", exe_name))
+        portable_py = next((p for p in candidate_pythons if os.path.exists(p)), None)
+        self.python_cmd = [portable_py or sys.executable]
+
+        self.bridge_script = os.path.join(BASE_DIR, "plugins", "SuperMatte", "sam_bridge.py")
         if not os.path.exists(self.bridge_script) and getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
             self.bridge_script = os.path.join(sys._MEIPASS, "plugins", "SuperMatte", "sam_bridge.py")
-                
-        self.is_ready = False
-        
+
+    # ---- process lifecycle --------------------------------------------------
+    def _fail(self, message):
+        self.last_error = message
+        log.error("AI engine: %s", message)
+        print(f"[AI Bridge] {message}", flush=True)
+
     def _start_server_if_needed(self, sam_version="SAM 1 (ViT-H)"):
-        if self.process is not None and self.process.poll() is None:
-            if getattr(self, 'current_sam_version', None) != sam_version:
-                print(f"[AI Bridge] Model changed from {getattr(self, 'current_sam_version', None)} to {sam_version}. Restarting server...")
-                self.shutdown()
-            else:
+        if self.process is not None and self.process.poll() is None and self.sock is not None:
+            if self.current_sam_version == sam_version:
                 return True
-            
+            print(f"[AI Bridge] Switching model from {self.current_sam_version} to {sam_version}.", flush=True)
+            self._shutdown_locked()
+
         self.current_sam_version = sam_version
-        print(f"Starting AI Bridge Server (loading {sam_version} to VRAM)...")
+        self.last_error = ""
+        print(f"Starting AI engine (loading {sam_version})...", flush=True)
+
+        probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        probe.bind(('127.0.0.1', 0))
+        self.port = probe.getsockname()[1]
+        probe.close()
+        self.token = secrets.token_hex(16)
+
         env = os.environ.copy()
         env["HYDRA_FULL_ERROR"] = "1"
+        env["CONTOUR_BRIDGE_TOKEN"] = self.token  # not on the command line, where other users could read it
         creationflags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
-        
-        import socket
-        import time
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.bind(('127.0.0.1', 0))
-        self.port = s.getsockname()[1]
-        s.close()
-        
         cmd = self.python_cmd + [self.bridge_script, "--model", sam_version, "--port", str(self.port)]
-        
-        self.process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1, # Line buffered
-            env=env,
-            creationflags=creationflags
-        )
-        
-        def consume_stdout(pipe):
+        self._stderr_tail = []
+        self.process = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                        text=True, bufsize=1, env=env, creationflags=creationflags)
+
+        def pump(pipe, tag, keep=None):
             try:
                 for line in iter(pipe.readline, ''):
-                    if not line: break
-                    print(f"[AI Bridge STDOUT] {line.strip()}", flush=True)
-            except (ValueError, OSError): pass
-            
-        def consume_stderr(pipe):
-            try:
-                for line in iter(pipe.readline, ''):
-                    if not line: break
-                    print(f"[AI Bridge STDERR] {line.strip()}", flush=True)
-            except (ValueError, OSError): pass
-            
-        threading.Thread(target=consume_stdout, args=(self.process.stdout,), daemon=True).start()
-        threading.Thread(target=consume_stderr, args=(self.process.stderr,), daemon=True).start()
-        
-        connected = False
-        self.sock = None
-        for _ in range(300):
-            try:
-                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.sock.connect(('127.0.0.1', self.port))
-                self.sock_in = self.sock.makefile('r')
-                self.sock_out = self.sock.makefile('w')
-                connected = True
-                break
-            except ConnectionRefusedError:
-                if self.process.poll() is not None:
-                    err = self.process.stderr.read()
-                    print(f"[AI Bridge] Process crashed during startup: {err}")
-                    break
-                time.sleep(0.1)
-                
-        if not connected:
-            print("[AI Bridge] Failed to connect to backend server")
-            self.shutdown()
-            return False
-            
-        self.is_ready = True
-        return True
-
-        
-    def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None, sam_version="SAM 1 (ViT-H)", boxes=None, text_prompt=""):
-        """
-        Sends coordinates to the persistent server and returns a QImage overlay mask.
-        """
-        with self.lock:
-            if not self._start_server_if_needed(sam_version):
-                return None
-                
-            temp_dir = SettingsManager().get("temp_dir")
-            os.makedirs(temp_dir, exist_ok=True)
-            temp_mask = out_mask_path or os.path.join(temp_dir, f"utvfx_bridge_mask_{uuid.uuid4().hex}.png")
-            
-            payload = {
-                "image_path": image_path,
-                "points": points,
-                "labels": labels,
-                "mask_out_path": temp_mask
-            }
-            if boxes is not None:
-                payload["boxes"] = boxes
-            if text_prompt:
-                payload["text_prompt"] = text_prompt
-            
-            try:
-                print(json.dumps(payload), file=self.sock_out, flush=True)
-                
-                # Wait for response
-                while True:
-                    resp_line = self.sock_in.readline()
-                    if not resp_line:
-                        return None
-                        
-                    resp_line = resp_line.strip()
-                    if not resp_line: continue
-                    
-                    if resp_line.startswith("{"):
-                        resp = json.loads(resp_line)
-                        if resp.get("status") == "ok":
-                            return self._process_mask_to_qimage(temp_mask, fill_color_hex)
-                        else:
-                            print(f"[AI Bridge Error] {resp.get('error')}")
-                            print(f"[AI Bridge Traceback] {resp.get('traceback')}")
-                            return None
-                    else:
-                        print(f"[AI Bridge Debug] {resp_line}")
-                        
-            except Exception as e:
-                print(f"[AI Bridge Exception] {str(e)}")
-                return None
-                
-    def track_video(self, frames_dir, start_frame_idx, prompts, out_dir, sam_version="SAM 2 (SAMURAI)"):
-        """
-        Requests the backend to track a video sequence using SAMURAI.
-        prompts: list of { "frame": int, "obj_id": int, "points": [], "labels": [], "box": [] }
-        """
-        with self.lock:
-            if not self._start_server_if_needed(sam_version):
-                return False
-                
-            payload = {
-                "action": "track_video",
-                "frames_dir": frames_dir,
-                "start_frame_idx": start_frame_idx,
-                "prompts": prompts,
-                "out_dir": out_dir
-            }
-            
-            try:
-                self.sock_out.write(json.dumps(payload) + "\n")
-                self.sock_out.flush()
-                
-                # Wait for response
-                while True:
-                    resp_line = self.sock_in.readline()
-                    if not resp_line:
-                        return False
-                        
-                    resp_line = resp_line.strip()
-                    if not resp_line: continue
-                    
-                    if resp_line.startswith("{"):
-                        resp = json.loads(resp_line)
-                        if resp.get("status") == "ok":
-                            return True
-                        elif resp.get("status") == "progress":
-                            # We could emit a progress signal here if we wanted
-                            pass
-                        else:
-                            import tempfile
-                            import os
-                            with open(os.path.join(tempfile.gettempdir(), 'ai_bridge_error.log'), 'w') as f:
-                                f.write(f"Error: {resp.get('error')}\n")
-                                f.write(f"Traceback: {resp.get('traceback')}\n")
-                            print(f"[AI Bridge Error] {resp.get('error')}")
-                            print(f"[AI Bridge Traceback] {resp.get('traceback')}")
-                            return False
-                    else:
-                        print(f"[AI Bridge Debug] {resp_line}")
-                        
-            except Exception as e:
-                print(f"[AI Bridge Exception] {str(e)}")
-                return False
-                
-    def auto_scan(self, image_path, text_prompt="", sam_version="SAM 3 (ViT-B)"):
-        """
-        Requests the backend to auto-scan the image and return a list of top object points.
-        Returns: list of (x_norm, y_norm, score)
-        """
-        with self.lock:
-            if not self._start_server_if_needed(sam_version):
-                return None
-                
-            payload = {
-                "action": "auto_scan",
-                "image_path": image_path,
-                "text_prompt": text_prompt
-            }
-            
-            try:
-                self.sock_out.write(json.dumps(payload) + "\n")
-                self.sock_out.flush()
-                
-                while True:
-                    resp_line = self.sock_in.readline()
-                    if not resp_line:
-                        return None
-                        
-                    resp_line = resp_line.strip()
-                    if not resp_line: continue
-                    
-                    if resp_line.startswith("{"):
-                        resp = json.loads(resp_line)
-                        if resp.get("status") == "ok":
-                            return resp.get("objects", [])
-                        else:
-                            print(f"[AI Bridge Error] {resp.get('error')}")
-                            print(f"[AI Bridge Traceback] {resp.get('traceback')}")
-                            return None
-                    else:
-                        print(f"[AI Bridge Debug] {resp_line}")
-                        
-            except Exception as e:
-                print(f"[AI Bridge Exception] {str(e)}")
-                return None
-                
-    def _process_mask_to_qimage(self, mask_path, hex_color):
-        if not os.path.exists(mask_path):
-            print(f"[AI Bridge] Mask path not found: {mask_path}")
-            return None
-            
-        # Read the raw mask (0 or 255)
-        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
-        if mask is None:
-            print(f"[AI Bridge] cv2 failed to read mask at: {mask_path}")
-            return None
-            
-        h, w = mask.shape
-        print(f"[AI Bridge] Mask loaded. Shape: {w}x{h}. Min: {mask.min()} Max: {mask.max()}")
-        
-        # Parse color
-        hex_color = hex_color.lstrip('#')
-        r = int(hex_color[0:2], 16)
-        g = int(hex_color[2:4], 16)
-        b = int(hex_color[4:6], 16)
-        
-        # Create an RGBA numpy array
-        rgba = np.zeros((h, w, 4), dtype=np.uint8)
-        
-        # Apply color only where mask > 127
-        active_pixels = mask > 127
-        rgba[active_pixels] = [b, g, r, 160] # BGRA
-        
-        # The safest way is to use QImage from buffer
-        qimg = QImage(rgba.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
-        
-        print(f"[AI Bridge] QImage created. isNull: {qimg.isNull()}")
-        
-        return qimg
-
-    def shutdown(self):
-        self.is_ready = False
-        if getattr(self, 'sock_out', None) is not None:
-            try:
-                self.sock_out.write(json.dumps({"action": "shutdown"}) + "\n")
-                self.sock_out.flush()
-                self.sock.close()
-            except Exception:
+                    line = line.rstrip()
+                    if keep is not None:
+                        keep.append(line)
+                        del keep[:-40]
+                    print(f"[AI Bridge {tag}] {line}", flush=True)
+            except (ValueError, OSError):
                 pass
-            finally:
-                self.sock_out = None
-                self.sock_in = None
-                self.sock = None
-                
-        if self.process:
+
+        threading.Thread(target=pump, args=(self.process.stdout, "out"), daemon=True).start()
+        threading.Thread(target=pump, args=(self.process.stderr, "err", self._stderr_tail), daemon=True).start()
+
+        # The server binds its port once the model is loaded; wait as long as it is alive.
+        deadline = time.time() + STARTUP_TIMEOUT
+        while time.time() < deadline:
+            if self._cancel.is_set():
+                self._shutdown_locked()
+                raise BridgeCancelled()
+            if self.process.poll() is not None:
+                tail = "\n".join(self._stderr_tail[-8:]) or "no output"
+                self._fail(f"The AI engine stopped while loading {sam_version}:\n{tail}")
+                self._shutdown_locked()
+                return False
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                sock.settimeout(2.0)
+                sock.connect(('127.0.0.1', self.port))
+            except OSError:
+                sock.close()  # never leak the probe socket
+                time.sleep(0.25)
+                continue
+            self.sock = sock
+            self.sock_in = sock.makefile('r', encoding='utf-8')
+            self.sock_out = sock.makefile('w', encoding='utf-8')
+            self._send({"token": self.token})
+            self.is_ready = True
+            return True
+
+        self._fail(f"The AI engine did not start within {STARTUP_TIMEOUT // 60} minutes.")
+        self._shutdown_locked()
+        return False
+
+    # ---- requests -----------------------------------------------------------
+    def _send(self, payload):
+        self.sock_out.write(json.dumps(payload) + "\n")
+        self.sock_out.flush()
+
+    def _request(self, payload, timeout, on_progress=None):
+        """Send one request and wait for its final JSON reply. Returns the reply or None."""
+        self._send(payload)
+        deadline = None if timeout is None else time.time() + timeout
+        self.sock.settimeout(1.0)
+        while True:
+            if self._cancel.is_set():
+                # The only way to stop the model mid-run is to end the process.
+                self._shutdown_locked()
+                raise BridgeCancelled()
+            if deadline is not None and time.time() > deadline:
+                self._fail(f"The AI engine did not answer within {timeout} s.")
+                self._shutdown_locked()
+                return None
+            try:
+                line = self.sock_in.readline()
+            except (socket.timeout, TimeoutError):
+                continue
+            if not line:
+                tail = "\n".join(self._stderr_tail[-8:])
+                self._fail("The AI engine closed the connection." + (f"\n{tail}" if tail else ""))
+                self._shutdown_locked()
+                return None
+            line = line.strip()
+            if not line.startswith("{"):
+                if line:
+                    print(f"[AI Bridge] {line}", flush=True)
+                continue
+            reply = json.loads(line)
+            status = reply.get("status")
+            if status == "progress":
+                if on_progress:
+                    on_progress(reply)
+                continue
+            if status != "ok":
+                self._fail(f"{reply.get('error', 'Unknown error')}\n{reply.get('traceback', '')}".strip())
+            return reply
+
+    def _run(self, sam_version, payload, timeout, on_progress=None):
+        with self.lock:
+            self._cancel.clear()
+            self.last_error = ""
+            try:
+                if not self._start_server_if_needed(sam_version):
+                    return None
+                return self._request(payload, timeout, on_progress)
+            except BridgeCancelled:
+                self.last_error = "Cancelled."
+                return None
+            except (OSError, ValueError) as e:
+                self._fail(f"Lost the connection to the AI engine: {e}")
+                self._shutdown_locked()
+                return None
+
+    def cancel(self):
+        """Stop the request in progress (from any thread)."""
+        self._cancel.set()
+
+    def query_mask(self, image_path, points, labels, fill_color_hex="#f97316", out_mask_path=None,
+                   sam_version="SAM 1 (ViT-H)", boxes=None, text_prompt=""):
+        """Segment one image from clicks/boxes. Returns a QImage overlay or None (see last_error)."""
+        temp_dir = SettingsManager().get("temp_dir")
+        os.makedirs(temp_dir, exist_ok=True)
+        mask_path = out_mask_path or os.path.join(temp_dir, f"utvfx_bridge_mask_{uuid.uuid4().hex}.png")
+        payload = {"image_path": image_path, "points": points, "labels": labels, "mask_out_path": mask_path}
+        if boxes is not None:
+            payload["boxes"] = boxes
+        if text_prompt:
+            payload["text_prompt"] = text_prompt
+        reply = self._run(sam_version, payload, MASK_TIMEOUT)
+        if not reply or reply.get("status") != "ok":
+            return None
+        return self._process_mask_to_qimage(mask_path, fill_color_hex)
+
+    def track_video(self, frames_dir, start_frame_idx, prompts, out_dir, sam_version="SAM 2 (SAMURAI)",
+                    on_progress=None):
+        """Track objects through a frame folder with SAMURAI. Cancel with cancel()."""
+        payload = {"action": "track_video", "frames_dir": frames_dir, "start_frame_idx": start_frame_idx,
+                   "prompts": prompts, "out_dir": out_dir}
+        reply = self._run(sam_version, payload, None, on_progress)
+        return bool(reply and reply.get("status") == "ok")
+
+    def auto_scan(self, image_path, text_prompt="", sam_version="SAM 3 (ViT-B)"):
+        """Find objects in an image. Returns [(x_norm, y_norm, score)] or None (see last_error)."""
+        payload = {"action": "auto_scan", "image_path": image_path, "text_prompt": text_prompt}
+        reply = self._run(sam_version, payload, SCAN_TIMEOUT)
+        if not reply or reply.get("status") != "ok":
+            return None
+        return reply.get("objects", [])
+
+    def _process_mask_to_qimage(self, mask_path, hex_color):
+        mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE) if os.path.exists(mask_path) else None
+        if mask is None:
+            self._fail(f"The AI engine reported success but wrote no mask ({mask_path}).")
+            return None
+        h, w = mask.shape
+        hex_color = hex_color.lstrip('#')
+        r, g, b = (int(hex_color[i:i + 2], 16) for i in (0, 2, 4))
+        rgba = np.zeros((h, w, 4), dtype=np.uint8)
+        rgba[mask > 127] = [b, g, r, 160]  # BGRA
+        return QImage(rgba.data, w, h, w * 4, QImage.Format.Format_ARGB32).copy()
+
+    # ---- shutdown -----------------------------------------------------------
+    def _shutdown_locked(self):
+        self.is_ready = False
+        if self.sock_out is not None:
+            try:
+                self._send({"action": "shutdown"})
+            except (OSError, ValueError):
+                pass
+        for closable in (self.sock_in, self.sock_out, self.sock):
+            try:
+                if closable is not None:
+                    closable.close()
+            except (OSError, ValueError):
+                pass
+        self.sock = self.sock_in = self.sock_out = None
+        if self.process is not None:
             try:
                 self.process.wait(timeout=3.0)
-            except Exception:
-                pass
-            finally:
-                if self.process.poll() is None:
-                    self.process.terminate()
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=3.0)
             self.process = None
+
+    def shutdown(self):
+        """Stop the engine and free its GPU memory. Cancels a running request first."""
+        self._cancel.set()
+        with self.lock:
+            self._shutdown_locked()
+            self._cancel.clear()
+
+    def shutdown_async(self):
+        """shutdown() without blocking the calling (UI) thread."""
+        threading.Thread(target=self.shutdown, name="bridge-shutdown", daemon=True).start()

@@ -6,6 +6,7 @@ import traceback
 import cv2
 import numpy as np
 import torch
+import secrets
 import socket
 
 # Directory setup
@@ -47,8 +48,14 @@ class SAM1Predictor:
         if not os.path.exists(expected_path):
             raise FileNotFoundError(f"Model checkpoint missing at '{expected_path}'.")
             
-        sam = sam_model_registry[sam_model_type](checkpoint=expected_path)
-        
+        # segment-anything's build_sam reads the checkpoint with a plain torch.load, which
+        # unpickles arbitrary objects (H10). Build the empty model and load the weights here
+        # with weights_only=True instead; sam_vit_h_4b8939.pth is a plain state dict.
+        sam = sam_model_registry[sam_model_type](checkpoint=None)
+        state_dict = torch.load(expected_path, map_location="cpu", weights_only=True)
+        sam.load_state_dict(state_dict)
+        del state_dict
+
         onnx_encoder_path = os.path.join(ROOT_DIR, "models", "ONNX_Exports", "sam_vit_h_encoder.onnx")
         if os.path.exists(onnx_encoder_path):
             print("Using ONNX Image Encoder for SAM 1...")
@@ -573,10 +580,24 @@ def main():
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_socket.bind(("127.0.0.1", args.port))
         server_socket.listen(1)
-        # We don't print INITIALIZED to stdout anymore; the client knows we are ready when connect() succeeds.
-        conn, addr = server_socket.accept()
-        io_in = conn.makefile('r')
-        io_out = conn.makefile('w')
+        # The client knows we are ready when connect() succeeds. Only a connection that first
+        # presents the token the app gave us (in the environment, not the command line) is served,
+        # so other programs on this machine cannot drive the engine.
+        expected = os.environ.get("CONTOUR_BRIDGE_TOKEN", "")
+        while True:
+            conn, addr = server_socket.accept()
+            conn.settimeout(10.0)
+            io_in = conn.makefile('r', encoding='utf-8')
+            io_out = conn.makefile('w', encoding='utf-8')
+            try:
+                hello = json.loads(io_in.readline() or "{}")
+            except (ValueError, OSError):
+                hello = {}
+            if not expected or (isinstance(hello, dict) and secrets.compare_digest(str(hello.get("token", "")), expected)):
+                conn.settimeout(None)
+                break
+            print("Refused a bridge connection without the right token.", file=sys.stderr, flush=True)
+            conn.close()
     else:
         # Fallback to stdin/stdout
         print("READY", flush=True)

@@ -107,3 +107,22 @@ def clear_autosave(workspace_dir):
         os.remove(autosave_path(workspace_dir))
     except OSError:
         pass
+
+
+def shot_name_from_path(file_path):
+    """A project name guessed from a plate path: "sh010_plate.1001.exr" -> "sh010_plate".
+
+    Frame numbers are stripped; a bare numbered file falls back to its folder name
+    unless the folder is a generic one like "renders".
+    """
+    import re
+    name, ext = os.path.splitext(os.path.basename(file_path))
+    if ext.lower() not in (".exr", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".dpx"):
+        return name
+    clean = re.sub(r"[._-]?\d+$", "", name)
+    if clean:
+        return clean
+    folder = os.path.basename(os.path.dirname(file_path))
+    if folder and folder.lower() not in ("render", "renders", "output", "outputs", "frames", "images", "img"):
+        return folder
+    return name

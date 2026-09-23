@@ -16,9 +16,10 @@ FOOTAGE_DIR = os.environ.get(
 )
 
 
-@pytest.fixture(autouse=True)
-def no_modal_dialogs(monkeypatch):
-    """Answer message boxes automatically, so a prompt can never hang the test run."""
+@pytest.fixture(autouse=True, scope="session")
+def no_modal_dialogs():
+    """Answer message boxes automatically for the whole run, so a prompt (even one fired by a
+    leftover timer from an earlier test) can never hang it."""
     from PySide6.QtWidgets import QMessageBox
 
     answered = []
@@ -30,12 +31,13 @@ def no_modal_dialogs(monkeypatch):
         return staticmethod(_answer)
 
     buttons = QMessageBox.StandardButton
-    monkeypatch.setattr(QMessageBox, "question", answer("question", buttons.Discard))
-    monkeypatch.setattr(QMessageBox, "warning", answer("warning", buttons.Ok))
-    monkeypatch.setattr(QMessageBox, "information", answer("information", buttons.Ok))
-    monkeypatch.setattr(QMessageBox, "critical", answer("critical", buttons.Ok))
-    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
-    return answered
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(QMessageBox, "question", answer("question", buttons.Discard))
+        mp.setattr(QMessageBox, "warning", answer("warning", buttons.Ok))
+        mp.setattr(QMessageBox, "information", answer("information", buttons.Ok))
+        mp.setattr(QMessageBox, "critical", answer("critical", buttons.Ok))
+        mp.setattr(QMessageBox, "exec", lambda self: 0)
+        yield answered
 
 
 @pytest.fixture(scope="session")
