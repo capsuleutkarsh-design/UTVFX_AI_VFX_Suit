@@ -1,8 +1,4 @@
 import os
-import sys
-import zipfile
-import requests
-from pathlib import Path
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
@@ -16,6 +12,7 @@ try:
 except ImportError:
     snapshot_download = None
 
+from utvfx.core import downloads
 from utvfx.core.settings_manager import SettingsManager
 from utvfx.ui import icons, theme
 
@@ -29,6 +26,12 @@ _sm = SettingsManager()
 MODELS_DIR = _sm.models_dir
 BASE_DIR = os.path.dirname(MODELS_DIR)
 
+
+def _base_path(rel):
+    return os.path.join(BASE_DIR, *rel.replace("\\", "/").split("/"))
+
+
+# Same pinned list as first_setup.py (binaries such as COLMAP are left to the installer).
 MODELS = []
 for sm in SETUP_MODELS:
     if sm.get("type") == "hf_repo":
@@ -36,17 +39,34 @@ for sm in SETUP_MODELS:
             "name": sm["name"],
             "type": "huggingface",
             "repo_id": sm["repo_id"],
-            "path": os.path.join(BASE_DIR, sm.get("local_dir", "")),
-            "check_file": "config.json"
+            "revision": sm.get("revision"),
+            "ignore_patterns": sm.get("ignore_patterns"),
+            "code_sha256": sm.get("code_sha256"),
+            "path": _base_path(sm.get("local_dir", "")),
+            "check_path": _base_path(sm["check_dir"]) if sm.get("check_dir") else None,
         })
     elif sm.get("type") == "file":
         MODELS.append({
             "name": sm["name"],
             "type": "url",
             "url": sm["url"],
-            "path": os.path.dirname(os.path.join(BASE_DIR, sm["path"])),
+            "sha256": sm.get("sha256"),
+            "size": sm.get("size"),
+            "path": os.path.dirname(_base_path(sm["path"])),
             "check_file": os.path.basename(sm["path"])
         })
+
+
+def model_status(model):
+    """'ok', 'unverified' (present, but no finished download of the pinned revision is
+    recorded, so it may be partial) or 'missing'. Cheap: no hashing, no network."""
+    if model["type"] == "url":
+        path = os.path.join(model["path"], model["check_file"])
+        if downloads.file_is_installed(path, model.get("size")):
+            return "ok"
+        return "unverified" if os.path.exists(path) else "missing"
+    return downloads.hf_status(model["path"], model.get("revision"), model.get("check_path"))
+
 
 class DownloadWorker(QThread):
     progress = Signal(int, int) # downloaded, total
@@ -71,15 +91,25 @@ class DownloadWorker(QThread):
                         raise ImportError("huggingface_hub is not installed.")
                     os.makedirs(model["path"], exist_ok=True)
                     self.progress.emit(0, 0) 
+                    # Pinned revision; files already there are checked and kept.
                     snapshot_download(
                         repo_id=model["repo_id"],
-                        local_dir=model["path"]
+                        revision=model["revision"],
+                        local_dir=model["path"],
+                        ignore_patterns=model.get("ignore_patterns"),
                     )
+                    if model.get("code_sha256"):
+                        downloads.require_local_model(model["path"], kind=model["name"],
+                                                      code_hashes=model["code_sha256"])
+                    if model.get("revision"):
+                        downloads.hf_write_marker(model["path"], model["revision"])
                     self.progress.emit(100, 100)
                     
                 elif model["type"] == "url":
-                    self.download_file_from_url(model["url"], model["path"], model["check_file"])
+                    self.download_file_from_url(model)
                     
+            except downloads.CancelledError:
+                break
             except Exception as e:
                 self.error.emit(f"Error downloading {model['name']}: {str(e)}")
                 continue
@@ -88,26 +118,23 @@ class DownloadWorker(QThread):
             self.status.emit("All downloads completed.")
         self.finished_all.emit()
 
-    def download_file_from_url(self, url, save_dir, filename):
-        os.makedirs(save_dir, exist_ok=True)
-        save_path = os.path.join(save_dir, filename)
-        
-        response = requests.get(url, stream=True)
-        response.raise_for_status()
-        
-        total_size = int(response.headers.get('content-length', 0))
-        downloaded = 0
-        
-        with open(save_path, 'wb') as file:
-            for data in response.iter_content(chunk_size=8192):
-                if self.is_cancelled:
-                    break
-                size = file.write(data)
-                downloaded += size
-                self.progress.emit(downloaded, total_size)
+    def download_file_from_url(self, model):
+        # Goes through "<file>.part"; renamed only when the size and SHA-256 match.
+        downloads.download_file(
+            model["url"], os.path.join(model["path"], model["check_file"]),
+            sha256=model.get("sha256"), size=model.get("size"),
+            progress=lambda done, total: self.progress.emit(*_scaled(done, total)),
+            is_cancelled=lambda: self.is_cancelled)
 
     def cancel(self):
         self.is_cancelled = True
+
+
+def _scaled(done, total):
+    """QProgressBar takes 32-bit ints; model files are larger than 2 GB."""
+    if total <= 0:
+        return 0, 0
+    return int(1000 * done / total), 1000
 
 
 class ExtractWorker(QThread):
@@ -115,6 +142,7 @@ class ExtractWorker(QThread):
     status = Signal(str)
     finished_all = Signal()
     error = Signal(str)
+    report = Signal(int, list)  # files installed, [(entry, reason)] refused
 
     def __init__(self, zip_path, extract_dir):
         super().__init__()
@@ -125,23 +153,20 @@ class ExtractWorker(QThread):
     def run(self):
         self.status.emit("Extracting models (this may take a while)...")
         try:
-            with zipfile.ZipFile(self.zip_path, 'r') as zip_ref:
-                members = zip_ref.infolist()
-                total_files = len(members)
-                
-                for i, member in enumerate(members):
-                    if self.is_cancelled:
-                        break
-                        
-                    # Fix paths for users who zipped the contents of the models directory directly
-                    if not (member.filename.startswith("models/") or member.filename.startswith("plugins/")):
-                        member.filename = "models/" + member.filename
-                            
-                    zip_ref.extract(member, self.extract_dir)
-                    self.progress.emit(i + 1, total_files)
-                    
+            # Only data files under models/ are written: no plugins/, no code, no paths
+            # outside the folder, and a size / compression-ratio limit (H10).
+            extracted, skipped = downloads.extract_models_zip(
+                self.zip_path, self.extract_dir,
+                progress=lambda i, n: self.progress.emit(i, n),
+                is_cancelled=lambda: self.is_cancelled)
+            self.report.emit(len(extracted), skipped)
             if not self.is_cancelled:
-                self.status.emit("Extraction completed.")
+                msg = f"Installed {len(extracted)} files."
+                if skipped:
+                    msg += f" Skipped {len(skipped)} that are not model files."
+                self.status.emit(msg)
+        except downloads.CancelledError:
+            self.status.emit("Extraction cancelled.")
         except Exception as e:
             self.error.emit(f"Extraction failed: {str(e)}")
             
@@ -245,14 +270,19 @@ class ModelDownloaderDialog(QDialog):
 
         self.models_to_download = []
         installed_count = 0
+        unverified_count = 0
         for index, model in enumerate(MODELS):
-            expected_file = os.path.join(model["path"], model["check_file"])
-            is_installed = os.path.exists(expected_file)
+            state = model_status(model)
+            is_installed = state == "ok"
 
             if is_installed:
                 installed_count += 1
             else:
+                # Unverified files may be a partial download: "Download" checks them
+                # against the pinned version and only fetches what is missing.
                 self.models_to_download.append(model)
+                if state == "unverified":
+                    unverified_count += 1
 
             if index:
                 self.scroll_layout.addWidget(self._separator())
@@ -266,11 +296,17 @@ class ModelDownloaderDialog(QDialog):
             name_lbl = QLabel(model["name"])
 
             status_icon = QLabel()
-            status_icon.setPixmap(icons.pixmap(
-                "check" if is_installed else "clear", 14,
-                theme.SUCCESS if is_installed else theme.ERROR))
-            status_lbl = theme.set_role(QLabel("Installed" if is_installed else "Missing"),
-                                        "ok" if is_installed else "error")
+            if state == "unverified":
+                status_icon.setPixmap(icons.pixmap("warning", 14, theme.WARNING))
+                status_lbl = theme.set_role(QLabel("Not verified"), "dim")
+                status_lbl.setToolTip("Files are present, but no finished download of the pinned "
+                                      "version is recorded. Download checks them and fills any gaps.")
+            else:
+                status_icon.setPixmap(icons.pixmap(
+                    "check" if is_installed else "clear", 14,
+                    theme.SUCCESS if is_installed else theme.ERROR))
+                status_lbl = theme.set_role(QLabel("Installed" if is_installed else "Missing"),
+                                            "ok" if is_installed else "error")
 
             item_layout.addWidget(name_lbl)
             item_layout.addStretch()
@@ -284,9 +320,14 @@ class ModelDownloaderDialog(QDialog):
             self.btn_download.hide()
             self.btn_extract.hide()
         else:
+            missing = total - installed_count - unverified_count
+            parts = []
+            if missing:
+                parts.append(f"{missing} of {total} models are missing")
+            if unverified_count:
+                parts.append(f"{unverified_count} of {total} are present but not verified")
             self.summary_label.setText(
-                f"{total - installed_count} of {total} models are missing. "
-                "Download them, or install them from an offline ZIP.")
+                "; ".join(parts) + ". Download them, or install them from an offline ZIP.")
             self.btn_download.setEnabled(True)
             self.btn_extract.setEnabled(True)
 
@@ -329,12 +370,24 @@ class ModelDownloaderDialog(QDialog):
         extract_target = BASE_DIR
 
         self.worker = ExtractWorker(zip_path, extract_target)
+        self.worker.report.connect(self.on_extract_report)
         self.worker.progress.connect(self.update_progress)
         self.worker.status.connect(self.update_status)
         self.worker.error.connect(self.on_error)
         self.worker.finished_all.connect(self.on_finished)
         self.worker.finished.connect(self.worker.deleteLater)
         self.worker.start()
+
+    def on_extract_report(self, installed, skipped):
+        if not skipped:
+            return
+        shown = "\n".join(f"{name}  ({reason})" for name, reason in skipped[:25])
+        if len(skipped) > 25:
+            shown += f"\n... and {len(skipped) - 25} more"
+        QMessageBox.information(
+            self, "Offline ZIP",
+            f"Installed {installed} files into models/.\n\n"
+            f"Skipped {len(skipped)} entries (only model files under models/ are installed):\n\n{shown}")
 
     def update_progress(self, current, total):
         if total > 0:

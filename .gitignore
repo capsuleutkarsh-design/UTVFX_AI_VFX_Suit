@@ -4,10 +4,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+# PyInstaller / Inno Setup output. build/installer.iss, build/*.bat and ContourVFX.spec stay tracked.
 dist/
 build/Output/
+build/ContourVFX/
 build/UTVFX_AI_VFX_Tool/
 *.spec
+!ContourVFX.spec
 logs/
 outputs/
 cache/
@@ -25,8 +28,7 @@ python_base/
 *.bin
 *.dll
 *.exe
-build/
-UTVFX_Models.zip
+ContourVFX_Models.zip
 workspace/
 *.png
 *.exr
@@ -51,3 +53,11 @@ models/**/.cache/
 .pytest_cache/
 tests/*.log
 tests/output/
+
+# Installer downloads in progress (first_setup.py, utvfx/core/downloads.py)
+.downloads/
+*.part
+python_base.part/
+
+# Binaries installed by first_setup.py (COLMAP 4.2.0, FFmpeg)
+plugins/3DTracker/bin/

@@ -1,132 +1,59 @@
+"""Download missing AI models only (no Python setup).
+
+    python_base\\python.exe scripts\\download_models.py [--yes] [--verify]
+
+Uses the same pinned list, hashes and .part downloads as first_setup.py, so the two
+can never disagree about what "installed" means.
+"""
+
+import argparse
 import os
 import sys
-import requests
-from pathlib import Path
 
-try:
-    from tqdm import tqdm
-except ImportError:
-    print("tqdm is required. Please install it with 'pip install tqdm'")
-    sys.exit(1)
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
 
-try:
-    from huggingface_hub import snapshot_download
-except ImportError:
-    print("huggingface_hub is required. Please install it with 'pip install huggingface_hub'")
-    sys.exit(1)
+import first_setup  # noqa: E402
 
-from utvfx.core.settings_manager import SettingsManager
-BASE_DIR = SettingsManager().project_root
 
-# Define the models and their expected locations
-MODELS = [
-    {
-        "name": "BiRefNet (General)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet",
-        "path": os.path.join(BASE_DIR, "models", "BiRefNet"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "BiRefNet (Matting)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet-matting",
-        "path": os.path.join(BASE_DIR, "models", "BiRefNet-matting"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "BiRefNet (Portrait)",
-        "type": "huggingface",
-        "repo_id": "ZhengPeng7/BiRefNet-portrait",
-        "path": os.path.join(BASE_DIR, "models", "BiRefNet-portrait"),
-        "check_file": "model.safetensors"
-    },
-    {
-        "name": "Segment Anything (SAM)",
-        "type": "url",
-        "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
-        "path": os.path.join(BASE_DIR, "models", "SAM"),
-        "check_file": "sam_vit_h_4b8939.pth"
-    },
-    {
-        "name": "Depth Anything V2 (Large)",
-        "type": "url",
-        "url": "https://huggingface.co/depth-anything/Depth-Anything-V2-Large/resolve/main/depth_anything_v2_vitl.pth",
-        "path": os.path.join(BASE_DIR, "models", "DepthAnythingV2"),
-        "check_file": "depth_anything_v2_vitl.pth"
-    }
-]
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Download missing Contour VFX models")
+    parser.add_argument("--yes", "-y", action="store_true", help="do not ask before downloading")
+    parser.add_argument("--verify", action="store_true", help="hash files that are already present")
+    args = parser.parse_args(argv)
 
-def download_file_from_url(url, save_dir, filename):
-    os.makedirs(save_dir, exist_ok=True)
-    save_path = os.path.join(save_dir, filename)
-    
-    response = requests.get(url, stream=True)
-    response.raise_for_status()
-    
-    total_size = int(response.headers.get('content-length', 0))
-    
-    with open(save_path, 'wb') as file, tqdm(
-        desc=filename,
-        total=total_size,
-        unit='iB',
-        unit_scale=True,
-        unit_divisor=1024,
-    ) as bar:
-        for data in response.iter_content(chunk_size=1024):
-            size = file.write(data)
-            bar.update(size)
-
-def main():
     print("=" * 60)
-    print("UTVFX AI & VFX Suit - Smart Model Downloader")
+    print("Contour VFX - model downloader")
     print("=" * 60)
-    print("Checking installed models...\n")
+    todo = []
+    for task in first_setup.MODELS:
+        status = first_setup.item_status(task, verify=args.verify)
+        print(f"[{status.upper()}] {task['name']}")
+        if status != "ok":
+            todo.append(task)
+    if not todo:
+        print("\nAll models are installed.")
+        return 0
 
-    models_to_download = []
-
-    # Check which models are missing
-    for model in MODELS:
-        expected_file = os.path.join(model["path"], model["check_file"])
-        if os.path.exists(expected_file):
-            print(f"[OK] {model['name']} is already installed.")
-        else:
-            print(f"[MISSING] {model['name']} needs to be downloaded.")
-            models_to_download.append(model)
-            
-    if not models_to_download:
-        print("\nAll models are already installed! You are good to go.")
-        return
-
-    print(f"\n{len(models_to_download)} model(s) need to be downloaded.")
-    user_input = input("Do you want to download them now? (y/n): ")
-    
-    if user_input.lower() != 'y':
+    print(f"\n{len(todo)} item(s) are missing or not verified.")
+    try:
+        answer = "y" if args.yes else input("Download them now? (y/n): ").strip().lower()
+    except EOFError:
+        answer = "n"
+    if answer != "y":
         print("Download cancelled.")
-        return
+        return 0
 
-    print("\nStarting downloads...")
-    for model in models_to_download:
-        print(f"\n--- Downloading {model['name']} ---")
-        try:
-            if model["type"] == "huggingface":
-                os.makedirs(model["path"], exist_ok=True)
-                snapshot_download(
-                    repo_id=model["repo_id"],
-                    local_dir=model["path"]
-                )
-                print(f"Successfully downloaded {model['name']}")
-                
-            elif model["type"] == "url":
-                download_file_from_url(model["url"], model["path"], model["check_file"])
-                print(f"Successfully downloaded {model['name']}")
-                
-        except Exception as e:
-            print(f"Error downloading {model['name']}: {e}")
-
+    # huggingface_hub is imported in a child process running this same interpreter.
+    failed = first_setup.download_models(sys.executable, verify=args.verify)
     print("\n" + "=" * 60)
-    print("Download process finished!")
-    print("=" * 60)
+    if failed:
+        print("Not completed: " + ", ".join(failed))
+        return 1
+    print("Download process finished.")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

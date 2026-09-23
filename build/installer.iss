@@ -20,6 +20,7 @@ DiskSpanning=yes
 DiskSliceSize=2000000000
 
 [Files]
+Source: "extract_models.ps1"; Flags: dontcopy
 Source: "..\dist\ContourVFX\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
@@ -39,7 +40,7 @@ begin
     wpSelectDir,
     'Select Models Archive',
     'Where is the models ZIP archive located?',
-    'Select the .zip file containing the ML models (e.g., sam3, vit_b). The installer will extract these into the app folder. You can leave it blank to skip.'
+    'Select the Contour VFX models ZIP (made by scripts\build_models_zip.py). Only files under models\ are installed. Leave blank to skip and download the models later.'
   );
   ModelsPage.Add('Models Archive (*.zip)', 'ZIP Files|*.zip|All Files|*.*', '.zip');
 end;
@@ -58,8 +59,14 @@ begin
       DestPath := ExpandConstant('{app}');
       ForceDirectories(DestPath);
       WizardForm.StatusLabel.Caption := 'Extracting models (this may take a while)...';
-      // Use PowerShell to extract the zip silently
-      Exec('powershell.exe', '-NoProfile -Command "Expand-Archive -Path ''' + ZipPath + ''' -DestinationPath ''' + DestPath + ''' -Force"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+      // Only model data under models/ is extracted: no code, no path tricks, size-capped.
+      ExtractTemporaryFile('extract_models.ps1');
+      if not Exec('powershell.exe',
+                  '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\extract_models.ps1') +
+                  '" -Zip "' + ZipPath + '" -Dest "' + DestPath + '"',
+                  '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+        MsgBox('The models archive could not be installed (code ' + IntToStr(ResultCode) + '). ' +
+               'You can import it later from Settings > AI models.', mbError, MB_OK);
     end;
   end;
 end;

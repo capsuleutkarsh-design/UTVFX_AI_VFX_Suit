@@ -1,31 +1,43 @@
+# Top-level packages Contour VFX needs, with the ranges it is known to work in.
+# The installer (first_setup.py) does NOT use this file: it installs the exact
+# versions in requirements-lock.txt. Edit this list, test, then re-freeze the lock.
+# Python 3.10 or 3.11 only (torch 2.5.1+cu121 and mediapipe<0.10.10 have no 3.12 wheels).
 --extra-index-url https://download.pytorch.org/whl/cu121
-PySide6
-qasync
+PySide6>=6.11,<6.12
+qasync<1
 torch==2.5.1+cu121
 torchvision==0.20.1+cu121
 torchaudio==2.5.1+cu121
-opencv-python
-numpy<2.0.0
+# One OpenCV only: mediapipe requires the contrib build, and a second OpenCV package
+# overwrites the same cv2 folder. No contrib-only API is used by the app itself.
+# 4.12+ wheels require numpy 2.
+opencv-contrib-python>=4.11,<4.12
+numpy>=1.26,<2
 tqdm
 einops
-omegaconf
+omegaconf>=2.3,<2.4
 imageio
 imageio-ffmpeg
-huggingface_hub
-requests
+# huggingface_hub 1.x / transformers 5.x: newer majors may need a newer torch.
+huggingface_hub>=1.32,<2
+transformers>=5.17,<6
+safetensors<1
+requests>=2.32,<3
 psutil
-OpenImageIO
-pyqtgraph
-onnxruntime
-hydra-core
+OpenImageIO>=3.0,<3.1
+pyqtgraph<0.15
+onnxruntime>=1.23,<1.24
+hydra-core>=1.3,<1.4
 loguru
-scipy
+scipy<1.16
 iopath
 fvcore
-transformers
 PyOpenGL
 diffusers<0.32.0
 easydict
-timm
-kornia
+timm>=1.0,<2
+kornia<0.9
 mediapipe<0.10.10
+# Tests
+pytest
+pytest-qt

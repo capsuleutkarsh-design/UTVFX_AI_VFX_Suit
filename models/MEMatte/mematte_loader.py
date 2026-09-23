@@ -56,12 +56,14 @@ def load_mematte(device="cuda"):
     if not os.path.exists(weights_path):
         raise FileNotFoundError(f"MEMatte weights not found at {weights_path}")
         
-    checkpoint = torch.load(weights_path, map_location=device, weights_only=False)
-    if 'model' in checkpoint:
+    # weights_only=True: a .pth is a pickle, and a tampered one could run code when loaded
+    # with the full unpickler (H10). MEMatte_ViTB_DIM.pth is a plain dict of tensors.
+    checkpoint = torch.load(weights_path, map_location=device, weights_only=True)
+    if isinstance(checkpoint, dict) and 'model' in checkpoint:
         state_dict = checkpoint['model']
     else:
         state_dict = checkpoint
-        
+
     model.load_state_dict(state_dict, strict=False)
     model.to(device)
     model.eval()

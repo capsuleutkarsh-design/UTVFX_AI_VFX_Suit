@@ -17,6 +17,7 @@ from utvfx.bridge.base_worker import BaseWorker
 def _use_shared_models_dir():
     """Point the vendored CorridorKey and BiRefNet modules at the suite's models folder."""
     from utvfx.core.settings_manager import SettingsManager
+    from utvfx.core.downloads import require_local_model
     import CorridorKeyModule.backend as ck_backend
     import BiRefNetModule.wrapper as birefnet_wrapper
     from transformers import AutoModelForImageSegmentation
@@ -25,11 +26,24 @@ def _use_shared_models_dir():
     ck_backend.CHECKPOINT_DIR = os.path.join(models_dir, "CorridorKey")
     birefnet_wrapper.base_folder = os.path.join(models_dir, "BiRefNet")
 
-    # BiRefNet ships its model code with its weights; newer transformers only loads it with trust_remote_code.
+    # H9: the wrapper (a submodule we don't edit) calls snapshot_download on every run,
+    # which would fetch whatever the author last pushed. Replace it with a check that the
+    # pinned files from first_setup.py are in models/BiRefNet/<name> and that the Python
+    # files transformers will execute are the reviewed ones. Nothing is downloaded.
+    def _local_birefnet_only(repo_id=None, local_dir=None, **_ignored):
+        return require_local_model(local_dir, kind="BiRefNet")
+
+    birefnet_wrapper.snapshot_download = _local_birefnet_only
+
+    # BiRefNet ships its model code (birefnet.py) with its weights, and transformers only
+    # loads such code with trust_remote_code=True. That stays on, because the code it runs
+    # is the local copy from the pinned revision in first_setup.py, checked above against
+    # reviewed hashes; local_files_only stops transformers from fetching anything.
     class _BiRefNetLoader:
         @staticmethod
         def from_pretrained(path, **kwargs):
             kwargs["trust_remote_code"] = True
+            kwargs["local_files_only"] = True
             return AutoModelForImageSegmentation.from_pretrained(path, **kwargs)
 
     birefnet_wrapper.AutoModelForImageSegmentation = _BiRefNetLoader
