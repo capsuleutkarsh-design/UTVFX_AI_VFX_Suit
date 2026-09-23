@@ -12,10 +12,13 @@ from utvfx.version import APP_NAME, VERSION
 # Expanded, professional documentation for all known nodes
 NODE_HELP_DATA = {
     "media_plate": {
-        "description": "The <b>Media Plate</b> node acts as the source for your image or sequence. It streams frames from disk into the VFX pipeline.",
+        "description": "The <b>Media Plate</b> node brings in footage: an image sequence (EXR, DPX, TIFF, PNG...) or a video file. It keeps the original colour for the final output and makes a display copy (16-bit PNG, plus JPG where a node needs it) that the AI nodes and the viewer use. Frames keep their original numbers.",
         "params": {
-            "plate_file": "The absolute path to the main image or the first frame of an image sequence.",
-            "is_sequence": "Check this if the media file is part of a numbered image sequence (e.g. frame_0001.exr) to load it as video."
+            "plate_file": "The first frame of an image sequence, or a video file.",
+            "is_sequence": "Load every numbered frame next to the chosen file as one sequence.",
+            "first_frame": "The frame number a video starts at (image sequences keep their own numbers). 1001 is the usual VFX start.",
+            "working_resolution": "Half makes the AI nodes and the viewer work at half size, much faster on 4K plates. The original stays full size for the output.",
+            "colourspace": "The colour space of the footage. Auto reads it from the file (EXR chromaticities, video tags); set it by hand for log footage such as LogC or S-Log3."
         }
     },
     "grade": {
@@ -63,11 +66,24 @@ NODE_HELP_DATA = {
         }
     },
     "roto_to_shape": {
-        "description": "The <b>Roto to Shape</b> node converts pixel-based alpha masks (like the ones from Super Matte) into mathematical vector splines/polygons.",
+        "description": "The <b>Roto to Shape</b> node traces mattes (such as SuperMatte's, one set of shapes per layer) into Nuke roto shapes. A shape keeps its name and point count from frame to frame, so Nuke can animate it.",
         "params": {
-            "target_points": "The target number of vertices for the generated vector polygon.",
-            "min_area": "Removes any tiny isolated vector islands smaller than this area (in square pixels).",
-            "simplify_epsilon": "The tolerance parameter for the Douglas-Peucker algorithm. Higher values result in fewer points and smoother curves, but lose tight details."
+            "point_mode": "Auto spaces points along the outline (more on curves); Fixed gives every shape the same number of points.",
+            "auto_point_spacing": "Auto mode: roughly how many pixels apart points are. Lower gives more points.",
+            "target_points": "Fixed mode: the number of points in each shape.",
+            "curvature_weight": "How strongly points gather on curves rather than straight edges.",
+            "corner_threshold": "Turns sharper than this become cusps; gentler ones stay smooth.",
+            "simplify_epsilon": "Higher values give smoother, simpler outlines; lower values follow the matte more closely.",
+            "edge_snap_radius": "How far points may move to sit exactly on the matte edge.",
+            "min_area": "Ignores pieces of matte smaller than this many square pixels.",
+            "edge_placement": "Where the outline sits on a soft edge: 0 = outer edge, 100 = solid core.",
+            "generate_feather": "Also traces the soft edge and exports it as Nuke feather points.",
+            "iou_threshold": "How much a shape must overlap the previous frame's shape to count as the same shape.",
+            "include_holes": "Also trace holes inside the matte (for example between an arm and the body).",
+            "max_missing_frames": "How many frames a shape may disappear for and still come back under the same name.",
+            "temporal_smoothing": "Averages each shape with the frames either side to calm jitter.",
+            "first_frame": "First plate frame to trace (0 = start).",
+            "last_frame": "Last plate frame to trace (0 = end)."
         }
     },
     "corridor_keyer": {
