@@ -3,15 +3,125 @@
     "plugin_type": "sfm_tracker",
     "category": "Tracking",
     "color": "#eab308",
-    "inputs": ["Video Plate"],
-    "outputs": ["3D Camera Path", "3D Sparse Points"],
+    "inputs": [
+        "Video Plate",
+        "Moving Objects Matte"
+    ],
+    "outputs": [
+        "3D Camera Path",
+        "3D Sparse Points"
+    ],
     "parameters": [
-        {"id": "mapper_engine", "name": "Mapping Engine", "type": "radio", "value": "GLOMAP (Fast)", "options": ["COLMAP (Incremental)", "GLOMAP (Fast)"]},
-        {"id": "feature_type", "name": "Feature Extractor Algo", "type": "select", "value": "SIFT (GPU)", "options": ["SIFT (GPU)", "DSP-SIFT", "SuperPoint AI"]},
-        {"id": "max_features", "name": "Max Features Per Frame", "type": "slider", "value": 2000, "min": 500, "max": 10000, "step": 500},
-        {"id": "match_type", "name": "Vocab Tree Match Mode", "type": "select", "value": "Sequential", "options": ["Sequential", "Exhaustive", "Spatial Neighbors"]},
-        {"id": "min_tri_angle", "name": "Min Triangulation Angle", "type": "slider", "value": 1.5, "min": 0.5, "max": 5.0, "step": 0.1},
-        {"id": "ba_iterations", "name": "Bundle Adjuster Steps", "type": "slider", "value": 100, "min": 20, "max": 300, "step": 10}
+        {
+            "id": "solver",
+            "name": "Solver",
+            "type": "radio",
+            "value": "Global (GLOMAP, fast)",
+            "options": [
+                "Global (GLOMAP, fast)",
+                "Incremental (robust)"
+            ]
+        },
+        {
+            "id": "features",
+            "name": "Features",
+            "type": "select",
+            "value": "SIFT (classic, fastest)",
+            "options": [
+                "SIFT (classic, fastest)",
+                "SIFT + LightGlue",
+                "ALIKED + LightGlue (AI)",
+                "LoMa (AI, strongest, slow)"
+            ]
+        },
+        {
+            "id": "max_features",
+            "name": "Max Features per Frame",
+            "type": "slider",
+            "value": 8192,
+            "min": 1024,
+            "max": 32768,
+            "step": 1024
+        },
+        {
+            "id": "max_image_size",
+            "name": "Max Image Size (px)",
+            "type": "slider",
+            "value": 3200,
+            "min": 1024,
+            "max": 8192,
+            "step": 256
+        },
+        {
+            "id": "camera_model",
+            "name": "Lens Model",
+            "type": "select",
+            "value": "SIMPLE_RADIAL",
+            "options": [
+                "SIMPLE_RADIAL",
+                "RADIAL",
+                "OPENCV",
+                "OPENCV_FISHEYE",
+                "PINHOLE"
+            ]
+        },
+        {
+            "id": "focal_mm",
+            "name": "Known Focal Length (mm, 0 = unknown)",
+            "type": "slider",
+            "value": 0,
+            "min": 0,
+            "max": 300,
+            "step": 0.5
+        },
+        {
+            "id": "sensor_width_mm",
+            "name": "Sensor Width (mm)",
+            "type": "slider",
+            "value": 24.89,
+            "min": 4,
+            "max": 70,
+            "step": 0.01
+        },
+        {
+            "id": "refine_lens",
+            "name": "Refine Focal Length and Distortion",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "overlap",
+            "name": "Match Neighbours (frames)",
+            "type": "slider",
+            "value": 35,
+            "min": 5,
+            "max": 100,
+            "step": 1
+        },
+        {
+            "id": "loop_detection",
+            "name": "Loop Detection (SIFT)",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "mask_grow",
+            "name": "Grow Moving-Object Mask (px)",
+            "type": "slider",
+            "value": 8,
+            "min": 0,
+            "max": 50,
+            "step": 1
+        },
+        {
+            "id": "min_coverage",
+            "name": "Minimum Frames Solved",
+            "type": "slider",
+            "value": 0.5,
+            "min": 0.1,
+            "max": 1.0,
+            "step": 0.05
+        }
     ],
     "worker_module": "plugins.3DTracker.backend",
     "worker_class": "TrackerWorker"

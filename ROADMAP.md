@@ -13,7 +13,7 @@ The app is being fixed and rebranded in passes. Each pass ends with a review bef
 **Shared contracts** (every node depends on these, so they come first):
 - [x] Frame contract: timeline *position* inside the app, plate *frame number* only in file names (C7)
 - [x] Inputs resolved from the actual wire, with typed ports (H2)
-- [ ] Image pipeline: float/16-bit working copy (no JPEG), one colour module with a real OCIO config, ACES and log inputs, highlights kept (C1, H12). *Format to be agreed before building.*
+- [x] Image pipeline: float/16-bit working copy (no JPEG), one colour module with a real OCIO config, ACES and log inputs, highlights kept (C1, H12). Tiered plate (EXR master, 16-bit PNG, JPG) with the ACES studio config.
 
 **Stability:**
 - [x] Undo by node id (C5). Keyframes survive reload (C6). Dot nodes save (H1)
@@ -40,7 +40,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] Depth (H15)
 - [x] AI Roto (H16)
 - [x] Grade / OCIO (M9)
-- [ ] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)
+- [x] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)
 
 ## Pass 3: Export
 - [ ] Camera to Nuke/Blender/Alembic/USD, reusing the Automated Tracker's tested writers (C2)

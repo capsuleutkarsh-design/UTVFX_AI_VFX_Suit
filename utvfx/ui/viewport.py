@@ -293,6 +293,30 @@ class Viewport(QWidget):
 
         self.set_view_mode("COMP")
 
+    def _load_track_points(self, node):
+        """2D positions of the solved points per plate frame, as fractions of the frame (0-1)."""
+        import json
+        from utvfx.core.media_resolver import get_node_cache
+        sparse_dir = os.path.join(get_node_cache(node), "sparse")
+        images_txt = os.path.join(sparse_dir, "0", "images.txt")
+        try:
+            with open(os.path.join(sparse_dir, "solve.json"), encoding="utf-8") as f:
+                solve = json.load(f)
+            with open(images_txt, "r", encoding="utf-8") as f:
+                lines = [l for l in f.read().splitlines() if not l.startswith("#")]
+        except (OSError, ValueError):
+            return
+        w, h = float(solve["image_width"]), float(solve["image_height"])
+        for header, observations in zip(lines[0::2], lines[1::2]):
+            parts = header.split()
+            if len(parts) < 10 or parts[9] not in solve["frames"]:
+                continue
+            values = observations.split()
+            pts = [(float(values[k]) / w, float(values[k + 1]) / h, True)
+                   for k in range(0, len(values) - 2, 3) if values[k + 2] != "-1"]
+            self.img_display.tracking_points[solve["frames"][parts[9]]] = pts
+        self.img_display.show_tracking = bool(self.img_display.tracking_points)
+
     def set_view_mode(self, mode):
         for m, btn in self.view_modes.items():
             btn.setChecked(m == mode)
@@ -301,9 +325,9 @@ class Viewport(QWidget):
         if self.current_node:
             # Check if we should switch to 3D Viewer
             if mode == "3D" and getattr(self.current_node, "plugin_type", "") == "sfm_tracker":
-                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                sparse_dir = os.path.join(project_root, "workspace", "cache", getattr(self.current_node, "node_id", ""), "sparse")
-                if os.path.exists(os.path.join(sparse_dir, "0", "points3D.txt")):
+                from utvfx.core.media_resolver import get_node_cache
+                sparse_dir = os.path.join(get_node_cache(self.current_node), "sparse", "0")
+                if os.path.exists(os.path.join(sparse_dir, "points3D.txt")):
                     self.stacked_display.setCurrentWidget(self.point_cloud_viewer)
                     self.point_cloud_viewer.load_colmap_model(sparse_dir)
                     if self.player_thread:
@@ -437,38 +461,7 @@ class Viewport(QWidget):
         self.img_display.tracking_points.clear()
         self.img_display.show_tracking = False
         if node.plugin_type == "sfm_tracker":
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            sparse_dir = os.path.join(project_root, "cache", getattr(node, "node_id", ""), "sparse", "0")
-            images_txt = os.path.join(sparse_dir, "images.txt")
-            if os.path.exists(images_txt):
-                self.img_display.show_tracking = True
-                try:
-                    with open(images_txt, "r") as f:
-                        lines = f.readlines()
-                        for i in range(0, len(lines), 2):
-                            if lines[i].startswith("#") or not lines[i].strip():
-                                continue
-                            parts = lines[i].strip().split()
-                            if len(parts) >= 10:
-                                name = parts[9]
-                                import re
-                                m = re.match(r"^.*?(\d+)\.[^.]+$", name)
-                                if m:
-                                    frame_num = int(m.group(1))
-                                    # COLMAP sequence start varies, we map by finding offset
-                                    # We will just parse the 2nd line
-                                    pts_line = lines[i+1].strip().split()
-                                    pts = []
-                                    for p_idx in range(0, len(pts_line), 3):
-                                        x = float(pts_line[p_idx])
-                                        y = float(pts_line[p_idx+1])
-                                        has_3d = int(pts_line[p_idx+2]) != -1
-                                        if has_3d: # We probably only want to draw matched points
-                                            pts.append((x, y, True))
-                                    # We don't know the frame_offset yet. We'll store by frame_num for now.
-                                    self.img_display.tracking_points[frame_num] = pts
-                except Exception as e:
-                    print(f"Failed to read tracking points: {e}")
+            self._load_track_points(node)
 
         if node.plugin_type in ["sam3_rotoscope", "matte_anyone", "super_matte"]:
             self.btn_clear_pts.show()

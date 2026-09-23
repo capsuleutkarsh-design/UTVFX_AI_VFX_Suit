@@ -126,14 +126,20 @@ NODE_HELP_DATA = {
         }
     },
     "sfm_tracker": {
-        "description": "The <b>3D Camera Tracker</b> analyzes the motion of pixels in the 2D video and mathematically solves for the original 3D camera movement and point cloud using Structure-from-Motion (SfM).",
+        "description": "The <b>3D Camera Tracker</b> solves the camera move and a point cloud with COLMAP 4.2, using the same pipeline as the Automated Tracker. Wire a matte of moving objects (people, cars) into Moving Objects Matte so they don't steer the camera. Frames keep their plate numbers; squeezed plates are de-squeezed first.",
         "params": {
-            "mapper_engine": "The internal solver architecture (e.g., COLMAP or GLOMAP).",
-            "feature_type": "The algorithm used to find trackable points (SuperPoint uses deep learning, SIFT is traditional).",
-            "max_features": "The absolute maximum number of points to track per frame. Higher means denser point clouds but drastically slower solve times.",
-            "match_type": "How to link points between frames (Sequential is best for normal video, Exhaustive is only for completely random photo sets).",
-            "min_tri_angle": "Filters out 3D points that have bad triangulation geometry, resulting in a cleaner point cloud.",
-            "ba_iterations": "Number of Bundle Adjustment passes to refine the camera solve mathematically. More iterations equals less sliding."
+            "solver": "Global (GLOMAP) is fast and handles long shots; Incremental is slower but can solve harder shots. Either way, the incremental mapper tries again with looser settings if under 90% of frames solve.",
+            "features": "SIFT is fastest. LightGlue matches more reliably. ALIKED + LightGlue (AI) copes better with blur, low texture and lighting changes. LoMa is the strongest and slowest.",
+            "max_features": "Most points found per frame. More gives a denser cloud and a sturdier solve, but takes longer.",
+            "max_image_size": "Frames larger than this are scaled down for finding features.",
+            "camera_model": "Lens model to solve. SIMPLE_RADIAL suits most lenses; OPENCV for strong distortion; OPENCV_FISHEYE for fisheye; PINHOLE for undistorted plates.",
+            "focal_mm": "The lens used, if known (from the camera report). The solve starts from it, which helps shots with little camera movement. 0 = let COLMAP estimate it.",
+            "sensor_width_mm": "Width of the recorded image on the sensor, in mm (Super 35 is about 24.9, full frame 36). Only used with a known focal length.",
+            "refine_lens": "Let the solve adjust focal length and distortion. Turn off only if the lens is known exactly.",
+            "overlap": "How many neighbouring frames each frame is matched with.",
+            "loop_detection": "Also matches frames that revisit the same view later in the shot (SIFT only).",
+            "mask_grow": "Grows the moving-objects matte so features on its edges are ignored too.",
+            "min_coverage": "The solve fails if fewer than this share of frames get a camera."
         }
     },
     "super_matte": {

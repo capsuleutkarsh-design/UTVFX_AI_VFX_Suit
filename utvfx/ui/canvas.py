@@ -443,9 +443,7 @@ class InteractiveVideoCanvas(QWidget):
         if getattr(self, "show_tracking", False) and self.current_frame in self.tracking_points:
             t_points = self.tracking_points[self.current_frame]
             painter.setPen(Qt.NoPen)
-            for tx, ty, has_3d in t_points:
-                nx = tx / img_w
-                ny = ty / img_h
+            for nx, ny, has_3d in t_points:  # fractions of the frame, so any display size matches
                 px = x_offset + (nx * drawn_w)
                 py = y_offset + (ny * drawn_h)
                 

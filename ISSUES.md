@@ -26,7 +26,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H4 | Engine | Stop cancels only the selected node. Cancelled nodes stay "executing". Render queue hangs | 1 | `tests/test_engine.py` | ☑ |
 | H5 | Engine | Freeze never works. Bypass/Freeze lost on reload | 1 | `tests/test_engine.py` | ☑ |
 | H6 | UI | Right-click Add Node, Tab search and wire-drop search do nothing | 1 | `tests/test_wiring.py` | ☑ |
-| H7 | Engine | Timeline In/Out doesn't limit renders, only busts the cache | 1 | `tests/test_engine.py` | ◐ engine passes the range and caches by it; each node must honour it (Pass 2 checklist) |
+| H7 | Engine | Timeline In/Out doesn't limit renders, only busts the cache | 1 | `tests/test_engine.py` | ☑ engine passes the range and caches by it; every Pass 2 node honours it |
 | H8 | Engine | Cache hash taken at end of render. Mid-render edits get marked cached | 1 | | ☑ |
 | H9 | Security | BiRefNet runs its own code with an unpinned revision, re-downloaded on every run | 1 | | ☑ |
 | H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☑ |
@@ -37,7 +37,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☑ Float EXR (Z channel) with plate frame numbers and In/Out; each frame fitted to the previous one along the optical flow and one 0-1 range for the shot (frame-mean spread 1% on real footage); near = 1 or 0; metric indoor/outdoor in metres (pinned weights); preview picture separate from the output; weights never downloaded at run time |
 | H16 | AI Roto | Depth units and direction wrong: hides limbs in front | 2 | | ☑ Occlusion uses 'fraction farther than the torso' (median inside shape and matte), correct for near = 1/0 and metric maps (the Depth node tags its EXRs); no depth = all visible, not skipped frames; missing plate/matte raise errors; layers from alpha/<layer>; plate frame numbers, In/Out; Nuke pixel centres; help entry |
 | H17 | RotoToShape | Reused shape IDs change point count and the exporter truncates. Layers merged (wrong folder) | 2 | | ☑ |
-| H18 | 3D Tracker | COLMAP/GLOMAP binaries not shipped. "SuperPoint" is really SIFT. Moving objects not masked → rebuild on Automated Tracker | 2 | | ◐ COLMAP 4.2.0 (with the global mapper) installed and solving; rebuild on the Automated Tracker in Pass 2 |
+| H18 | 3D Tracker | COLMAP/GLOMAP binaries not shipped. "SuperPoint" is really SIFT. Moving objects not masked → rebuild on Automated Tracker | 2 | | ☑ Rebuilt on the Automated Tracker's pipeline with COLMAP 4.2: plate-numbered frames, In/Out, de-squeeze; moving-objects matte → COLMAP masks; SIFT, SIFT+LightGlue, ALIKED+LightGlue, LoMa from pinned local models (CUDA libs from PyTorch); fresh database every run; global mapper, then calibrated retry, then the incremental ladder, registration of missing frames with the error rule, collapsed solves rejected; known focal length option; sparse/0 + solve.json; viewer paths fixed; quiet log. Real plates: 4K 59/59 at 0.56 px, 1080 24/24 |
 | H19 | Unified Output | Gamma 2.2 applied to alpha and depth. "16-bit float" writes 32-bit. sRGB values in EXR. Mattes land in Y, not A | 3 | | ☐ |
 
 ## Medium
