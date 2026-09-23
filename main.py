@@ -1,5 +1,6 @@
 import sys
 import os
+import logging
 
 # Detect if PyInstaller bootloader is being used to run a script (e.g., ai_bridge_server)
 if getattr(sys, 'frozen', False) and len(sys.argv) > 1 and sys.argv[1].endswith(".py"):
@@ -14,7 +15,7 @@ import json
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QFrame, QLabel, QPushButton, QToolButton, QMessageBox, QFileDialog
+    QSplitter, QFrame, QLabel, QPushButton, QToolButton, QMessageBox, QFileDialog, QMenu
 )
 from PySide6.QtCore import Qt, QSize, Slot, QTimer
 from PySide6.QtGui import QIcon, QFontDatabase, QColor, QShortcut, QKeySequence, QPixmap
@@ -62,14 +63,27 @@ class VFXCoreWindow(QMainWindow):
         
         self.shortcut_redo = QShortcut(QKeySequence("Ctrl+Shift+Z"), self)
         self.shortcut_redo.activated.connect(self.undo_stack.redo)
-        
+
+        # Project file state: title shows "*" while there are unsaved changes.
+        self.project_path = None
+        self._project_name = "untitled"
+        self.undo_stack.cleanChanged.connect(self._refresh_title)  # a bound slot: Qt drops it with the window
+        for keys, slot in (("Ctrl+S", self.save_project), ("Ctrl+Shift+S", self.save_project_as),
+                           ("Ctrl+O", self.load_project)):
+            QShortcut(QKeySequence(keys), self).activated.connect(slot)
+
+        # Autosave to a recovery file (never over the user's own file).
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.timeout.connect(self._autosave)
+        self.autosave_timer.start(3 * 60 * 1000)
+
         self.render_queue = RenderQueueDialog(self, self)
         
         self.setup_connections()
         
         # Validate that heavy AI model weights exist after UI is visible
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(500, self.check_models)
+        QTimer.singleShot(300, self._offer_recovery)
         
         # The graph will start empty. Users can add nodes via the Media Panel.
 
@@ -159,8 +173,12 @@ class VFXCoreWindow(QMainWindow):
         self.btn_undo = bar_button("Undo", "undo", self.undo_stack.undo, "Undo (Ctrl+Z)")
         self.btn_redo = bar_button("Redo", "redo", self.undo_stack.redo, "Redo (Ctrl+Shift+Z)")
         nav_layout.addSpacing(8)
-        self.btn_save = bar_button("Save", "save", self.save_project, "Save project")
-        self.btn_load = bar_button("Open", "open", self.load_project, "Open project")
+        self.btn_save = bar_button("Save", "save", self.save_project, "Save project (Ctrl+S)")
+        save_menu = QMenu(self.btn_save)
+        save_menu.addAction("Save as…", self.save_project_as)
+        self.btn_save.setMenu(save_menu)
+        self.btn_save.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.btn_load = bar_button("Open", "open", self.load_project, "Open project (Ctrl+O)")
         nav_layout.addSpacing(8)
         self.btn_settings = bar_button("Settings", "settings", self.open_settings)
         self.btn_help = bar_button("Help", "help", self.open_help)
@@ -266,9 +284,20 @@ class VFXCoreWindow(QMainWindow):
         self.stats_timer.start(1000)
 
     def set_project_title(self, name):
-        name = os.path.splitext(os.path.basename(name))[0] or "untitled"
-        self.logo.setText(name)
-        self.setWindowTitle(f"{name} — {APP_NAME}")
+        self._project_name = os.path.splitext(os.path.basename(name))[0] or "untitled"
+        self._refresh_title()
+
+    @Slot(bool)
+    def _refresh_title(self, clean=None):
+        name = getattr(self, "_project_name", "untitled")
+        if clean is None:
+            try:
+                clean = not hasattr(self, "undo_stack") or self.undo_stack.isClean()
+            except RuntimeError:  # the stack is being destroyed with the window
+                return
+        dirty = not clean
+        self.logo.setText(name + (" *" if dirty else ""))
+        self.setWindowTitle(f"{name}{' *' if dirty else ''} — {APP_NAME}")
 
     def update_system_stats(self):
         try:
@@ -449,7 +478,33 @@ class VFXCoreWindow(QMainWindow):
             view.resetTransform()
             view.centerOn(0, 0)
             
+    def maybe_save_changes(self, action="closing"):
+        """Ask about unsaved changes. Returns False if the user cancelled."""
+        if self.undo_stack.isClean():
+            return True
+        answer = QMessageBox.question(
+            self, "Unsaved changes",
+            f"Save changes to {self._project_name} before {action}?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save)
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            return self.save_project()
+        return True
+
     def closeEvent(self, event):
+        if not self.maybe_save_changes("closing"):
+            event.ignore()
+            return
+        engine = getattr(self, "execution_engine", None)
+        if engine and (engine.is_executing_pipeline or engine.active_workers):
+            answer = QMessageBox.question(self, "Render running", "A render is running. Stop it and close?")
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
+        from utvfx.core import project
+        project.clear_autosave(SettingsManager().workspace_dir)
         print("Shutting down... cleaning up workers and subprocesses.", flush=True)
         
         if hasattr(self, 'viewport') and hasattr(self.viewport, 'player_thread'):
@@ -457,7 +512,7 @@ class VFXCoreWindow(QMainWindow):
                 try:
                     self.viewport.player_thread.stop()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("Ignored error", exc_info=True)
         
         if hasattr(self, 'execution_engine'):
             for node_id, worker in self.execution_engine.active_workers.items():
@@ -477,7 +532,7 @@ class VFXCoreWindow(QMainWindow):
             bridge = AIBridgeClient._instance
             if bridge: bridge.shutdown()
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                     
         import threading
         for thread in threading.enumerate():
@@ -485,7 +540,7 @@ class VFXCoreWindow(QMainWindow):
                 try:
                     thread.stop()
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                 
         # Clean up temporary interactive files
         try:
@@ -496,46 +551,125 @@ class VFXCoreWindow(QMainWindow):
                     try:
                         os.remove(f)
                     except Exception:
-                        pass
+                        logging.getLogger(__name__).debug("Ignored error", exc_info=True)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                     
         event.accept()
 
     def save_project(self):
-        file_path, _ = QFileDialog.getSaveFileName(self, "Save Project", "", "UTVFX Project (*.utvfx *.json)")
-        if file_path:
-            try:
-                data = self.node_scene.to_dict()
-                with open(file_path, "w") as f:
-                    json.dump(data, f, indent=4)
-                
-                filename = os.path.basename(file_path)
-                project_name = os.path.splitext(filename)[0]
-                SettingsManager().set_project_name(project_name)
-                self.set_project_title(filename)
-                
-                QMessageBox.information(self, "Saved", f"Project saved to {file_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to save project:\n{e}")
+        """Save to the current file, or ask where if it has never been saved. Returns True if saved."""
+        if not self.project_path:
+            return self.save_project_as()
+        return self._write_project(self.project_path)
 
-    def load_project(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Load Project", "", "UTVFX Project (*.utvfx *.json)")
-        if file_path:
-            try:
-                with open(file_path, "r") as f:
-                    data = json.load(f)
-                self.undo_stack.clear()
-                self.node_scene.from_dict(data)
-                
-                filename = os.path.basename(file_path)
-                project_name = os.path.splitext(filename)[0]
-                SettingsManager().set_project_name(project_name)
-                self.set_project_title(filename)
-                
-                QMessageBox.information(self, "Loaded", f"Project loaded successfully from {file_path}")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to load project:\n{e}")
+    def save_project_as(self):
+        from utvfx.core import project
+        start = self.project_path or os.path.join(os.path.expanduser("~"), self._project_name + project.EXTENSION)
+        path, _ = QFileDialog.getSaveFileName(self, "Save project as", start, project.FILE_FILTER)
+        if not path:
+            return False
+        if not os.path.splitext(path)[1]:
+            path += project.EXTENSION
+        return self._write_project(path)
+
+    def _write_project(self, path):
+        from utvfx.core import project
+        try:
+            project.save(path, self.node_scene.to_dict())
+        except Exception as e:
+            QMessageBox.critical(self, "Could not save", f"The project was not saved:\n{e}")
+            return False
+        self.project_path = path
+        name = os.path.splitext(os.path.basename(path))[0]
+        # Save As carries the renders over, so nothing re-renders under the new name.
+        SettingsManager().set_project_name(name, carry_cache=True)
+        self.set_project_title(name)
+        self.undo_stack.setClean()
+        self.statusBar_message(f"Saved {path}")
+        return True
+
+    def load_project(self, path=None):
+        from utvfx.core import project
+        engine = self.execution_engine
+        if engine.is_executing_pipeline or engine.active_workers:
+            QMessageBox.information(self, "Render running", "Stop the running render before opening a project.")
+            return False
+        if not self.maybe_save_changes("opening another project"):
+            return False
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(self, "Open project", os.path.dirname(self.project_path or ""),
+                                                  project.FILE_FILTER)
+            if not path:
+                return False
+        try:
+            data = project.load(path)  # checked before the current graph is touched
+        except project.ProjectError as e:
+            QMessageBox.critical(self, "Could not open project", f"{os.path.basename(path)}\n\n{e}")
+            return False
+        self._resolve_missing_media(data)
+
+        name = os.path.splitext(os.path.basename(path))[0]
+        SettingsManager().set_project_name(name, carry_cache=False)
+        self.undo_stack.clear()
+        self.node_scene.from_dict(data)
+        self.project_path = path
+        self.set_project_title(name)
+        self.undo_stack.setClean()
+        self.statusBar_message(f"Opened {path}")
+        return True
+
+    def _resolve_missing_media(self, data):
+        from utvfx.core import project
+        missing = project.missing_media(data)
+        if not missing:
+            return
+        listing = "\n".join(p for _, p in missing[:10]) + ("\n…" if len(missing) > 10 else "")
+        box = QMessageBox(QMessageBox.Icon.Warning, "Missing media",
+                          f"{len(missing)} plate(s) could not be found:\n\n{listing}", parent=self)
+        relink_btn = box.addButton("Look in a folder…", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Open anyway", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is relink_btn:
+            folder = QFileDialog.getExistingDirectory(self, "Folder that contains the plates")
+            if folder:
+                fixed = project.relink(data, folder)
+                left = len(project.missing_media(data))
+                QMessageBox.information(self, "Relinked", f"Relinked {fixed} plate(s)." +
+                                        (f" {left} still missing." if left else ""))
+
+    def _autosave(self):
+        if self.undo_stack.isClean():
+            return
+        try:
+            from utvfx.core import project
+            project.write_autosave(SettingsManager().workspace_dir, self.node_scene.to_dict(), self.project_path)
+        except Exception as e:
+            print(f"Autosave failed: {e}")
+
+    def _offer_recovery(self):
+        from utvfx.core import project
+        import datetime
+        data = project.read_autosave(SettingsManager().workspace_dir)
+        if not data:
+            return
+        when = datetime.datetime.fromtimestamp(data.get("autosave_time", 0)).strftime("%d %b %H:%M")
+        of = data.get("autosave_of") or "an unsaved project"
+        answer = QMessageBox.question(
+            self, "Recover work",
+            f"Contour VFX did not close normally. Recover the autosave from {when} ({os.path.basename(of)})?")
+        if answer == QMessageBox.StandardButton.Yes:
+            self.undo_stack.clear()
+            self.node_scene.from_dict(data)
+            self.project_path = data.get("autosave_of")
+            self.set_project_title(os.path.basename(self.project_path) if self.project_path else "recovered")
+            self.undo_stack.resetClean()  # recovered work is unsaved until saved
+        project.clear_autosave(SettingsManager().workspace_dir)
+
+    def statusBar_message(self, text):
+        if hasattr(self, "lbl_stats"):
+            self.lbl_stats.setToolTip(text)
+        print(text, flush=True)
 
     def open_model_downloader(self):
         dialog = ModelDownloaderDialog(self)

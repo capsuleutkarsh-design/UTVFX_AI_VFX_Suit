@@ -14,5 +14,7 @@ if not exist "%PYTHON_EXE%" (
     exit /b 1
 )
 
-"%PYTHON_EXE%" -u "%BASE_DIR%main.py" > "%BASE_DIR%crash.log" 2>&1
+rem Append, so the output of a session that crashed is still there after the next launch.
+echo ===== %DATE% %TIME% ===== >> "%BASE_DIR%crash.log"
+"%PYTHON_EXE%" -u "%BASE_DIR%main.py" >> "%BASE_DIR%crash.log" 2>&1
 pause

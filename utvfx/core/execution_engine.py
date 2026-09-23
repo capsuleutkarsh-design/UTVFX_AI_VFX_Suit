@@ -1,4 +1,5 @@
 import os
+import logging
 import shutil
 import importlib
 import cv2
@@ -92,7 +93,7 @@ class InteractionWorker(QThread):
                 if os.path.exists(temp_frame_path):
                     os.remove(temp_frame_path)
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                 
         except Exception as e:
             import traceback
@@ -210,7 +211,7 @@ class ExecutionEngine(QObject):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(1000, w.deleteLater)
         except Exception:
-            pass
+            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
             
         self._clear_vram()
 
@@ -252,7 +253,7 @@ class ExecutionEngine(QObject):
                     mtime = os.path.getmtime(plate_file)
                     hasher.update(str(mtime).encode('utf-8'))
                 except Exception:
-                    pass
+                    logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                     
         # Incorporate hashes of all upstream dependencies so downstream nodes invalidate
         # if any upstream input changes.
@@ -368,7 +369,7 @@ class ExecutionEngine(QObject):
                             if mask is not None:
                                 mask_dict[frame_idx] = mask
                         except Exception:
-                            pass
+                            logging.getLogger(__name__).debug("Ignored error", exc_info=True)
                 
                 if mask_dict:
                     return mask_dict
@@ -694,7 +695,7 @@ class ExecutionEngine(QObject):
                 if AIBridgeClient._instance:
                     AIBridgeClient._instance.shutdown()
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Ignored error", exc_info=True)
             
             self._pump_execution_queue()
 

@@ -6,7 +6,7 @@
     "inputs": ["Keyed RGBA", "Alpha Matte", "Video Plate", "3D Camera Path", "3D Sparse Points", "Dense Depth Map", "Shape Data"],
     "outputs": ["Final Presentation", "Export Assets"],
     "parameters": [
-        {"id": "output_dir", "name": "Output Directory", "type": "folder", "value": "..\\outputs"},
+        {"id": "output_dir", "name": "Output Directory", "type": "folder", "value": ""},
         {"id": "gamma", "name": "Display LUT Gamma", "type": "slider", "value": 2.2, "min": 1.0, "max": 3.2, "step": 0.1},
         {"id": "bit_depth", "name": "Target Render Bitrate", "type": "select", "value": "16-bit Float EXR", "options": ["8-bit PNG", "16-bit Float EXR", "32-bit Float EXR"]},
         

@@ -16,6 +16,28 @@ FOOTAGE_DIR = os.environ.get(
 )
 
 
+@pytest.fixture(autouse=True)
+def no_modal_dialogs(monkeypatch):
+    """Answer message boxes automatically, so a prompt can never hang the test run."""
+    from PySide6.QtWidgets import QMessageBox
+
+    answered = []
+
+    def answer(kind, value):
+        def _answer(*args, **kwargs):
+            answered.append((kind, args[1] if len(args) > 1 else ""))
+            return value
+        return staticmethod(_answer)
+
+    buttons = QMessageBox.StandardButton
+    monkeypatch.setattr(QMessageBox, "question", answer("question", buttons.Discard))
+    monkeypatch.setattr(QMessageBox, "warning", answer("warning", buttons.Ok))
+    monkeypatch.setattr(QMessageBox, "information", answer("information", buttons.Ok))
+    monkeypatch.setattr(QMessageBox, "critical", answer("critical", buttons.Ok))
+    monkeypatch.setattr(QMessageBox, "exec", lambda self: 0)
+    return answered
+
+
 @pytest.fixture(scope="session")
 def footage_dir():
     if not os.path.isdir(FOOTAGE_DIR):

@@ -37,11 +37,9 @@ class CompositeOutputWorker(BaseWorker):
                     break
         
         from utvfx.core.settings_manager import SettingsManager
-        base_dir = SettingsManager().project_root
-        default_out = os.path.join(base_dir, "workspace", "outputs")
-        self.output_dir = params.get("output_dir", default_out)
-        if not os.path.isabs(self.output_dir):
-            self.output_dir = os.path.join(base_dir, "workspace", self.output_dir)
+        # An absolute folder on the node wins; otherwise the project's output folder from Settings.
+        chosen = params.get("output_dir") or ""
+        self.output_dir = chosen if os.path.isabs(chosen) else SettingsManager().get("output_dir")
 
     def cancel(self):
         self.is_cancelled = True

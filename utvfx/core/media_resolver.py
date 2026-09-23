@@ -1,4 +1,5 @@
 import os
+import logging
 import glob
 from utvfx.core.settings_manager import SettingsManager
 
@@ -24,7 +25,7 @@ def get_node_cache(node, cache_dir=None):
             try:
                 hasher.update(str(os.path.getmtime(plate_file)).encode('utf-8'))
             except Exception:
-                pass
+                logging.getLogger(__name__).debug("Ignored error", exc_info=True)
             media_hash = hasher.hexdigest()
             return os.path.join(cache_dir, "MediaCache", media_hash)
     return os.path.join(cache_dir, node.node_id)

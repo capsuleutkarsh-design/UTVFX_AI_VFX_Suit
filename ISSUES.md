@@ -44,10 +44,10 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 
 | ID | Area | Problem | Pass | Status |
 |---|---|---|---|---|
-| M1 | Projects | Save As loses previous renders (cache tied to project name) | 1 | ☐ |
-| M2 | Projects | No "save changes?" on close. Load wipes the graph before parsing. Save not atomic | 1 | ☐ |
+| M1 | Projects | Save As loses previous renders (cache tied to project name) | 1 | ☑ |
+| M2 | Projects | No "save changes?" on close. Load wipes the graph before parsing. Save not atomic | 1 | ☑ plus autosave/recovery, relink and Settings folders |
 | M3 | AI bridge | Blocking shutdown on UI thread after every node. No socket timeout. Startup race. Errors not shown | 1 | ☐ |
-| M4 | Logging | `run.bat` overwrites crash.log. No faulthandler. 15 silent `except: pass` | 1 | ☐ |
+| M4 | Logging | `run.bat` overwrites crash.log. No faulthandler. 15 silent `except: pass` | 1 | ☑ (bridge ones go with M3) |
 | M5 | Playback | No frame cache. Video seek on every frame. Wipe decodes on UI thread. VRAM readout never shows | 1 | ☐ |
 | M6 | Downloads | Partial files count as installed. No hashes. No timeouts | 1 | ☐ |
 | M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☐ |
