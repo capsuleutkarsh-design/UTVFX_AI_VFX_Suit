@@ -1,14 +1,17 @@
 [Setup]
-AppName=UT_VFX_AI/VFX_Tool
-AppVersion=1.0.0
-DefaultDirName={localappdata}\Programs\UT_VFX_Tool
+; AppId must never change: Windows uses it to find this app for upgrades and uninstall.
+AppId={{7C2E4B1A-5D3F-4E8A-9B61-0C4F2A7D93E5}
+AppName=Contour VFX
+AppVersion=2.0.0-beta
+AppPublisher=Utkarsh Tripathi
+DefaultDirName={localappdata}\Programs\Contour VFX
 PrivilegesRequired=lowest
-DefaultGroupName=UT_VFX_Tool
+DefaultGroupName=Contour VFX
 OutputDir=..\releases
-OutputBaseFilename=UT_VFX_Tool_Setup
-SetupIconFile=assets\app_icon.ico
-WizardImageFile=assets\wizard_large.bmp
-WizardSmallImageFile=assets\wizard_small.bmp
+OutputBaseFilename=ContourVFX_Setup
+SetupIconFile=..\branding\app_icon.ico
+WizardImageFile=..\branding\wizard_large.bmp
+WizardSmallImageFile=..\branding\wizard_small.bmp
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64
@@ -17,11 +20,11 @@ DiskSpanning=yes
 DiskSliceSize=2000000000
 
 [Files]
-Source: "..\dist\UTVFX_AI_VFX_Tool\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\ContourVFX\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\UT_VFX_AI VFX_Tool"; Filename: "{app}\UTVFX_AI_VFX_Tool.exe"; IconFilename: "{app}\UTVFX_AI_VFX_Tool.exe"
-Name: "{autodesktop}\UT_VFX_AI VFX_Tool"; Filename: "{app}\UTVFX_AI_VFX_Tool.exe"; IconFilename: "{app}\UTVFX_AI_VFX_Tool.exe"; Tasks: desktopicon
+Name: "{group}\Contour VFX"; Filename: "{app}\ContourVFX.exe"; IconFilename: "{app}\ContourVFX.exe"
+Name: "{autodesktop}\Contour VFX"; Filename: "{app}\ContourVFX.exe"; IconFilename: "{app}\ContourVFX.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"

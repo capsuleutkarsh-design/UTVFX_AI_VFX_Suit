@@ -7,8 +7,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('plugins', 'plugins/'), 
-        ('CorridorKeyModule', 'CorridorKeyModule/'),
-        ('build/assets/app_icon.ico', 'build/'),
+        ('branding', 'branding/'),
         ('first_setup.py', '.'),
         ('python_base', 'python_base/'),
         ('tools', 'tools/'),
@@ -55,7 +54,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='UTVFX_AI_VFX_Tool',
+    name='ContourVFX',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -66,7 +65,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['build\\assets\\app_icon.ico'],
+    icon=['branding\\app_icon.ico'],
 )
 coll = COLLECT(
     exe,
@@ -75,5 +74,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='UTVFX_AI_VFX_Tool',
+    name='ContourVFX',
 )

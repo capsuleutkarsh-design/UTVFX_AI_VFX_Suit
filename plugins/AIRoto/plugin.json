@@ -1,7 +1,7 @@
 {
     "name": "AI Roto",
     "plugin_type": "ai_roto",
-    "category": "🎭 Matte",
+    "category": "Matte",
     "color": "#ec4899",
     "inputs": ["Video Plate", "Alpha Matte", "Depth Map"],
     "outputs": ["Shape Data"],

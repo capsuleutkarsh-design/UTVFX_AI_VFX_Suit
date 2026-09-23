@@ -4,6 +4,13 @@ import pyqtgraph.opengl as gl
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel
 from PySide6.QtCore import Qt
 
+from utvfx.ui import theme
+
+
+def _gl_colour(hex_value, alpha=1.0):
+    c = theme.qcolor(hex_value)
+    return (c.redF(), c.greenF(), c.blueF(), alpha)
+
 def q_to_rot_mat(qw, qx, qy, qz):
     """Convert quaternion to rotation matrix."""
     return np.array([
@@ -19,13 +26,13 @@ class PointCloudViewerWidget(QWidget):
         self.layout.setContentsMargins(0, 0, 0, 0)
         
         self.gl_widget = gl.GLViewWidget()
-        self.gl_widget.setBackgroundColor((5, 5, 5, 255))
+        self.gl_widget.setBackgroundColor(theme.qcolor(theme.BG_VIEWER))
         
         # Add a grid
         self.grid = gl.GLGridItem()
         self.grid.setSize(20, 20, 1)
         self.grid.setSpacing(1, 1, 1)
-        self.grid.setColor((100, 100, 100, 100))
+        self.grid.setColor(theme.qcolor(theme.BORDER_SOFT))
         self.gl_widget.addItem(self.grid)
         
         self.layout.addWidget(self.gl_widget)
@@ -197,7 +204,7 @@ class PointCloudViewerWidget(QWidget):
                         line_pts = pts_mapped[lines_idx]
                         line_pts = line_pts.reshape(-1, 3)
                         
-                        cam_item = gl.GLLinePlotItem(pos=line_pts, color=(1.0, 0.5, 0.0, 1.0), width=1.5, mode='lines')
+                        cam_item = gl.GLLinePlotItem(pos=line_pts, color=_gl_colour(theme.ACCENT), width=1.5, mode='lines')
                         self.gl_widget.addItem(cam_item)
                         self.camera_items.append(cam_item)
                         
@@ -209,7 +216,7 @@ class PointCloudViewerWidget(QWidget):
                 cam_pos_mapped[:, 1] = cam_pos_np[:, 2]
                 cam_pos_mapped[:, 2] = -cam_pos_np[:, 1]
                 
-                path_item = gl.GLLinePlotItem(pos=cam_pos_mapped, color=(0.0, 0.8, 1.0, 1.0), width=2.0, mode='line_strip')
+                path_item = gl.GLLinePlotItem(pos=cam_pos_mapped, color=_gl_colour(theme.TEXT_DIM), width=2.0, mode='line_strip')
                 self.gl_widget.addItem(path_item)
                 self.camera_items.append(path_item)
 

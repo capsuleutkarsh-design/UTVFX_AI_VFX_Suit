@@ -1,6 +1,12 @@
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, Signal, QPointF, QRectF
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QPixmap, QImage
+
+from utvfx.ui import theme
+
+# Checkerboard behind transparent pixels (image content, so plain neutral greys).
+CHECKER_DARK = theme.CHECKER_DARK
+CHECKER_LIGHT = theme.CHECKER_LIGHT
 
 class InteractiveVideoCanvas(QWidget):
     interaction_requested = Signal(int, list) # frame_idx, [(nx, ny, is_positive), ...]
@@ -8,7 +14,7 @@ class InteractiveVideoCanvas(QWidget):
     zoom_changed = Signal()
     pixel_probed = Signal(int, int, int, int, int) # x, y, r, g, b
     
-    def __init__(self, placeholder_text="NO MEDIA LOADED", parent=None):
+    def __init__(self, placeholder_text="No media", parent=None):
         super().__init__(parent)
         self.placeholder_text = placeholder_text
         self.setMouseTracking(True)
@@ -33,6 +39,24 @@ class InteractiveVideoCanvas(QWidget):
         self.last_b_image = None
         self.wipe_pos = 0.5
         self.is_dragging_wipe = False
+
+        # Active-layer mask recoloured in the accent colour, cached per overlay image
+        self._tinted_key = None
+        self._tinted_overlay = None
+
+    def _tinted(self, overlay):
+        """The overlay's coverage filled with the accent colour."""
+        key = overlay.cacheKey()
+        if key != self._tinted_key:
+            tinted = QImage(overlay.size(), QImage.Format.Format_ARGB32_Premultiplied)
+            tinted.fill(theme.qcolor(theme.ACCENT))
+            p = QPainter(tinted)
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+            p.drawImage(0, 0, overlay)
+            p.end()
+            self._tinted_key = key
+            self._tinted_overlay = tinted
+        return self._tinted_overlay
 
     def setText(self, text):
         self.placeholder_text = text
@@ -247,10 +271,13 @@ class InteractiveVideoCanvas(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        
+        painter.fillRect(self.rect(), theme.qcolor(theme.BG_VIEWER))
+
         if not hasattr(self, 'last_raw_image') or self.last_raw_image is None or self.last_raw_image.isNull():
-            painter.setPen(QColor("#71717a"))
+            painter.setPen(theme.qcolor(theme.TEXT_FAINT))
+            painter.setFont(theme.ui_font())
             painter.drawText(self.rect(), Qt.AlignCenter, self.placeholder_text)
+            painter.end()
             return
             
         img_w, img_h = self.last_raw_image.width(), self.last_raw_image.height()
@@ -269,10 +296,10 @@ class InteractiveVideoCanvas(QWidget):
         if self.bg_mode == "checkerboard":
             tile_size = 16
             tile_pm = QPixmap(tile_size * 2, tile_size * 2)
-            tile_pm.fill(QColor("#a1a1aa"))
+            tile_pm.fill(QColor(CHECKER_DARK))
             tp = QPainter(tile_pm)
-            tp.fillRect(0, 0, tile_size, tile_size, QColor("#e4e4e7"))
-            tp.fillRect(tile_size, tile_size, tile_size, tile_size, QColor("#e4e4e7"))
+            tp.fillRect(0, 0, tile_size, tile_size, QColor(CHECKER_LIGHT))
+            tp.fillRect(tile_size, tile_size, tile_size, tile_size, QColor(CHECKER_LIGHT))
             tp.end()
             painter.fillRect(drawn_rect, QBrush(tile_pm))
         elif self.bg_mode == "white":
@@ -293,18 +320,23 @@ class InteractiveVideoCanvas(QWidget):
             rect_b_dst = QRectF(x_offset + wipe_x, y_offset, drawn_w - wipe_x, drawn_h)
             painter.drawImage(rect_b_dst, self.last_b_image, rect_b_src)
             
-            # Wipe Line
-            painter.setPen(QPen(Qt.white, 3))
-            painter.drawLine(x_offset + wipe_x, y_offset, x_offset + wipe_x, y_offset + drawn_h)
-            # Draw small handle
-            painter.setBrush(QBrush(Qt.white))
-            painter.drawEllipse(QPointF(x_offset + wipe_x, y_offset + drawn_h / 2), 6, 6)
+            # Wipe line: thin light line on a dark edge so it reads on any image
+            wx = x_offset + wipe_x
+            painter.setPen(QPen(theme.qcolor(theme.BORDER, 160), 3))
+            painter.drawLine(QPointF(wx, y_offset), QPointF(wx, y_offset + drawn_h))
+            painter.setPen(QPen(theme.qcolor(theme.TEXT), 1))
+            painter.drawLine(QPointF(wx, y_offset), QPointF(wx, y_offset + drawn_h))
+            # Small square handle
+            painter.setPen(QPen(theme.qcolor(theme.BORDER), 1))
+            painter.setBrush(QBrush(theme.qcolor(theme.TEXT)))
+            painter.drawRoundedRect(QRectF(wx - 4, y_offset + drawn_h / 2 - 8, 8, 16), 2, 2)
         else:
             painter.drawImage(drawn_rect, self.last_raw_image)
         
         if self.current_mask_overlay is not None and not self.current_mask_overlay.isNull():
-            painter.setOpacity(0.55)
-            painter.drawImage(drawn_rect, self.current_mask_overlay)
+            # Active layer in the accent colour at about half strength
+            painter.setOpacity(0.5)
+            painter.drawImage(drawn_rect, self._tinted(self.current_mask_overlay))
             painter.setOpacity(1.0)
         
         if self.is_interactive:
@@ -325,8 +357,9 @@ class InteractiveVideoCanvas(QWidget):
                         
                         painter.setBrush(Qt.BrushStyle.NoBrush)
                         if is_active:
-                            painter.setPen(QPen(layer_color, 3, Qt.PenStyle.DashLine))
+                            painter.setPen(QPen(theme.qcolor(theme.ACCENT), 1.5, Qt.PenStyle.DashLine))
                         else:
+                            layer_color.setAlpha(170)
                             painter.setPen(QPen(layer_color, 1, Qt.PenStyle.DashLine))
                         
                         painter.drawRect(QRectF(QPointF(px1, py1), QPointF(px2, py2)))
@@ -335,17 +368,17 @@ class InteractiveVideoCanvas(QWidget):
                         px = x_offset + (nx * drawn_w)
                         py = y_offset + (ny * drawn_h)
                         
-                        # Fill color: Green for positive, Red for negative
-                        fill_color = QColor(34, 197, 94) if is_pos else QColor(239, 68, 68)
+                        # Fill: include (success) or exclude (error)
+                        fill_color = theme.qcolor(theme.SUCCESS if is_pos else theme.ERROR, 255 if is_active else 150)
                         painter.setBrush(QBrush(fill_color))
-                        
-                        # Pen (outline): Layer color if active, otherwise dimmed
+
+                        # Outline: light ring on the active layer, dark ring otherwise
                         if is_active:
-                            painter.setPen(QPen(layer_color, 3))
-                            painter.drawEllipse(QPointF(px, py), 7, 7)
-                        else:
-                            painter.setPen(QPen(layer_color, 1))
+                            painter.setPen(QPen(theme.qcolor(theme.TEXT), 1.5))
                             painter.drawEllipse(QPointF(px, py), 5, 5)
+                        else:
+                            painter.setPen(QPen(theme.qcolor(theme.BORDER, 200), 1))
+                            painter.drawEllipse(QPointF(px, py), 3.5, 3.5)
                 
         # Draw camera tracking points
         if getattr(self, "show_tracking", False) and self.current_frame in self.tracking_points:
@@ -357,8 +390,8 @@ class InteractiveVideoCanvas(QWidget):
                 px = x_offset + (nx * drawn_w)
                 py = y_offset + (ny * drawn_h)
                 
-                # Orange if matched to 3D point, gray if 2D only
-                color = QColor(249, 115, 22) if has_3d else QColor(156, 163, 175, 100)
+                # Solved (matched to a 3D point) in the success colour, 2D-only dimmed
+                color = theme.qcolor(theme.SUCCESS) if has_3d else theme.qcolor(theme.TEXT_DIM, 100)
                 painter.setBrush(QBrush(color))
                 painter.drawRect(px - 1.5, py - 1.5, 3, 3)
                 
@@ -374,7 +407,7 @@ class InteractiveVideoCanvas(QWidget):
             py2 = y_offset + (max(y1, y2) * drawn_h)
             
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(QColor(249, 115, 22), 2, Qt.PenStyle.DashLine))
+            painter.setPen(QPen(theme.qcolor(theme.ACCENT), 1.5, Qt.PenStyle.DashLine))
             painter.drawRect(QRectF(QPointF(px1, py1), QPointF(px2, py2)))
             
         painter.end()

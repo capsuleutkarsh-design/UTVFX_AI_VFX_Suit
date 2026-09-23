@@ -3,7 +3,8 @@ from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QScrollArea, QPushButton, QTextEdit,
     QTabWidget, QRadioButton, QColorDialog, QFileDialog, QFrame, QProgressBar, QInputDialog, QMessageBox, QSizePolicy
 )
-from utvfx.ui.panels.param_widgets import build_param_widget
+from utvfx.ui import icons, theme
+from utvfx.ui.panels.param_widgets import build_param_widget, sentence_case
 from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui import QFont, QColor
 import os
@@ -26,124 +27,94 @@ class PropertiesPanel(QWidget):
 
         
     def setup_ui(self):
+        self.setObjectName("Panel")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
-        # Header
+
+        # Header: category colour chip + node name
         header = QWidget()
-        header.setFixedHeight(50)
-        header.setStyleSheet("background-color: #121212; border-bottom: 1px solid #27272a;")
+        header.setObjectName("PanelHeader")
+        header.setFixedHeight(30)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(10, 0, 10, 0)
-        
-        self.lbl_title = QLabel("NO NODE SELECTED")
-        self.lbl_title.setStyleSheet("font-family: 'Space Grotesk'; font-size: 13px; font-weight: bold; color: #71717a; letter-spacing: 2px;")
+        h_layout.setSpacing(theme.SPACING)
+
+        self.category_chip = QFrame()
+        self.category_chip.setFixedSize(10, 10)
+        self.category_chip.hide()
+        h_layout.addWidget(self.category_chip)
+
+        self.lbl_title = QLabel("No node selected")
+        theme.set_role(self.lbl_title, "dim")
         self.lbl_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         h_layout.addWidget(self.lbl_title, 1)
-        
+
         # Stretch handled by lbl_title
         main_layout.addWidget(header)
-        
+
         from PySide6.QtWidgets import QSplitter
         self.splitter = QSplitter(Qt.Orientation.Vertical)
-        
+        self.splitter.setChildrenCollapsible(False)
+
         # Scroll Area for properties (Top Half)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet("QScrollArea { border: none; background-color: #0a0a0a; }")
-        
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
         self.content_widget = QWidget()
-        self.content_widget.setStyleSheet("background-color: #0a0a0a;")
+        self.content_widget.setObjectName("PanelBody")
         self.content_layout = QVBoxLayout(self.content_widget)
-        self.content_layout.setContentsMargins(12, 12, 12, 12)
-        self.content_layout.setSpacing(4)
+        self.content_layout.setContentsMargins(10, 8, 10, 10)
+        self.content_layout.setSpacing(2)
         self.content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
+
         self.scroll.setWidget(self.content_widget)
         self.splitter.addWidget(self.scroll)
-        
+
         # Console Area (Bottom Half)
         self.console_container = QWidget()
-        self.console_container.setStyleSheet("background-color: #0a0a0a;")
+        self.console_container.setObjectName("PanelBody")
         c_layout = QVBoxLayout(self.console_container)
-        c_layout.setContentsMargins(12, 0, 12, 12)
-        c_layout.setSpacing(8)
-        
+        c_layout.setContentsMargins(10, 6, 10, 10)
+        c_layout.setSpacing(4)
+
         # Progress Bar
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 1px solid #27272a;
-                border-radius: 4px;
-                background-color: #09090b;
-                text-align: center;
-                color: #fafafa;
-                font-family: 'Inter';
-                font-size: 10px;
-                font-weight: bold;
-                height: 16px;
-                margin-top: 8px;
-            }
-            QProgressBar::chunk {
-                background-color: #f59e0b; /* default color, updated per node */
-                border-radius: 3px;
-            }
-        """)
         self.progress_bar.hide()
         c_layout.addWidget(self.progress_bar)
-        
+
         # Mini console header
         console_header = QHBoxLayout()
         console_header.setContentsMargins(0, 0, 0, 0)
-        
-        lbl_console = QLabel("NODE CONSOLE")
-        lbl_console.setStyleSheet("font-family: 'Inter'; font-size: 10px; font-weight: bold; color: #a1a1aa; letter-spacing: 1px;")
+
+        lbl_console = theme.set_role(QLabel("Console"), "section")
         console_header.addWidget(lbl_console)
-        
+
         console_header.addStretch()
-        
-        btn_copy = QPushButton("Copy Logs")
-        btn_copy.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_copy.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #3b82f6;
-                font-family: 'Inter';
-                font-size: 10px;
-                font-weight: bold;
-                border: none;
-            }
-            QPushButton:hover { color: #60a5fa; }
-        """)
+
+        btn_copy = QPushButton("Copy logs")
+        btn_copy.setIcon(icons.icon("copy"))
+        theme.set_role(btn_copy, "flat")
         btn_copy.clicked.connect(self._copy_logs)
         console_header.addWidget(btn_copy)
         c_layout.addLayout(console_header)
-        
+
         self.console_widget = QTextEdit()
         self.console_widget.setReadOnly(True)
-        self.console_widget.setStyleSheet("""
-            QTextEdit {
-                background-color: #09090b;
-                color: #e4e4e7;
-                font-family: 'JetBrains Mono';
-                font-size: 11px;
-                border: 1px solid #1f1f22;
-                border-radius: 6px;
-                padding: 12px;
-            }
-        """)
-        self.console_widget.setPlaceholderText(">> Node logs will stream here during execution...")
+        theme.set_role(self.console_widget, "console")
+        self.console_widget.setFont(theme.mono_font())
+        self.console_widget.setPlaceholderText("Node logs appear here while it runs.")
         c_layout.addWidget(self.console_widget)
-        
+
         self.splitter.addWidget(self.console_container)
         self.splitter.setSizes([600, 200]) # 3:1 ratio
-        
+
         main_layout.addWidget(self.splitter)
-        
+
     def _clear_layout(self, layout):
         while layout.count():
             child = layout.takeAt(0)
@@ -165,166 +136,119 @@ class PropertiesPanel(QWidget):
                 self.tabs.setCurrentIndex(current_tab)
 
 
+    def _set_title(self, text, role, chip_colour=None):
+        self.lbl_title.setText(text)
+        theme.set_role(self.lbl_title, role)
+        if chip_colour:
+            self.category_chip.setStyleSheet(
+                f"background: {chip_colour}; border: 1px solid {theme.BORDER}; border-radius: 2px;")
+            self.category_chip.show()
+        else:
+            self.category_chip.hide()
+
     def set_node(self, node_item):
         self.current_node = node_item
-        
+
         # Clear existing
         self._clear_layout(self.content_layout)
-                
+
         if not node_item:
-            self.lbl_title.setText("NO NODE SELECTED")
-            self.lbl_title.setStyleSheet("font-family: 'Space Grotesk'; font-size: 13px; font-weight: bold; color: #71717a; letter-spacing: 2px;")
+            self._set_title("No node selected", "dim")
             return
-            
+
         self.node_def = NODES_REGISTRY.get(node_item.plugin_type)
         if not self.node_def:
-            self.lbl_title.setText("UNKNOWN NODE")
+            self._set_title("Unknown node", "error")
             return
-        
-        color = self.node_def.get("color", "#f59e0b")
-        self.lbl_title.setText(self.node_def['name'].upper())
-        self.lbl_title.setStyleSheet(f"font-family: 'Space Grotesk'; font-size: 12px; font-weight: bold; color: {color}; letter-spacing: 1px;")
-        
+
+        color = self.node_def.get("color", theme.ACCENT)
+        self._set_title(self.node_def['name'], "title", theme.node_colour(node_item.plugin_type))
+        self.lbl_title.setToolTip(self.node_def.get("category", ""))
+
         # Build parameters
         params = self.node_def.get("parameters", [])
         if not params:
-            lbl = QLabel("No configurable parameters.")
-            lbl.setStyleSheet("color: #71717a; font-style: italic;")
+            lbl = theme.set_role(QLabel("No parameters."), "faint")
             self.content_layout.addWidget(lbl)
             self._build_execution_section(color)
             return
-            
+
         has_tabs = any("tab" in p for p in params)
         if has_tabs:
             self.tabs = QTabWidget()
-            self.tabs.setStyleSheet("""
-                QTabWidget::pane { border: none; top: 0px; }
-                QTabBar::tab { background-color: transparent; color: #a1a1aa; border: none; border-bottom: 2px solid transparent; padding: 8px 16px; font-family: 'Inter'; font-weight: bold; font-size: 12px; margin-right: 4px; }
-                QTabBar::tab:selected { color: #fafafa; border-bottom: 2px solid """ + color + """; }
-                QTabBar::tab:hover:!selected { color: #e4e4e7; border-bottom: 2px solid #3f3f46; }
-            """)
+            self.tabs.setUsesScrollButtons(False)
+            self.tabs.setElideMode(Qt.TextElideMode.ElideRight)
+            self.tabs.tabBar().setExpanding(False)
+            # Layout only: slightly tighter tabs so a five-tab node still fits
+            # the panel's 420 px minimum width (long names elide; tooltips hold
+            # the full name).
+            self.tabs.tabBar().setStyleSheet("QTabBar::tab { padding: 5px 8px; }")
             tab_dict = {}
             for param in params:
                 t_name = param.get("tab", "General")
                 if t_name not in tab_dict: tab_dict[t_name] = []
                 tab_dict[t_name].append(param)
-                
+
             for t_name, t_params in tab_dict.items():
                 w = QWidget()
-                w.setStyleSheet("background: transparent;")
                 l = QVBoxLayout(w)
-                l.setContentsMargins(0,16,0,16)
-                l.setSpacing(12)
+                l.setContentsMargins(0, 8, 0, 4)
+                l.setSpacing(2)
                 l.setAlignment(Qt.AlignmentFlag.AlignTop)
                 for p in t_params:
                     l.addWidget(self._build_param_widget(p, color))
-                self.tabs.addTab(w, t_name)
-                
+                l.addStretch(1)
+                index = self.tabs.addTab(w, sentence_case(t_name).replace("&", "&&"))
+                self.tabs.setTabToolTip(index, t_name)
+
             self.content_layout.addWidget(self.tabs)
         else:
             self.tabs = None
             for param in params:
                 group = self._build_param_widget(param, color)
                 self.content_layout.addWidget(group)
-            
+
         # Add execution section if applicable
         self._build_execution_section(color)
-        
+
         # Force a layout recalculation to prevent the panel from clipping its contents
         self.content_widget.adjustSize()
         self.content_layout.update()
-            
+
     def _build_param_widget(self, param, color):
         return build_param_widget(self, param, color)
 
     def _build_execution_section(self, color):
-        self.content_layout.addSpacing(16)
-        
-        # Divider
-        div = QFrame()
-        div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet("background-color: #27272a; border: none; max-height: 1px;")
-        self.content_layout.addWidget(div)
-        
-        self.content_layout.addSpacing(16)
-        
+        self.content_layout.addSpacing(12)
+
         # Execute buttons
         exec_layout = QHBoxLayout()
         exec_layout.setContentsMargins(0, 0, 0, 0)
-        
-        self.btn_run = QPushButton(f"Execute {self.node_def['name']}")
-        self.btn_run.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_run.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {color};
-                color: #000000;
-                font-family: 'Inter';
-                font-weight: 800;
-                font-size: 13px;
-                letter-spacing: 0.5px;
-                border: none;
-                border-radius: 6px;
-                padding: 14px;
-            }}
-            QPushButton:hover {{
-                background-color: {color}dd;
-            }}
-            QPushButton:pressed {{
-                background-color: {color}bb;
-            }}
-        """)
+        exec_layout.setSpacing(theme.SPACING)
+
+        self.btn_run = QPushButton("Execute")
+        self.btn_run.setIcon(icons.icon("play", theme.TEXT_ON_ACCENT))
+        self.btn_run.setToolTip(f"Execute {self.node_def['name']}")
+        self.btn_run.setMinimumHeight(28)
+        theme.set_role(self.btn_run, "primary")
         self.btn_run.clicked.connect(self._on_execute_clicked)
-        exec_layout.addWidget(self.btn_run)
-        
+        exec_layout.addWidget(self.btn_run, 1)
+
         self.btn_cancel = QPushButton("Stop")
-        self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_cancel.setStyleSheet("""
-            QPushButton {
-                background-color: #3f3f46;
-                color: #fafafa;
-                font-family: 'Inter';
-                font-weight: bold;
-                font-size: 12px;
-                border: none;
-                border-radius: 6px;
-                padding: 12px;
-            }
-            QPushButton:hover {
-                background-color: #52525b;
-            }
-        """)
+        self.btn_cancel.setIcon(icons.icon("stop"))
+        self.btn_cancel.setMinimumHeight(28)
         self.btn_cancel.clicked.connect(self._on_cancel_clicked)
         exec_layout.addWidget(self.btn_cancel)
-        
+
         self.content_layout.addLayout(exec_layout)
-        
-        # Update Progress Bar Color
-        self.progress_bar.setStyleSheet(f"""
-            QProgressBar {{
-                border: 1px solid #27272a;
-                border-radius: 4px;
-                background-color: #09090b;
-                text-align: center;
-                color: #fafafa;
-                font-family: 'Inter';
-                font-size: 10px;
-                font-weight: bold;
-                height: 16px;
-                margin-top: 8px;
-            }}
-            QProgressBar::chunk {{
-                background-color: {color};
-                border-radius: 3px;
-            }}
-        """)
-        
+
         # Restore logs and progress if any exist for this node
         self.console_widget.clear()
         if self.current_node:
             logs = self.node_logs.get(self.current_node.node_id, [])
             for msg in logs:
                 self.console_widget.append(msg)
-                
+
             if self.current_node.node_id in self.node_progress:
                 self.progress_bar.setValue(self.node_progress[self.current_node.node_id])
                 self.progress_bar.show()

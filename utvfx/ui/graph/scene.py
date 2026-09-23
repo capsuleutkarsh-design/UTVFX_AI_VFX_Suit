@@ -5,7 +5,7 @@ from PySide6.QtCore import Qt, QPointF, Signal, QObject, QRectF
 from utvfx.ui.graph.node_item import VFXNodeItem, DotNodeItem, BackdropNodeItem
 from utvfx.ui.graph.connection import ConnectionItem
 from utvfx.ui.graph.port import PortItem
-from utvfx.ui.graph.constants import BG_COLOR
+from utvfx.ui.graph.constants import BG_COLOR, GRID_COLOR, GRID_SIZE
 
 
 def restore_params(params):
@@ -62,21 +62,25 @@ class NodeScene(QGraphicsScene):
         self.signals.nodeSelected.emit(node)
 
     def drawBackground(self, painter, rect):
-        painter.fillRect(rect, QColor("#121212"))
-        
-        # Draw dot grid
-        left = int(rect.left()) - (int(rect.left()) % 30)
-        top = int(rect.top()) - (int(rect.top()) % 30)
-        
-        painter.setPen(QPen(QColor("#2c2c2c"), 1))
+        painter.fillRect(rect, BG_COLOR)
+
+        # Quiet dot grid; skipped when zoomed far out so it does not turn to noise
+        view = self.views()[0] if self.views() else None
+        if view is not None and view.transform().m11() < 0.35:
+            return
+        step = GRID_SIZE
+        left = int(rect.left()) - (int(rect.left()) % step)
+        top = int(rect.top()) - (int(rect.top()) % step)
+
+        pen = QPen(GRID_COLOR, 2)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
         points = QPolygonF()
-        
-        for x in range(left, int(rect.right()), 30):
-            for y in range(top, int(rect.bottom()), 30):
+        for x in range(left, int(rect.right()) + 1, step):
+            for y in range(top, int(rect.bottom()) + 1, step):
                 points.append(QPointF(x, y))
-                
         painter.drawPoints(points)
-                
+
     def add_node(self, name, plugin_type, inputs=None, outputs=None, color="#f59e0b", pos=(0,0), node_id=None):
         import uuid
         if node_id is None:

@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QScrollArea, QWidget, QFrame, QFileDialog, QMessageBox
 )
 from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtGui import QColor, QPalette
 
 try:
     from huggingface_hub import snapshot_download
@@ -16,6 +17,7 @@ except ImportError:
     snapshot_download = None
 
 from utvfx.core.settings_manager import SettingsManager
+from utvfx.ui import icons, theme
 
 try:
     from first_setup import MODELS as SETUP_MODELS
@@ -83,7 +85,7 @@ class DownloadWorker(QThread):
                 continue
 
         if not self.is_cancelled:
-            self.status.emit("All downloads completed!")
+            self.status.emit("All downloads completed.")
         self.finished_all.emit()
 
     def download_file_from_url(self, url, save_dir, filename):
@@ -139,7 +141,7 @@ class ExtractWorker(QThread):
                     self.progress.emit(i + 1, total_files)
                     
             if not self.is_cancelled:
-                self.status.emit("Extraction completed successfully!")
+                self.status.emit("Extraction completed.")
         except Exception as e:
             self.error.emit(f"Extraction failed: {str(e)}")
             
@@ -152,91 +154,90 @@ class ExtractWorker(QThread):
 class ModelDownloaderDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Offline/Online Model Setup")
-        self.setMinimumSize(700, 500)
-        self.setStyleSheet("""
-            QDialog { background-color: #18181b; color: #fafafa; font-family: 'Inter', sans-serif; }
-            QLabel { color: #fafafa; font-size: 13px; }
-            QProgressBar { border: 1px solid #3f3f46; border-radius: 4px; background-color: #27272a; text-align: center; color: white; height: 18px; }
-            QProgressBar::chunk { background-color: #3b82f6; border-radius: 3px; }
-            QPushButton { background-color: #27272a; color: #fafafa; border: 1px solid #3f3f46; padding: 8px 16px; border-radius: 4px; font-weight: bold; }
-            QPushButton:hover { background-color: #3f3f46; }
-            QPushButton:disabled { background-color: #1f1f22; color: #71717a; border-color: #27272a; }
-            QPushButton#primary { background-color: #3b82f6; border: None; }
-            QPushButton#primary:hover { background-color: #2563eb; }
-            QPushButton#secondary { background-color: #10b981; border: None; }
-            QPushButton#secondary:hover { background-color: #059669; }
-            QScrollArea { border: 1px solid #27272a; background-color: #0f0f11; border-radius: 6px; }
-            QFrame#model_item { background-color: #18181b; border-bottom: 1px solid #27272a; padding: 8px; }
-        """)
+        self.setWindowTitle("AI models")
+        self.setMinimumSize(640, 460)
 
         self.worker = None
         self.models_to_download = []
+        self._had_error = False
         self.setup_ui()
         self.check_models()
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
-        layout.setSpacing(16)
-        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(theme.SPACING)
+        layout.setContentsMargins(14, 12, 14, 12)
 
-        title = QLabel("AI Models Setup")
-        title.setStyleSheet("font-size: 18px; font-weight: bold; color: #ffffff;")
+        title = theme.set_role(QLabel("AI models"), "title")
         layout.addWidget(title)
-        
-        self.summary_label = QLabel("Checking models...")
-        self.summary_label.setStyleSheet("color: #a1a1aa;")
+
+        self.summary_label = theme.set_role(QLabel("Checking models..."), "dim")
+        self.summary_label.setWordWrap(True)
         layout.addWidget(self.summary_label)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_content = QWidget()
+        self.scroll_content.setObjectName("PanelBody")
         self.scroll_layout = QVBoxLayout(self.scroll_content)
         self.scroll_layout.setSpacing(0)
         self.scroll_layout.setContentsMargins(0, 0, 0, 0)
         self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         scroll.setWidget(self.scroll_content)
-        layout.addWidget(scroll)
+        layout.addWidget(scroll, 1)
 
         self.progress_container = QWidget()
         prog_layout = QVBoxLayout(self.progress_container)
-        prog_layout.setContentsMargins(0,0,0,0)
-        
-        self.status_label = QLabel("")
-        self.status_label.setStyleSheet("color: #a1a1aa; font-size: 12px;")
+        prog_layout.setContentsMargins(0, 0, 0, 0)
+        prog_layout.setSpacing(4)
+
+        self.status_label = theme.set_role(QLabel(""), "dim")
+        self.status_label.setWordWrap(True)
         prog_layout.addWidget(self.status_label)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
         self.progress_bar.hide()
         prog_layout.addWidget(self.progress_bar)
-        
+
         layout.addWidget(self.progress_container)
 
         btn_layout = QHBoxLayout()
-        
+
         self.btn_close = QPushButton("Close")
         self.btn_close.clicked.connect(self.close_dialog)
         btn_layout.addWidget(self.btn_close)
-        
+
         btn_layout.addStretch()
-        
-        self.btn_download = QPushButton("Download from Internet")
-        self.btn_download.setObjectName("primary")
+
+        self.btn_extract = QPushButton("Install from offline ZIP...")
+        self.btn_extract.setIcon(icons.icon("open"))
+        self.btn_extract.clicked.connect(self.start_extraction)
+        self.btn_extract.setEnabled(False)
+        btn_layout.addWidget(self.btn_extract)
+
+        self.btn_download = QPushButton("Download from internet")
+        self.btn_download.setIcon(icons.icon("output", theme.TEXT_ON_ACCENT))
+        theme.set_role(self.btn_download, "primary")
         self.btn_download.clicked.connect(self.start_download)
         self.btn_download.setEnabled(False)
         btn_layout.addWidget(self.btn_download)
 
-        self.btn_extract = QPushButton("Install from Offline ZIP...")
-        self.btn_extract.setObjectName("secondary")
-        self.btn_extract.clicked.connect(self.start_extraction)
-        self.btn_extract.setEnabled(False)
-        btn_layout.addWidget(self.btn_extract)
-        
         layout.addLayout(btn_layout)
 
+    @staticmethod
+    def _separator():
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setAutoFillBackground(True)
+        palette = line.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(theme.BORDER))
+        line.setPalette(palette)
+        return line
+
     def check_models(self):
-        for i in reversed(range(self.scroll_layout.count())): 
+        for i in reversed(range(self.scroll_layout.count())):
             item = self.scroll_layout.itemAt(i)
             if item:
                 w = item.widget()
@@ -244,54 +245,66 @@ class ModelDownloaderDialog(QDialog):
 
         self.models_to_download = []
         installed_count = 0
-        for model in MODELS:
+        for index, model in enumerate(MODELS):
             expected_file = os.path.join(model["path"], model["check_file"])
             is_installed = os.path.exists(expected_file)
-            
+
             if is_installed:
                 installed_count += 1
             else:
                 self.models_to_download.append(model)
-                
+
+            if index:
+                self.scroll_layout.addWidget(self._separator())
+
             item_widget = QFrame()
             item_widget.setObjectName("model_item")
             item_layout = QHBoxLayout(item_widget)
-            item_layout.setContentsMargins(10, 10, 10, 10)
-            
+            item_layout.setContentsMargins(10, 6, 10, 6)
+            item_layout.setSpacing(theme.SPACING)
+
             name_lbl = QLabel(model["name"])
-            name_lbl.setStyleSheet("font-weight: 500;")
-            
-            status_lbl = QLabel("✅ Installed" if is_installed else "❌ Missing")
-            status_lbl.setStyleSheet("color: #10b981; font-weight: bold;" if is_installed else "color: #ef4444; font-weight: bold;")
-            
+
+            status_icon = QLabel()
+            status_icon.setPixmap(icons.pixmap(
+                "check" if is_installed else "clear", 14,
+                theme.SUCCESS if is_installed else theme.ERROR))
+            status_lbl = theme.set_role(QLabel("Installed" if is_installed else "Missing"),
+                                        "ok" if is_installed else "error")
+
             item_layout.addWidget(name_lbl)
             item_layout.addStretch()
+            item_layout.addWidget(status_icon)
             item_layout.addWidget(status_lbl)
             self.scroll_layout.addWidget(item_widget)
 
         total = len(MODELS)
         if installed_count == total:
-            self.summary_label.setText(f"All {total} models are correctly installed at {MODELS_DIR}!")
+            self.summary_label.setText(f"All {total} models are installed in {MODELS_DIR}.")
             self.btn_download.hide()
             self.btn_extract.hide()
         else:
-            self.summary_label.setText(f"{total - installed_count} model(s) are missing. Select a method to install them.")
+            self.summary_label.setText(
+                f"{total - installed_count} of {total} models are missing. "
+                "Download them, or install them from an offline ZIP.")
             self.btn_download.setEnabled(True)
             self.btn_extract.setEnabled(True)
 
     def start_download(self):
         if not self.models_to_download:
             return
-        
-        reply = QMessageBox.question(self, "Download Models", "This requires an active internet connection and may download several gigabytes. Continue?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        reply = QMessageBox.question(self, "Download models", "This needs an internet connection and may download several gigabytes. Continue?", QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.No:
             return
 
+        self._had_error = False
+        theme.set_role(self.status_label, "dim")
         self.btn_download.setEnabled(False)
         self.btn_extract.setEnabled(False)
         self.btn_close.setText("Cancel")
         self.progress_bar.show()
-        
+
         self.worker = DownloadWorker(self.models_to_download)
         self.worker.progress.connect(self.update_progress)
         self.worker.status.connect(self.update_status)
@@ -301,18 +314,20 @@ class ModelDownloaderDialog(QDialog):
         self.worker.start()
 
     def start_extraction(self):
-        zip_path, _ = QFileDialog.getOpenFileName(self, "Select Models ZIP", "", "ZIP Files (*.zip)")
+        zip_path, _ = QFileDialog.getOpenFileName(self, "Select models ZIP", "", "ZIP files (*.zip)")
         if not zip_path:
             return
 
+        self._had_error = False
+        theme.set_role(self.status_label, "dim")
         self.btn_download.setEnabled(False)
         self.btn_extract.setEnabled(False)
         self.btn_close.setText("Cancel")
         self.progress_bar.show()
         self.progress_bar.setValue(0)
-        
+
         extract_target = BASE_DIR
-        
+
         self.worker = ExtractWorker(zip_path, extract_target)
         self.worker.progress.connect(self.update_progress)
         self.worker.status.connect(self.update_status)
@@ -333,13 +348,15 @@ class ModelDownloaderDialog(QDialog):
         self.status_label.setText(text)
 
     def on_error(self, err_text):
+        self._had_error = True
         self.status_label.setText(f"Error: {err_text}")
-        self.status_label.setStyleSheet("color: #ef4444; font-size: 12px;")
+        theme.set_role(self.status_label, "error")
 
     def on_finished(self):
         self.btn_close.setText("Close")
         self.progress_bar.hide()
-        self.status_label.setStyleSheet("color: #10b981; font-size: 12px; font-weight: bold;")
+        if not self._had_error:
+            theme.set_role(self.status_label, "ok")
         self.check_models()
 
     def close_dialog(self):

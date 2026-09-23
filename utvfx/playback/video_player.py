@@ -93,14 +93,25 @@ class VideoPlayerThread(QThread):
             self.target_frame = min(max(frame_idx, 0), self.total_frames - 1)
             self.seek_requested = True
         
+    @staticmethod
+    def _placeholder_frame(text, width=1280, height=720):
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QPainter
+        from utvfx.ui import theme
+        qimg = QImage(width, height, QImage.Format_RGB888)
+        qimg.fill(theme.qcolor(theme.BG_VIEWER))
+        painter = QPainter(qimg)
+        painter.setPen(theme.qcolor(theme.TEXT_FAINT))
+        painter.setFont(theme.ui_font(18))
+        painter.drawText(qimg.rect(), Qt.AlignCenter, text)
+        painter.end()
+        return qimg
+
     def read_and_emit(self, frame_idx):
         if self.is_sequence:
             if not self.sequence_files:
-                # Create a placeholder frame indicating no media
-                frame = np.zeros((720, 1280, 3), dtype=np.uint8)
-                cv2.putText(frame, "NO MEDIA RENDERED", (400, 360), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (100, 100, 100), 3)
-                qimg = QImage(frame.data, 1280, 720, 1280*3, QImage.Format_RGB888)
-                self.frame_ready.emit(qimg, 0, 0)
+                # Placeholder frame: the viewer surround with a faint note
+                self.frame_ready.emit(self._placeholder_frame("Nothing rendered yet"), 0, 0)
                 return
                 
             # Safe clamp to the actual sequence files list size to completely prevent IndexError

@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0.."
-echo Building UTVFX AI ^& VFX Suit...
+echo Building Contour VFX...
 echo Activating Virtual Environment...
 call venv\Scripts\activate.bat
 
@@ -8,7 +8,7 @@ echo Creating Models ZIP (this might take a while)...
 python scripts\build_models_zip.py
 
 echo Running PyInstaller...
-pyinstaller --noconfirm UTVFX_AI_VFX_Tool.spec
+pyinstaller --noconfirm ContourVFX.spec
 
 echo Build completed.
 

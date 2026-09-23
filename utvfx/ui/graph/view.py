@@ -1,11 +1,12 @@
 from PySide6.QtWidgets import (
-    QGraphicsView, QWidget, QMenu, QLineEdit, QListWidget, QVBoxLayout
+    QGraphicsView, QWidget, QMenu, QLineEdit, QListWidget, QVBoxLayout, QFrame
 )
 from PySide6.QtGui import (
-    QPen, QBrush, QColor, QPainter, QPainterPathStroker
+    QPen, QPainter, QPainterPathStroker
 )
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal
 
+from utvfx.ui import icons, theme
 from utvfx.ui.graph.node_item import VFXNodeItem
 
 class NodeSearchMenu(QWidget):
@@ -14,19 +15,19 @@ class NodeSearchMenu(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
-        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setObjectName("Panel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(0)
+        self.layout.setContentsMargins(4, 4, 4, 4)
+        self.layout.setSpacing(4)
         
         self.search_bar = QLineEdit()
-        self.search_bar.setPlaceholderText("Search Nodes...")
-        self.search_bar.setStyleSheet("background-color: #18181b; color: white; border: 1px solid #3f3f46; border-radius: 4px; padding: 6px; font-family: 'Inter';")
+        self.search_bar.setPlaceholderText("Search nodes")
+        self.search_bar.addAction(icons.icon("search", theme.TEXT_DIM), QLineEdit.LeadingPosition)
         self.layout.addWidget(self.search_bar)
         
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet("QListWidget { background-color: #18181b; color: white; border: 1px solid #3f3f46; border-radius: 4px; font-family: 'Inter'; } QListWidget::item:selected { background-color: #2563eb; }")
         self.layout.addWidget(self.list_widget)
         
         self.search_bar.textChanged.connect(self.filter_nodes)
@@ -44,7 +45,7 @@ class NodeSearchMenu(QWidget):
         for ptype, pdef in self.registry.items():
             if text in pdef["name"].lower() or text in ptype.lower():
                 from PySide6.QtWidgets import QListWidgetItem
-                item = QListWidgetItem(pdef["name"])
+                item = QListWidgetItem(icons.category_icon(ptype), pdef["name"])
                 item.setData(Qt.UserRole, ptype)
                 self.list_widget.addItem(item)
         if self.list_widget.count() > 0:
@@ -104,8 +105,8 @@ class NodeView(QGraphicsView):
         self.shortcut_disable = QShortcut(QKeySequence("D"), self)
         self.shortcut_disable.activated.connect(self.scene().toggle_selected_nodes_disable)
         
-        # Styling
-        self.setStyleSheet("border: none; background-color: #09090b;")
+        # Styling: the scene paints the background; no frame around the view
+        self.setFrameShape(QFrame.NoFrame)
         
     def _on_search_node_selected(self, plugin_type):
         parent_widget = self.scene().parent()
@@ -301,7 +302,8 @@ class NodeView(QGraphicsView):
         if self.current_tool == "knife" and self.knife_line:
             painter.save()
             painter.setRenderHint(QPainter.Antialiasing)
-            pen = QPen(QColor(239, 68, 68, 200), 2.5, Qt.DashLine) # Red dash for cut line
+            pen = QPen(theme.qcolor(theme.ERROR), 1.5, Qt.DashLine)  # knife cut line
+            pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawLine(self.knife_line[0], self.knife_line[1])
             painter.restore()
@@ -311,7 +313,6 @@ class NodeView(QGraphicsView):
         item = self.scene().itemAt(scene_pos, self.transform())
         
         menu = QMenu(self)
-        menu.setStyleSheet("QMenu { background-color: #18181b; color: #fafafa; border: 1px solid #27272a; border-radius: 4px; padding: 4px; } QMenu::item:selected { background-color: #2563eb; }")
         
         node_item = None
         if item:
@@ -327,11 +328,11 @@ class NodeView(QGraphicsView):
                 self.scene().clearSelection()
                 node_item.setSelected(True)
                 
-            action_del = menu.addAction("🗑 Delete Node")
-            action_disable = menu.addAction("⏻ Enable Node" if getattr(node_item, 'is_disabled', False) else "⏻ Bypass/Disable Node")
-            action_freeze = menu.addAction("❄ Unfreeze Node" if getattr(node_item, 'is_frozen', False) else "❄ Freeze/Cache Node")
+            action_del = menu.addAction(icons.icon("trash"), "Delete node")
+            action_disable = menu.addAction(icons.icon("bypass"), "Enable node" if getattr(node_item, 'is_disabled', False) else "Bypass node")
+            action_freeze = menu.addAction(icons.icon("freeze"), "Unfreeze node" if getattr(node_item, 'is_frozen', False) else "Freeze node")
             menu.addSeparator()
-            action_queue = menu.addAction("▶ Add to Render Queue")
+            action_queue = menu.addAction(icons.icon("queue"), "Add to render queue")
             
             action = menu.exec(event.globalPos())
             if action == action_del:
@@ -352,14 +353,14 @@ class NodeView(QGraphicsView):
                     categories[cat] = []
                 categories[cat].append((p_type, p_def))
                 
-            add_menu = menu.addMenu("➕ Add Node")
+            add_menu = menu.addMenu(icons.icon("plus"), "Add node")
             
-            action_backdrop = menu.addAction("⬜ Add Backdrop")
+            action_backdrop = menu.addAction(icons.icon("box"), "Add backdrop")
             
             for cat, nodes in categories.items():
                 cat_menu = add_menu.addMenu(cat)
                 for p_type, p_def in nodes:
-                    act = cat_menu.addAction(p_def["name"])
+                    act = cat_menu.addAction(icons.category_icon(p_type), p_def["name"])
                     act.triggered.connect(lambda checked=False, pt=p_type: self.scene().parent().add_node_requested.emit(pt, {}))
             
             action = menu.exec(event.globalPos())

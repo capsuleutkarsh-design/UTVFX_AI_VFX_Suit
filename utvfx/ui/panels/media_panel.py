@@ -1,166 +1,134 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QFrame, QFileDialog
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QFileDialog,
+    QTreeWidget, QTreeWidgetItem
 )
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QBrush, QColor, QFont
+
 from utvfx.core.data_model import NODES_REGISTRY
+from utvfx.ui import icons, theme
+
+# Item data role that holds a node row's plugin_type (category rows hold None).
+PLUGIN_TYPE_ROLE = Qt.ItemDataRole.UserRole
+
 
 class NodeButton(QFrame):
+    """A single clickable node row. Kept for code that builds its own node lists;
+    the media panel itself lists nodes in a tree."""
     clicked = Signal()
+
     def __init__(self, name, color, parent=None):
         super().__init__(parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet("""
-            QFrame {
-                background-color: #121212;
-                border: 1px solid #27272a;
-                border-radius: 8px;
-            }
-            QFrame:hover {
-                border-color: #52525b;
-                background-color: #18181b;
-            }
-        """)
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(8, 6, 8, 6)
-        
-        dot = QLabel("●")
-        dot.setStyleSheet(f"color: {color}; font-size: 14px; border: none; background: transparent;")
-        dot.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        
+        layout.setContentsMargins(6, 3, 6, 3)
+        layout.setSpacing(theme.SPACING)
+
         lbl = QLabel(name)
-        lbl.setStyleSheet("font-family: 'Inter'; font-weight: bold; font-size: 11px; color: #fafafa; border: none; background: transparent;")
         lbl.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        
-        plus = QLabel("+")
-        plus.setStyleSheet("color: #71717a; font-weight: bold; font-size: 14px; border: none; background: transparent;")
-        plus.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-        
-        layout.addWidget(dot)
         layout.addWidget(lbl)
         layout.addStretch()
-        layout.addWidget(plus)
-        
+
     def mousePressEvent(self, event):
         self.clicked.emit()
         super().mousePressEvent(event)
 
+
 class MediaPanel(QWidget):
     # Emits the plugin_type when a user wants to add a node
     add_node_requested = Signal(str, dict)
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setup_ui()
-        
+
     def setup_ui(self):
+        self.setObjectName("Panel")
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        
-        # Scroll Area
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #0d0d0f; }")
-        
-        content = QWidget()
-        content.setStyleSheet("background-color: #0d0d0f;")
-        layout = QVBoxLayout(content)
-        layout.setContentsMargins(8, 12, 8, 12)
-        layout.setSpacing(8)
-        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        
-        # ─── Media Footage Section ───
-        media_lbl = QLabel("🎥 MEDIA FOOTAGE")
-        media_lbl.setStyleSheet("font-family: 'Space Grotesk'; font-size: 10px; font-weight: bold; color: #a1a1aa; letter-spacing: 1px;")
-        layout.addWidget(media_lbl)
-        
-        # Load Media Button
-        btn_load = QPushButton("📁 Load Media...")
-        btn_load.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_load.setStyleSheet("""
-            QPushButton {
-                background-color: #1e1e24;
-                border: 1px solid #3f3f46;
-                border-radius: 8px;
-                padding: 8px;
-                color: #e4e4e7;
-                font-weight: bold;
-                font-family: 'Inter';
-                outline: none;
-            }
-            QPushButton:hover {
-                background-color: #27272a;
-                border-color: #52525b;
-            }
-        """)
+
+        # Header
+        header = QWidget()
+        header.setObjectName("PanelHeader")
+        header.setFixedHeight(30)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(10, 0, 10, 0)
+        h_layout.addWidget(theme.set_role(QLabel("Media"), "section"))
+        h_layout.addStretch()
+        main_layout.addWidget(header)
+
+        body = QWidget()
+        body.setObjectName("PanelBody")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(theme.SPACING, theme.SPACING, theme.SPACING, theme.SPACING)
+        layout.setSpacing(theme.SPACING)
+
+        # Load media
+        btn_load = QPushButton("Load media…")
+        btn_load.setIcon(icons.icon("open"))
+        btn_load.setToolTip("Add a Media Plate node from a video or image file")
         btn_load.clicked.connect(self._on_load_media)
         layout.addWidget(btn_load)
-        
-        # Divider
-        div = QFrame()
-        div.setFrameShape(QFrame.Shape.HLine)
-        div.setStyleSheet("background-color: #27272a; max-height: 1px;")
-        layout.addWidget(div)
-        
-        # ─── Pipeline Operators Section ───
-        ops_lbl = QLabel("⚡  PIPELINE OPERATORS //")
-        ops_lbl.setStyleSheet("font-family: 'Space Grotesk'; font-size: 10px; font-weight: bold; color: #a1a1aa; letter-spacing: 2px;")
-        layout.addWidget(ops_lbl)
-        
+
+        layout.addWidget(theme.set_role(QLabel("Nodes"), "section"))
+
+        # Node list: categories as section rows, nodes as flat rows (click to add)
+        self.node_tree = QTreeWidget()
+        self.node_tree.setHeaderHidden(True)
+        self.node_tree.setRootIsDecorated(False)
+        self.node_tree.setIndentation(14)
+        self.node_tree.setIconSize(icons.ICON_SIZE)
+        self.node_tree.setSelectionMode(QTreeWidget.SelectionMode.NoSelection)
+        self.node_tree.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.node_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.node_tree.setMouseTracking(True)
+        self.node_tree.itemClicked.connect(self._on_item_clicked)
+        layout.addWidget(self.node_tree, 1)
+
+        main_layout.addWidget(body, 1)
+        self._populate_nodes()
+
+    def _populate_nodes(self):
         # Group nodes by category
         categories = {}
         for p_type, p_def in NODES_REGISTRY.items():
             if p_type == "media_plate":
                 continue
-            cat = p_def.get("category", "📦 Other")
+            cat = p_def.get("category", "Other")
             if cat not in categories:
                 categories[cat] = []
             categories[cat].append((p_type, p_def))
-            
+
+        header_font = theme.ui_font(weight=QFont.Weight.DemiBold)
+        dim = QBrush(QColor(theme.TEXT_DIM))
+
         for cat, nodes in categories.items():
-            # Category Header
-            cat_btn = QPushButton(f"{cat}")
-            cat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            cat_btn.setStyleSheet("""
-                QPushButton {
-                    background-color: transparent;
-                    color: #d4d4d8;
-                    font-weight: bold;
-                    font-size: 12px;
-                    text-align: left;
-                    padding: 4px 2px;
-                    border: none;
-                    border-bottom: 1px solid #27272a;
-                }
-                QPushButton:hover {
-                    color: #fafafa;
-                }
-            """)
-            layout.addWidget(cat_btn)
-            
-            # Container for nodes
-            nodes_container = QWidget()
-            nodes_layout = QVBoxLayout(nodes_container)
-            nodes_layout.setContentsMargins(4, 2, 0, 4)
-            nodes_layout.setSpacing(2)
-            
+            cat_item = QTreeWidgetItem([cat])
+            cat_item.setData(0, PLUGIN_TYPE_ROLE, None)
+            cat_item.setIcon(0, icons.category_icon(nodes[0][0]))
+            cat_item.setFont(0, header_font)
+            cat_item.setForeground(0, dim)
+            cat_item.setToolTip(0, "Click to show or hide")
+            self.node_tree.addTopLevelItem(cat_item)
+
             for p_type, p_def in nodes:
-                btn = NodeButton(p_def["name"], p_def["color"])
-                btn.clicked.connect(lambda pt=p_type: self.add_node_requested.emit(pt, {}))
-                nodes_layout.addWidget(btn)
-                
-            layout.addWidget(nodes_container)
-            
+                node_item = QTreeWidgetItem([p_def["name"]])
+                node_item.setData(0, PLUGIN_TYPE_ROLE, p_type)
+                node_item.setToolTip(0, f"Add {p_def['name']}")
+                cat_item.addChild(node_item)
+
+            cat_item.setExpanded(True)
+
+    def _on_item_clicked(self, item, column=0):
+        p_type = item.data(0, PLUGIN_TYPE_ROLE)
+        if p_type:
+            self.add_node_requested.emit(p_type, {})
+        else:
             # Simple toggle logic
-            def toggle_visibility(c=nodes_container):
-                c.setVisible(not c.isVisible())
-                
-            cat_btn.clicked.connect(toggle_visibility)
-            
-        scroll.setWidget(content)
-        main_layout.addWidget(scroll)
+            item.setExpanded(not item.isExpanded())
 
     def _on_load_media(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select Media File", "", "Video/Image Files (*.mp4 *.mov *.png *.jpg *.exr)")
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select media file", "", "Video/Image Files (*.mp4 *.mov *.png *.jpg *.exr)")
         if file_path:
             self.add_node_requested.emit("media_plate", {"plate_file": file_path})

@@ -1,7 +1,7 @@
 {
     "name": "Corridor Keyer",
     "plugin_type": "corridor_keyer",
-    "category": "🔑 Keying",
+    "category": "Keying",
     "color": "#10b981",
     "inputs": ["Video Plate", "Alpha Matte"],
     "outputs": ["Keyed RGBA"],

@@ -1,7 +1,7 @@
 {
     "name": "Unified Output",
     "plugin_type": "composite_output",
-    "category": "📦 Output",
+    "category": "Output",
     "color": "#f43f5e",
     "inputs": ["Keyed RGBA", "Alpha Matte", "Video Plate", "3D Camera Path", "3D Sparse Points", "Dense Depth Map", "Shape Data"],
     "outputs": ["Final Presentation", "Export Assets"],

@@ -26,9 +26,9 @@ The app is being fixed and rebranded in passes. Each pass ends with a review bef
 - [ ] One install path, a lock file, Python 3.10–3.11, a working `.spec` (H11)
 
 **Rebrand and new UI (Contour VFX):**
-- [ ] Logo, app icon, banner and splash as editable SVG with a render script. Mark: U-shaped viewfinder bracket with a T-shaped tracking crosshair
-- [ ] Design system in one place: neutral mid-grey Nuke/Flame-style theme, one accent, one bundled font, SVG line icons (no emoji), colour-coded node types, compact spacing, draggable number fields
-- [ ] Main window, graph, viewer, timeline and panels restyled. Window title, installer and README renamed
+- [x] Logo, app icon, banner and splash as editable SVG with a render script. Mark: U-shaped viewfinder bracket with a T-shaped tracking crosshair
+- [x] Design system in one place: neutral mid-grey Nuke/Flame-style theme, one accent, Segoe UI (on every Windows machine, so nothing to bundle), SVG line icons (no emoji), colour-coded node types, compact spacing, draggable number fields (still to do)
+- [x] Main window, graph, viewer, timeline and panels restyled. Window title, installer and README renamed
 
 ## Pass 2: Node by node (in data-flow order)
 Each node is done when it works on the test plates at HD, 4K and frame 1001, Cancel works, outputs keep quality and frame numbers, every option in its panel does something, it has a test, and its panel uses the new design.

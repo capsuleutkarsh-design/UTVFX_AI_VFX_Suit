@@ -14,7 +14,7 @@ import json
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QSplitter, QFrame, QLabel, QPushButton, QMessageBox, QFileDialog, QSplashScreen
+    QSplitter, QFrame, QLabel, QPushButton, QToolButton, QMessageBox, QFileDialog
 )
 from PySide6.QtCore import Qt, QSize, Slot, QTimer
 from PySide6.QtGui import QIcon, QFontDatabase, QColor, QShortcut, QKeySequence, QPixmap
@@ -32,24 +32,22 @@ from utvfx.ui.windows.render_queue import RenderQueueDialog
 from utvfx.core.commands import create_undo_stack
 from utvfx.ui.windows.model_downloader_ui import ModelDownloaderDialog
 from utvfx.core.settings_manager import SettingsManager
+from utvfx.ui import brand, icons, theme
+from utvfx.version import APP_NAME, VERSION
+
+
+def apply_theme(app):
+    theme.apply(app)
+
 
 class VFXCoreWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         # Main Setup
-        self.setWindowTitle("UTVFX AI & VFX TOOL // v1.2")
-        self.setMinimumSize(800, 600)
-        self.resize(1280, 800)
-        # Apply the icon
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "app_icon.ico")
-        if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
-        
-        from utvfx.ui.styles import MAIN_WINDOW_STYLE
-        
-        # Load custom fonts if needed (assuming system fonts for now)
-        self.setStyleSheet(MAIN_WINDOW_STYLE)
-        
+        self.setMinimumSize(1000, 640)
+        self.resize(1440, 900)
+        self.setWindowIcon(brand.app_icon())
+
         # Undo/Redo Setup
         self.undo_stack = create_undo_stack(self)
         
@@ -121,60 +119,61 @@ class VFXCoreWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
         
-        # ─── Global Top Nav ───
+        # ─── Top bar ───
         nav = QWidget()
-        nav.setFixedHeight(56)
-        nav.setStyleSheet("background-color: #0d0d0f; border-bottom: 1px solid #27272a;")
+        nav.setObjectName("TopBar")
+        nav.setFixedHeight(40)
         nav_layout = QHBoxLayout(nav)
-        nav_layout.setContentsMargins(10, 5, 10, 5)
-        
-        from utvfx.ui.styles import BTN_DEFAULT, BTN_DARK, BTN_PRIMARY, BTN_WARNING, get_label_style
-        
-        self.logo = QLabel("VFX.CORE — untitled.utvfx")
-        self.logo.setStyleSheet("font-family: 'Space Grotesk'; font-size: 16px; font-weight: bold; color: #fafafa; letter-spacing: 2px;")
-        nav_layout.addWidget(self.logo)
-        
-        nav_layout.addStretch()
-        
-        # Undo/Redo Buttons
-        self.btn_undo = QPushButton("↩️ Undo")
-        self.btn_undo.setStyleSheet(BTN_DEFAULT)
-        self.btn_undo.clicked.connect(self.undo_stack.undo)
-        nav_layout.addWidget(self.btn_undo)
-        
-        self.btn_redo = QPushButton("↪️ Redo")
-        self.btn_redo.setStyleSheet(BTN_DEFAULT)
-        self.btn_redo.clicked.connect(self.undo_stack.redo)
-        nav_layout.addWidget(self.btn_redo)
-        
+        nav_layout.setContentsMargins(12, 0, 8, 0)
+        nav_layout.setSpacing(2)
+
+        brand_mark = QLabel()
+        brand_mark.setPixmap(brand.mark_pixmap(22))
+        nav_layout.addWidget(brand_mark)
+        nav_layout.addSpacing(6)
+        brand_name = QLabel("Contour")
+        brand_name.setFont(theme.ui_font(11, theme.QFont.Weight.DemiBold))
+        nav_layout.addWidget(brand_name)
+        nav_layout.addWidget(theme.set_role(QLabel("VFX"), "dim"))
+        nav_layout.addSpacing(16)
+        nav_layout.addWidget(theme.set_role(QLabel("/"), "faint"))
         nav_layout.addSpacing(10)
-        
-        self.btn_save = QPushButton("💾 Save")
-        self.btn_save.setStyleSheet(BTN_DARK)
-        self.btn_save.clicked.connect(self.save_project)
-        nav_layout.addWidget(self.btn_save)
-        
-        self.btn_load = QPushButton("📂 Load")
-        self.btn_load.setStyleSheet(BTN_DARK)
-        self.btn_load.clicked.connect(self.load_project)
-        nav_layout.addWidget(self.btn_load)
-        
-        self.btn_settings = QPushButton("⚙️ Settings")
-        self.btn_settings.setStyleSheet(BTN_PRIMARY)
-        self.btn_settings.clicked.connect(self.open_settings)
-        nav_layout.addWidget(self.btn_settings)
-        
-        self.btn_help = QPushButton("ℹ️ Help")
-        self.btn_help.setStyleSheet(BTN_DEFAULT)
-        self.btn_help.clicked.connect(self.open_help)
-        nav_layout.addWidget(self.btn_help)
-        
-        self.btn_queue = QPushButton("▶ Render")
-        self.btn_queue.setStyleSheet(BTN_WARNING)
+
+        # Kept as self.logo: other code updates the project name through set_project_title().
+        self.logo = theme.set_role(QLabel(), "dim")
+        nav_layout.addWidget(self.logo)
+        nav_layout.addStretch()
+
+        def bar_button(text, icon_name, slot=None, tip=""):
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setIcon(icons.icon(icon_name))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+            btn.setToolTip(tip or text)
+            theme.set_role(btn, "flat")
+            if slot:
+                btn.clicked.connect(slot)
+            nav_layout.addWidget(btn)
+            return btn
+
+        self.btn_undo = bar_button("Undo", "undo", self.undo_stack.undo, "Undo (Ctrl+Z)")
+        self.btn_redo = bar_button("Redo", "redo", self.undo_stack.redo, "Redo (Ctrl+Shift+Z)")
+        nav_layout.addSpacing(8)
+        self.btn_save = bar_button("Save", "save", self.save_project, "Save project")
+        self.btn_load = bar_button("Open", "open", self.load_project, "Open project")
+        nav_layout.addSpacing(8)
+        self.btn_settings = bar_button("Settings", "settings", self.open_settings)
+        self.btn_help = bar_button("Help", "help", self.open_help)
+        nav_layout.addSpacing(10)
+
+        self.btn_queue = QPushButton("Render queue")
+        self.btn_queue.setIcon(icons.icon("queue", theme.TEXT_ON_ACCENT))
+        theme.set_role(self.btn_queue, "primary")
         nav_layout.addWidget(self.btn_queue)
-        
+
         main_layout.addWidget(nav)
-        
+        self.set_project_title("untitled")
+
         # ─── Main Splitter Layout ───
         self.main_splitter = QSplitter(Qt.Horizontal)
         self.main_splitter.setChildrenCollapsible(False)
@@ -201,21 +200,22 @@ class VFXCoreWindow(QMainWindow):
         
         # Graph Toolbar
         g_toolbar = QWidget()
-        g_toolbar.setFixedHeight(40)
-        g_toolbar.setStyleSheet("background-color: #121212; border-bottom: 1px solid #27272a; border-top: 1px solid #27272a;")
+        g_toolbar.setObjectName("Toolbar")
+        g_toolbar.setFixedHeight(30)
         gt_layout = QHBoxLayout(g_toolbar)
-        gt_layout.setContentsMargins(20,0,20,0)
-        
-        lbl_graph = QLabel("⚙ PIPELINE FLOW GRAPH")
-        lbl_graph.setStyleSheet("font-family: 'Space Grotesk'; font-size: 11px; font-weight: bold; color: #f59e0b; letter-spacing: 1px;")
-        gt_layout.addWidget(lbl_graph)
+        gt_layout.setContentsMargins(10, 0, 6, 0)
+
+        gt_layout.addWidget(theme.set_role(QLabel("Node Graph"), "section"))
         gt_layout.addStretch()
-        
-        btn_reset_layout = QPushButton("↺ RESET LAYOUT")
-        btn_reset_layout.setStyleSheet("background-color: transparent; color: #f59e0b; border: 1px solid #f59e0b; border-radius: 4px; padding: 4px 12px; font-size: 10px; font-weight: bold;")
+
+        btn_reset_layout = QToolButton()
+        btn_reset_layout.setText("Reset layout")
+        btn_reset_layout.setIcon(icons.icon("reset"))
+        btn_reset_layout.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        theme.set_role(btn_reset_layout, "flat")
         btn_reset_layout.clicked.connect(self.reset_layout)
         gt_layout.addWidget(btn_reset_layout)
-        
+
         g_layout.addWidget(g_toolbar)
         
         # Node Scene & View
@@ -243,27 +243,19 @@ class VFXCoreWindow(QMainWindow):
 
         # ─── Status Footer ───
         footer = QWidget()
-        footer.setFixedHeight(32)
-        footer.setStyleSheet("background-color: #050505; border-top: 1px solid #27272a;")
+        footer.setObjectName("StatusBar")
+        footer.setFixedHeight(24)
         f_layout = QHBoxLayout(footer)
-        f_layout.setContentsMargins(20,0,20,0)
-        
-        lbl_sys = QLabel("● SYSTEM ACTIVE")
-        lbl_sys.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #10b981; font-weight: bold;")
-        f_layout.addWidget(lbl_sys)
-        
+        f_layout.setContentsMargins(10, 0, 10, 0)
+
+        f_layout.addWidget(theme.set_role(QLabel(f"{APP_NAME} {VERSION}"), "faint"))
         f_layout.addStretch()
-        
-        lbl_copyright = QLabel("© 2026 Utkarsh Tripathi / CapsuleUtkarsh Design. All Rights Reserved.")
-        lbl_copyright.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #52525b;")
-        f_layout.addWidget(lbl_copyright)
-        
+        f_layout.addWidget(theme.set_role(QLabel("© 2026 Utkarsh Tripathi"), "faint"))
         f_layout.addStretch()
-        
-        self.lbl_stats = QLabel("project / alpha_seq_012   |   engine / PySide6 (Qt6)")
-        self.lbl_stats.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 10px; color: #71717a;")
+
+        self.lbl_stats = theme.set_role(QLabel(""), "mono")
         f_layout.addWidget(self.lbl_stats)
-        
+
         main_layout.addWidget(footer)
         
         # Setup system stats timer
@@ -271,6 +263,11 @@ class VFXCoreWindow(QMainWindow):
         self.stats_timer = QTimer(self)
         self.stats_timer.timeout.connect(self.update_system_stats)
         self.stats_timer.start(1000)
+
+    def set_project_title(self, name):
+        name = os.path.splitext(os.path.basename(name))[0] or "untitled"
+        self.logo.setText(name)
+        self.setWindowTitle(f"{name} — {APP_NAME}")
 
     def update_system_stats(self):
         try:
@@ -398,7 +395,7 @@ class VFXCoreWindow(QMainWindow):
                             shot_name = folder_name
                             
                 sm.set_project_name(shot_name)
-                self.logo.setText(f"VFX.CORE — {shot_name}.utvfx")
+                self.set_project_title(shot_name)
             
         # Populate default parameters from registry
         default_params = {}
@@ -514,7 +511,7 @@ class VFXCoreWindow(QMainWindow):
                 filename = os.path.basename(file_path)
                 project_name = os.path.splitext(filename)[0]
                 SettingsManager().set_project_name(project_name)
-                self.logo.setText(f"VFX.CORE — {filename}")
+                self.set_project_title(filename)
                 
                 QMessageBox.information(self, "Saved", f"Project saved to {file_path}")
             except Exception as e:
@@ -532,7 +529,7 @@ class VFXCoreWindow(QMainWindow):
                 filename = os.path.basename(file_path)
                 project_name = os.path.splitext(filename)[0]
                 SettingsManager().set_project_name(project_name)
-                self.logo.setText(f"VFX.CORE — {filename}")
+                self.set_project_title(filename)
                 
                 QMessageBox.information(self, "Loaded", f"Project loaded successfully from {file_path}")
             except Exception as e:
@@ -546,31 +543,20 @@ if __name__ == "__main__":
     from utvfx.core.logger import setup_global_logger
     setup_global_logger()
     app = QApplication(sys.argv)
-    app.setStyleSheet("* { outline: none; }")
-    
-    # --- SPLASH SCREEN ---
-    splash_image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "build", "assets", "wizard_large.bmp")
-    if os.path.exists(splash_image_path):
-        splash_pixmap = QPixmap(splash_image_path)
-        splash = QSplashScreen(splash_pixmap, Qt.WindowStaysOnTopHint)
-        splash.show()
-        splash.showMessage("Initializing Core VFX Engine...", Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignCenter, Qt.white)
-        app.processEvents()
-    else:
-        splash = None
+    app.setApplicationName(APP_NAME)
+    app.setApplicationVersion(VERSION)
+    apply_theme(app)
 
-    if splash:
-        splash.showMessage("Loading UI Components...", Qt.AlignBottom | Qt.AlignCenter, Qt.white)
-        app.processEvents()
+    splash = brand.Splash()
+    splash.show()
+    splash.set_status("Starting the engine…")
+    app.processEvents()
 
-    # Optional: Load font families if they exist locally
-    # QFontDatabase.addApplicationFont("fonts/Inter-Regular.ttf")
-    # QFontDatabase.addApplicationFont("fonts/SpaceGrotesk-Bold.ttf")
-    
+    splash.set_status("Loading the interface…")
+    app.processEvents()
+
     window = VFXCoreWindow()
     window.showMaximized()
-    
-    if splash:
-        splash.finish(window)
-        
+    splash.finish(window)
+
     sys.exit(app.exec())

@@ -1,12 +1,13 @@
-import os
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QSplitter, 
+    QDialog, QVBoxLayout, QHBoxLayout, QSplitter,
     QTreeWidget, QTreeWidgetItem, QTextBrowser, QPushButton, QLabel, QSizePolicy
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont, QColor, QIcon
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QColor
 
 from utvfx.core.data_model import NODES_REGISTRY
+from utvfx.ui import brand, icons, theme
+from utvfx.version import APP_NAME, VERSION
 
 # Expanded, professional documentation for all known nodes
 NODE_HELP_DATA = {
@@ -125,116 +126,79 @@ NODE_HELP_DATA = {
     }
 }
 
+def _manual_css():
+    """Default stylesheet for the manual's HTML, built from theme tokens."""
+    return f"""
+        body {{ color: {theme.TEXT}; font-family: "{theme.FONT_FAMILY}"; font-size: 9pt; }}
+        h1 {{ color: {theme.TEXT}; font-size: 14pt; font-weight: 600; margin: 0; }}
+        p.h2 {{ color: {theme.TEXT}; font-size: 10pt; font-weight: 600; margin-top: 18px; margin-bottom: 6px; }}
+        p {{ margin-top: 0; margin-bottom: 6px; }}
+        b {{ color: {theme.TEXT}; font-weight: 600; }}
+        .category {{ color: {theme.TEXT_DIM}; }}
+        .dim {{ color: {theme.TEXT_DIM}; }}
+        .faint {{ color: {theme.TEXT_FAINT}; }}
+        .mono {{ font-family: "{theme.FONT_MONO}", Consolas, monospace; font-size: 8pt; color: {theme.TEXT_DIM}; }}
+        .pname {{ color: {theme.TEXT}; font-weight: 600; }}
+        td.param {{ padding: 6px 8px; }}
+    """
+
+
 class HelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("UTVFX User Manual & Node Documentation")
-        self.resize(1100, 750)
-        
-        # We define a much cleaner, premium CSS style that specifically targets the QTreeWidget
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #09090b;
-                color: #fafafa;
-            }
-            QTreeWidget {
-                background-color: #121212;
-                border: 1px solid #27272a;
-                border-radius: 8px;
-                padding: 5px;
-                outline: none;
-                font-family: 'Inter', sans-serif;
-                font-size: 13px;
-            }
-            QTreeWidget::item {
-                padding: 10px;
-                border-radius: 4px;
-                color: #a1a1aa;
-                margin-bottom: 2px;
-            }
-            QTreeWidget::item:selected {
-                background-color: #27272a;
-                color: #f59e0b;
-                font-weight: bold;
-            }
-            QTreeWidget::item:hover:!selected {
-                background-color: #18181b;
-            }
-            /* Style for the category headers (Top Level Items) */
-            QTreeWidget::item:has-children {
-                background-color: transparent;
-                color: #71717a;
-                font-size: 11px;
-                font-weight: bold;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-                padding-top: 15px;
-                padding-bottom: 5px;
-            }
-            QTextBrowser {
-                background-color: #121212;
-                border: 1px solid #27272a;
-                border-radius: 8px;
-                padding: 30px;
-                color: #e4e4e7;
-                font-family: 'Inter', sans-serif;
-                font-size: 14px;
-            }
-            QPushButton {
-                background-color: #27272a;
-                color: #fafafa;
-                border: 1px solid #3f3f46;
-                padding: 8px 20px;
-                border-radius: 4px;
-                font-weight: bold;
-                font-size: 12px;
-            }
-            QPushButton:hover {
-                background-color: #f59e0b;
-                color: #000000;
-                border: 1px solid #f59e0b;
-            }
-        """)
-        
+        self.setWindowTitle(f"{APP_NAME} user manual")
+        self.resize(1000, 700)
+
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(20, 20, 20, 20)
-        
-        # Header title
-        header_lbl = QLabel("📖 User Manual")
-        header_lbl.setStyleSheet("font-size: 20px; font-weight: bold; color: #f59e0b; font-family: 'Space Grotesk'; margin-bottom: 10px;")
-        main_layout.addWidget(header_lbl)
-        
+        main_layout.setContentsMargins(12, 10, 12, 12)
+        main_layout.setSpacing(8)
+
+        # Header: logo on the left, what this window is on the right
+        header = QHBoxLayout()
+        logo = QLabel()
+        logo.setPixmap(brand.logo_pixmap(28))
+        logo.setToolTip(f"{APP_NAME} {VERSION}")
+        header.addWidget(logo)
+        header.addStretch()
+        header.addWidget(theme.set_role(QLabel(f"User manual  ·  version {VERSION}"), "dim"))
+        main_layout.addLayout(header)
+
         # Splitter
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        
-        # Left Panel (Tree)
+
+        # Left panel (tree)
         self.node_tree = QTreeWidget()
         self.node_tree.setHeaderHidden(True)
-        self.node_tree.setMinimumWidth(280)
-        self.node_tree.setMaximumWidth(350)
-        self.node_tree.setIndentation(10) # Minimal indentation for clean look
+        self.node_tree.setMinimumWidth(220)
+        self.node_tree.setMaximumWidth(320)
+        self.node_tree.setIndentation(12)
+        self.node_tree.setIconSize(icons.ICON_SIZE)
         self.node_tree.currentItemChanged.connect(self.on_node_selected)
-        
-        # Right Panel (Browser)
+
+        # Right panel (browser); PanelBody gives it the panel grey behind the text
         self.text_browser = QTextBrowser()
+        self.text_browser.setObjectName("PanelBody")
         self.text_browser.setOpenExternalLinks(True)
-        
+        self.text_browser.document().setDefaultStyleSheet(_manual_css())
+        self.text_browser.document().setDocumentMargin(16)
+
         self.splitter.addWidget(self.node_tree)
         self.splitter.addWidget(self.text_browser)
-        self.splitter.setSizes([320, 780])
-        
+        self.splitter.setSizes([260, 740])
+
         main_layout.addWidget(self.splitter)
-        
-        # Bottom Buttons
+
+        # Bottom buttons
         btn_layout = QHBoxLayout()
         btn_layout.addStretch()
-        self.btn_close = QPushButton("Close Manual")
-        self.btn_close.setCursor(Qt.PointingHandCursor)
+        self.btn_close = QPushButton("Close")
+        theme.set_role(self.btn_close, "primary")
+        self.btn_close.setDefault(True)
         self.btn_close.clicked.connect(self.accept)
         btn_layout.addWidget(self.btn_close)
         main_layout.addLayout(btn_layout)
-        
+
         self.populate_nodes()
 
     def populate_nodes(self):
@@ -245,30 +209,33 @@ class HelpDialog(QDialog):
             if cat not in categories:
                 categories[cat] = []
             categories[cat].append((ptype, data))
-            
+
         first_child = None
-        
+        header_font = theme.ui_font(weight=QFont.Weight.DemiBold)
+
         # Sort categories
         for cat in sorted(categories.keys()):
-            # Create a Top-Level Item (Category Header)
+            # Top-level item (category header)
             cat_item = QTreeWidgetItem(self.node_tree)
             cat_item.setText(0, cat)
+            cat_item.setFont(0, header_font)
+            cat_item.setForeground(0, QColor(theme.TEXT_DIM))
             cat_item.setFlags(Qt.ItemIsEnabled) # Prevent selection, just expand/collapse
-            
+
             # Nodes in category
             nodes = sorted(categories[cat], key=lambda x: x[1].get("name", x[0]))
             for ptype, data in nodes:
                 node_item = QTreeWidgetItem(cat_item)
-                # Add an icon-like bullet prefix for visual hierarchy
-                node_item.setText(0, f"■  {data.get('name', ptype)}")
+                node_item.setText(0, data.get('name', ptype))
+                node_item.setIcon(0, icons.category_icon(ptype))
                 node_item.setData(0, Qt.UserRole, ptype)
-                
+
                 if first_child is None:
                     first_child = node_item
-                    
+
             # Auto-expand all categories
             cat_item.setExpanded(True)
-                
+
         # Select first actual node
         if first_child:
             self.node_tree.setCurrentItem(first_child)
@@ -276,74 +243,70 @@ class HelpDialog(QDialog):
     def on_node_selected(self, current, previous):
         if not current:
             return
-            
+
         ptype = current.data(0, Qt.UserRole)
         if not ptype:
             # User clicked a category header somehow (though flags should prevent it)
             return
-            
+
         node_data = NODES_REGISTRY.get(ptype, {})
         help_data = NODE_HELP_DATA.get(ptype, {})
-        
+
         name = node_data.get("name", ptype)
-        cat = node_data.get("category", "VFX NODE")
-        color = node_data.get("color", "#f59e0b")
-        
+        cat = node_data.get("category", "Node")
+        color = theme.node_colour(ptype)
+
         desc = help_data.get("description", "<p>No documentation provided for this node yet.</p>")
-        
+
         html = f"""
-        <h1 style="color: {color}; font-size: 28px; margin-bottom: 2px;">{name}</h1>
-        <h3 style="color: #71717a; font-size: 14px; margin-top: 0px; margin-bottom: 20px;">{cat.upper()}</h3>
-        
-        <div style="font-size: 14px; color: #d4d4d8; line-height: 1.5;">
-            {desc}
-        </div>
+        <table width="100%" cellspacing="0" cellpadding="0"><tr>
+            <td width="4" bgcolor="{color}"></td>
+            <td style="padding-left: 10px;">
+                <h1>{name}</h1>
+                <span class="category">{cat}</span>&nbsp;&nbsp;<span class="mono">{ptype}</span>
+            </td>
+        </tr></table>
+        <p style="margin-top: 12px;">{desc}</p>
         """
-        
-        # Display inputs/outputs
+
+        # Inputs and outputs
         inputs = node_data.get("inputs", [])
         outputs = node_data.get("outputs", [])
-        
+
         if inputs or outputs:
-            html += f"<hr style='border: 1px solid #27272a;'><h2 style='color: {color};'>Connections</h2><ul>"
+            html += "<p class='h2'>Connections</p><table cellspacing='0' cellpadding='3'>"
             if inputs:
-                html += f"<li style='color: #d4d4d8; font-size: 14px;'><b>Requires Inputs:</b> <span style='color: #a1a1aa;'>{', '.join(inputs)}</span></li>"
+                html += f"<tr><td class='dim'>Inputs</td><td class='mono'>{', '.join(inputs)}</td></tr>"
             if outputs:
-                html += f"<li style='color: #d4d4d8; font-size: 14px;'><b>Generates Outputs:</b> <span style='color: #a1a1aa;'>{', '.join(outputs)}</span></li>"
-            html += "</ul>"
-            
-        # Display Parameters
+                html += f"<tr><td class='dim'>Outputs</td><td class='mono'>{', '.join(outputs)}</td></tr>"
+            html += "</table>"
+
+        # Parameters
         params = node_data.get("parameters", [])
         if params:
-            html += f"<hr style='border: 1px solid #27272a;'><h2 style='color: {color};'>Configurable Parameters</h2>"
-            
-            html += "<table width='100%' cellpadding='10' cellspacing='0'>"
-            for p in params:
+            html += "<p class='h2'>Parameters</p>"
+            html += f"<table width='100%' cellspacing='0' cellpadding='0' style='border-collapse: collapse;'>"
+            for i, p in enumerate(params):
                 pid = p.get("id", "unknown")
                 pname = p.get("name", pid)
                 ptype_ui = p.get("type", "unknown")
                 pdefault = p.get("value", "")
-                
-                # Try to get help text for this specific parameter
+
+                # Help text for this parameter, if any
                 p_desc = "No description available."
                 if "params" in help_data and pid in help_data["params"]:
                     p_desc = help_data["params"][pid]
-                    
+
+                row_bg = theme.BG_HEADER if i % 2 == 0 else theme.BG_PANEL
                 html += f"""
-                <tr>
-                    <td style="border-left: 4px solid {color}; background-color: #18181b; padding: 15px; margin-bottom: 10px;">
-                        <span style="font-size: 16px; font-weight: bold; color: #fafafa;">{pname}</span> 
-                        <span style="font-size: 12px; color: #71717a;">[{ptype_ui.upper()}]</span>
-                        <br><br>
-                        <span style="font-size: 13px; color: #a1a1aa;">{p_desc}</span>
-                        <br><br>
-                        <span style="font-size: 13px; color: {color}; font-weight: bold;">Default Value: {pdefault}</span>
-                    </td>
-                </tr>
-                <tr><td height="10"></td></tr>
+                <tr><td class="param" bgcolor="{row_bg}">
+                    <span class="pname">{pname}</span>&nbsp;&nbsp;<span class="mono">{pid}</span>&nbsp;&nbsp;<span class="faint">{ptype_ui}</span><br>
+                    <span class="dim">{p_desc}</span><br>
+                    <span class="faint">Default</span>&nbsp;&nbsp;<span class="mono">{pdefault}</span>
+                </td></tr>
                 """
             html += "</table>"
         else:
-            html += "<br><br><span style='color: #71717a; font-style: italic;'>This node has no configurable parameters in the Properties panel.</span>"
-            
+            html += "<p class='faint' style='margin-top: 14px;'>This node has no parameters in the properties panel.</p>"
+
         self.text_browser.setHtml(html)

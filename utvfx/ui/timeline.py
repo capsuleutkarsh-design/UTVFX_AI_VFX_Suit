@@ -7,6 +7,8 @@ from PySide6.QtWidgets import QWidget, QSizePolicy
 from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QPolygonF, QPainterPath, QImage
 from PySide6.QtCore import Qt, Signal, QPointF, QRectF, QThread
 
+from utvfx.ui import theme
+
 class ThumbnailGeneratorThread(QThread):
     thumbnail_ready = Signal(int, QImage)
     
@@ -16,7 +18,7 @@ class ThumbnailGeneratorThread(QThread):
         self.is_sequence = is_sequence
         self.total_frames = total_frames
         self.is_running = True
-        self.target_height = 40
+        self.target_height = 26
 
     def run(self):
         if not self.media_path or self.total_frames <= 0:
@@ -80,7 +82,7 @@ class TimelineWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.setFixedHeight(40)  # Standard timeline height
+        self.setFixedHeight(26)
 
         self._current_frame = 0
         self._total_frames = 100  # Default to 100 if no media loaded
@@ -95,20 +97,20 @@ class TimelineWidget(QWidget):
         self._thumbnails = {}
         self._thumbnail_thread = None
 
-        # Visual styling
-        self.bg_color = QColor("#0f172a") # Very dark blue/grey
-        self.border_color = QColor("#1e293b")
-        self.highlight_color = QColor(245, 158, 11, 40) # Translucent orange
-        self.text_color = QColor("#94a3b8")
-        self.badge_bg_color = QColor("#020617")
-        self.tick_color = QColor("#334155")
-        self.playhead_color = QColor("#f59e0b")  # Bright orange
-        self.playhead_line_color = QColor("#f59e0b")
-        self.keyframe_color = QColor("#3b82f6")
-        
+        # Visual styling (all from the theme)
+        self.bg_color = theme.qcolor(theme.BG_INPUT)
+        self.border_color = theme.qcolor(theme.BORDER_SOFT)
+        self.highlight_color = theme.qcolor(theme.TEXT, 14)      # in/out range
+        self.text_color = theme.qcolor(theme.TEXT_FAINT)
+        self.badge_bg_color = theme.qcolor(theme.BG_INPUT)
+        self.tick_color = theme.qcolor(theme.TEXT_FAINT)
+        self.playhead_color = theme.qcolor(theme.ACCENT)
+        self.playhead_line_color = theme.qcolor(theme.ACCENT)
+        self.keyframe_color = theme.qcolor(theme.ACCENT)
+
         # Geometry
-        self.margin_left = 20
-        self.margin_right = 20
+        self.margin_left = 8
+        self.margin_right = 8
 
     def set_frames(self, current, total, start_frame=1):
         if not self._is_scrubbing:
@@ -198,143 +200,107 @@ class TimelineWidget(QWidget):
             frame = self._frame_for_x(event.position().x())
             self.frame_seeked.emit(frame)
 
+    @staticmethod
+    def _nice_step(min_frames):
+        """Smallest 1/2/5 x 10^n frame step that is at least `min_frames`."""
+        step = 1
+        while True:
+            for m in (1, 2, 5):
+                if step * m >= min_frames:
+                    return step * m
+            step *= 10
+
     def paintEvent(self, event):
         painter = QPainter(self)
+        rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        h = self.height()
+
+        # Flat track
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        rect = self.rect()
-        corner_radius = rect.height() / 2.0
-
-        # Draw main pill background
         painter.setPen(QPen(self.border_color, 1))
         painter.setBrush(QBrush(self.bg_color))
-        painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), corner_radius, corner_radius)
-        
-        # Draw Thumbnails inside the pill (clipping applied)
+        painter.drawRoundedRect(rect, 2, 2)
+
+        clip_path = QPainterPath()
+        clip_path.addRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), 2, 2)
+        painter.setClipPath(clip_path)
+
+        # Thumbnails, kept faint so ticks and playhead stay readable
         if self._thumbnails:
-            clip_path = QPainterPath()
-            clip_path.addRoundedRect(rect.adjusted(1, 1, -1, -1), corner_radius, corner_radius)
-            painter.setClipPath(clip_path)
-            
-            painter.setOpacity(0.4) # Make them subtle so they don't overpower the timeline
+            painter.setOpacity(0.25)
             for frame_idx, img in sorted(self._thumbnails.items()):
                 x = self._x_for_frame(frame_idx)
-                # Draw image centered on its x
-                painter.drawImage(QRectF(x - img.width()/2, 0, img.width(), self.height()), img)
-            
+                painter.drawImage(QRectF(x - img.width() / 2, 0, img.width(), h), img)
             painter.setOpacity(1.0)
-            painter.setClipping(False)
 
-        usable_width = self.width() - self.margin_left - self.margin_right
         playhead_x = self._x_for_frame(self._current_frame)
 
-        # Draw In and Out markers range
+        # In/out range: the range is lifted slightly, its ends marked with thin lines
         if self._in_frame is not None or self._out_frame is not None:
             in_x = self._x_for_frame(self._in_frame) if self._in_frame is not None else self.margin_left
             out_x = self._x_for_frame(self._out_frame) if self._out_frame is not None else self.width() - self.margin_right
-            
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QBrush(QColor(63, 63, 70, 150))) # Slight white highlight for the valid range
-            
-            clip_path = QPainterPath()
-            clip_path.addRoundedRect(rect.adjusted(1, 1, -1, -1), corner_radius, corner_radius)
-            painter.setClipPath(clip_path)
-            
-            painter.drawRect(QRectF(in_x, 1, out_x - in_x, rect.height() - 2))
-            
-            # Draw In marker line
-            if self._in_frame is not None:
-                painter.setPen(QPen(QColor("#a855f7"), 2))
-                painter.drawLine(QPointF(in_x, 0), QPointF(in_x, rect.height()))
-            
-            # Draw Out marker line
-            if self._out_frame is not None:
-                painter.setPen(QPen(QColor("#a855f7"), 2))
-                painter.drawLine(QPointF(out_x, 0), QPointF(out_x, rect.height()))
-                
-            painter.setClipping(False)
-
-        # Draw translucent orange highlight for elapsed time
-        if playhead_x > self.margin_left:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QBrush(self.highlight_color))
-            # Create a clipping path for the pill shape
-            clip_path = QPainterPath()
-            clip_path.addRoundedRect(QRectF(rect.adjusted(1, 1, -1, -1)), corner_radius, corner_radius)
-            painter.setClipPath(clip_path)
-            
-            highlight_rect = QRectF(0, 0, playhead_x, self.height())
-            painter.drawRect(highlight_rect)
-            
-            # Remove clipping
-            painter.setClipping(False)
+            painter.drawRect(QRectF(in_x, 0, out_x - in_x, h))
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            painter.setPen(QPen(theme.qcolor(theme.TEXT_DIM), 1))
+            if self._in_frame is not None:
+                painter.drawLine(QPointF(in_x, 0), QPointF(in_x, h))
+            if self._out_frame is not None:
+                painter.drawLine(QPointF(out_x, 0), QPointF(out_x, h))
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
-        painter.setFont(QFont("Space Grotesk", 8))
-        
-        # Draw Ticks (Dense Waveform style mapped to pixels, not frames)
-        # This guarantees it always looks like a dense audio waveform
-        pixel_step = 6
-        for x_pos in range(self.margin_left, self.width() - self.margin_right, pixel_step):
-            # Calculate height using pseudo-random waveform
-            h = 6 + (math.sin(x_pos * 0.1) * 5) + (math.cos(x_pos * 0.03) * 3)
-            
-            if x_pos < playhead_x:
-                painter.setPen(QPen(QColor("#b45309"), 1.5)) # Muted orange for past
-            else:
-                painter.setPen(QPen(QColor("#1e293b"), 1.5)) # Muted dark blue for future
-                
-            painter.drawLine(x_pos, int(self.height() / 2 - h), x_pos, int(self.height() / 2 + h))
-
-        # Dynamic text intervals
+        # Frame ticks and numbers
+        usable_width = self.width() - self.margin_left - self.margin_right
         pixels_per_frame = usable_width / max(1, self._total_frames - 1)
-        if pixels_per_frame > 10:
-            text_interval = 5
-        elif pixels_per_frame > 5:
-            text_interval = 10
-        elif pixels_per_frame > 1:
-            text_interval = 60
-        else:
-            text_interval = 120
+        font = theme.mono_font(7)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        label_w = metrics.horizontalAdvance(str(self._total_frames + self._start_frame)) + 10
+        minor = self._nice_step(6.0 / max(pixels_per_frame, 1e-6))
+        major = self._nice_step(max(label_w, 40) / max(pixels_per_frame, 1e-6))
+        if major % minor:
+            major = minor * max(1, round(major / minor))
 
-        # Draw Text Badges
-        for frame in range(0, self._total_frames, 1):
-            if frame % text_interval == 0:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        tick_pen = QPen(self.tick_color, 1)
+        painter.setPen(tick_pen)
+        if self._total_frames > 1:
+            # Ticks sit on round frame numbers (1010, 1020...), not on offsets from the start
+            first = (-self._start_frame) % minor
+            for frame in range(first, self._total_frames, minor):
+                x = int(round(self._x_for_frame(frame)))
+                tick_h = 7 if (frame + self._start_frame) % major == 0 else 3
+                painter.drawLine(x, h - 1 - tick_h, x, h - 2)
+
+            painter.setPen(QPen(self.text_color, 1))
+            text_y = metrics.ascent() + 2
+            first = (-self._start_frame) % major
+            for frame in range(first, self._total_frames, major):
                 x = self._x_for_frame(frame)
-                text = str(frame + self._start_frame)
-                text_rect = painter.fontMetrics().boundingRect(text)
-                
-                badge_w = text_rect.width() + 16
-                badge_h = text_rect.height() + 6
-                badge_x = x - badge_w / 2
-                badge_y = self.height() / 2 - badge_h / 2
-                
-                painter.setPen(Qt.PenStyle.NoPen)
-                painter.setBrush(QBrush(QColor("#3b82f6"))) # Dark badge
-                painter.drawRoundedRect(QRectF(badge_x, badge_y, badge_w, badge_h), badge_h/2, badge_h/2)
-                
-                painter.setPen(QPen(self.text_color, 1))
-                painter.drawText(int(x - text_rect.width() / 2), int(self.height() / 2 + text_rect.height() / 3), text)
+                if x + 3 + metrics.horizontalAdvance(str(frame + self._start_frame)) > self.width() - 2:
+                    break
+                painter.drawText(int(x + 3), text_y, str(frame + self._start_frame))
 
-        # Draw Keyframes
-        painter.setBrush(QBrush(self.keyframe_color))
+        # Keyframes: short accent ticks along the bottom edge
         painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(self.keyframe_color))
         for kf in self._keyframes:
             if 0 <= kf < self._total_frames:
-                x = self._x_for_frame(kf)
-                painter.drawEllipse(QPointF(x, self.height() / 2 + 12), 3, 3)
+                x = int(round(self._x_for_frame(kf)))
+                painter.drawRect(x - 1, h - 6, 2, 5)
 
-        # Draw Playhead Line
-        # Add a subtle glow/shadow to the line by drawing a slightly thicker transparent line behind it
-        painter.setPen(QPen(QColor(245, 158, 11, 100), 4))
-        painter.drawLine(int(playhead_x), 0, int(playhead_x), self.height())
-        
-        # Solid playhead line
-        painter.setPen(QPen(self.playhead_line_color, 2))
-        painter.drawLine(int(playhead_x), 0, int(playhead_x), self.height())
-        
-        # Draw Playhead Circle
-        painter.setBrush(QBrush(self.playhead_color))
+        # Playhead: 1 px accent line with a small handle at the top
+        px = int(round(playhead_x))
+        painter.setPen(QPen(self.playhead_line_color, 1))
+        painter.drawLine(px, 0, px, h)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawEllipse(QPointF(playhead_x, self.height() / 2), 7, 7)
+        painter.setBrush(QBrush(self.playhead_color))
+        painter.drawPolygon(QPolygonF([
+            QPointF(px - 4.5, 0), QPointF(px + 5.5, 0), QPointF(px + 5.5, 4),
+            QPointF(px + 0.5, 8), QPointF(px - 4.5, 4),
+        ]))
 
+        painter.setClipping(False)
         painter.end()

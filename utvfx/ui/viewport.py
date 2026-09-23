@@ -3,8 +3,10 @@ import glob
 import cv2
 import numpy as np
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy, QStackedWidget
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame, QSizePolicy, QStackedWidget,
+    QToolButton, QButtonGroup, QComboBox
 )
+from utvfx.ui import theme, icons
 from utvfx.ui.timeline import TimelineWidget
 from utvfx.ui.windows.point_cloud_viewer import PointCloudViewerWidget
 import time
@@ -13,6 +15,23 @@ from PySide6.QtGui import QColor, QPalette, QImage, QPixmap, QPainter, QPen, QBr
 from utvfx.playback.video_player import VideoPlayerThread
 from utvfx.ui.canvas import InteractiveVideoCanvas
 from utvfx.core.media_resolver import get_node_media_path
+
+
+class _ElidedLabel(QLabel):
+    """A label that elides its text instead of clipping it when space is short."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(0)
+        return hint
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setFont(self.font())
+        text = self.fontMetrics().elidedText(self.text(), Qt.ElideRight, self.width())
+        painter.drawText(self.rect(), int(self.alignment()), text)
+        painter.end()
 
 
 class Viewport(QWidget):
@@ -29,7 +48,6 @@ class Viewport(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
-        self.setStyleSheet("background-color: #0d0d0f;")
         
         # Add keyboard shortcuts for timeline scrubbing
         from PySide6.QtGui import QShortcut, QKeySequence
@@ -55,208 +73,183 @@ class Viewport(QWidget):
         self.shortcut_out.setContext(Qt.ApplicationShortcut)
         self.shortcut_out.activated.connect(self.set_out_point)
         
-        # ——— Top Toolbar ———
+        # ——— Viewer toolbar ———
         toolbar = QWidget()
-        toolbar.setFixedHeight(48)
-        toolbar.setStyleSheet("background-color: #121212; border-bottom: 1px solid #27272a;")
+        toolbar.setObjectName("Toolbar")
+        toolbar.setFixedHeight(30)
         t_layout = QHBoxLayout(toolbar)
-        t_layout.setContentsMargins(20, 0, 20, 0)
-        
-        self.lbl_title = QLabel("🔴 Monitor A // NO MEDIA")
-        self.lbl_title.setStyleSheet("font-family: 'Space Grotesk'; font-size: 13px; font-weight: bold; color: #fafafa; letter-spacing: 1px;")
-        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-        t_layout.addWidget(self.lbl_title, 1)
-        
-        self.frame_lbl = QLabel("F 1 / 1")
-        self.frame_lbl.setFixedWidth(80)
-        self.frame_lbl.setAlignment(Qt.AlignCenter)
-        self.frame_lbl.setStyleSheet("font-family: 'JetBrains Mono'; font-size: 11px; color: #71717a; background-color: #1a1a1e; padding: 4px 8px; border-radius: 4px;")
-        t_layout.addWidget(self.frame_lbl)
-        
-        # Stretch is now handled by lbl_title
-        
-        # View modes
-        btn_layout = QHBoxLayout()
-        modes = ["SRC", "MATTE", "COMP", "3D"]
+        t_layout.setContentsMargins(8, 0, 8, 0)
+        t_layout.setSpacing(2)
+
+        # View modes: a segmented group of checkable buttons. The keys are the
+        # view-mode ids the media resolver and player expect; only labels changed.
         self.view_modes = {}
-        for mode in modes:
-            btn = QPushButton(mode)
-            btn.setStyleSheet("""
-                QPushButton {
-                    background: #1a1b1e;
-                    color: #9ca3af;
-                    border: 1px solid #374151;
-                    border-radius: 4px;
-                    padding: 4px 10px;
-                }
-                QPushButton:hover {
-                    background: #25262b;
-                    color: white;
-                }
-            """)
+        self.view_mode_group = QButtonGroup(self)
+        self.view_mode_group.setExclusive(True)
+        for mode, label in (("SRC", "Source"), ("MATTE", "Matte"), ("COMP", "Comp"), ("3D", "3D")):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setCheckable(True)
+            btn.setToolTip(f"View {label.lower()}" if mode != "3D" else "View the 3D point cloud")
+            theme.set_role(btn, "flat")
             btn.clicked.connect(lambda checked=False, m=mode: self.set_view_mode(m))
+            self.view_mode_group.addButton(btn)
             self.view_modes[mode] = btn
-            btn_layout.addWidget(btn)
-            
-        # Wipe Tool Toggle
-        btn_layout.addSpacing(10)
-        self.btn_wipe = QPushButton("◩ Wipe")
+            t_layout.addWidget(btn)
+
+        t_layout.addSpacing(6)
+        t_layout.addWidget(self._separator())
+        t_layout.addSpacing(6)
+
+        # Wipe toggle
+        self.btn_wipe = QToolButton()
+        self.btn_wipe.setText("Wipe")
+        self.btn_wipe.setIcon(icons.icon("wipe"))
+        self.btn_wipe.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.btn_wipe.setCheckable(True)
-        self.btn_wipe.setStyleSheet("""
-            QPushButton { background: #1a1b1e; color: #a1a1aa; border: 1px solid #27272a; border-radius: 4px; padding: 4px 10px; font-weight: bold; }
-            QPushButton:hover { background: #27272a; color: white; }
-            QPushButton:checked { background: #3b82f6; color: white; border: 1px solid #60a5fa; }
-        """)
+        self.btn_wipe.setToolTip("Compare with the source plate")
+        theme.set_role(self.btn_wipe, "flat")
         self.btn_wipe.clicked.connect(self.toggle_wipe)
-        btn_layout.addWidget(self.btn_wipe)
-        btn_layout.addSpacing(10)
-            
-        clear_range_btn = QPushButton("CLR I/O")
-        clear_range_btn.setStyleSheet("""
-            QPushButton {
-                background: #1a1b1e;
-                color: #fca5a5;
-                border: 1px solid #7f1d1d;
-                border-radius: 4px;
-                padding: 4px 10px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background: #7f1d1d;
-                color: white;
-            }
-        """)
-        clear_range_btn.clicked.connect(self.clear_in_out)
-        btn_layout.addWidget(clear_range_btn)
-        
-        # BG Modes
-        btn_layout.addSpacing(20)
-        bg_label = QLabel("BG:")
-        bg_label.setStyleSheet("color: #71717a; font-size: 11px; font-weight: bold;")
-        btn_layout.addWidget(bg_label)
-        
+        t_layout.addWidget(self.btn_wipe)
+
+        t_layout.addSpacing(6)
+        t_layout.addWidget(self._separator())
+        t_layout.addSpacing(8)
+
+        # Background behind the image
+        t_layout.addWidget(theme.set_role(QLabel("Background"), "dim"))
+        t_layout.addSpacing(4)
         self.bg_btns = {}
-        for bg in ["Black", "White", "Grid"]:
-            b = QPushButton(bg)
-            b.setStyleSheet("""
-                QPushButton { background: #1a1b1e; color: #9ca3af; border: 1px solid #374151; border-radius: 4px; padding: 4px 8px; }
-                QPushButton:hover { background: #25262b; color: white; }
-            """)
-            b.clicked.connect(lambda checked=False, mode=bg: self.set_bg_mode(mode))
-            self.bg_btns[bg] = b
-            btn_layout.addWidget(b)
-            
-        btn_layout.addStretch()
-        
-        self.lbl_zoom = QLabel("Zoom: 100%")
-        self.lbl_zoom.setFixedWidth(80)
-        self.lbl_zoom.setStyleSheet("color: #a1a1aa; font-family: 'Space Grotesk'; font-size: 11px; font-weight: bold;")
-        btn_layout.addWidget(self.lbl_zoom)
-        
-        self.lbl_probe = QLabel("X: --  Y: --  |  R: -- G: -- B: --")
-        self.lbl_probe.setFixedWidth(180)
-        self.lbl_probe.setStyleSheet("color: #a1a1aa; font-family: 'JetBrains Mono'; font-size: 11px;")
-        btn_layout.addWidget(self.lbl_probe)
-        
-        t_layout.addLayout(btn_layout)
-            
+        self.bg_combo = QComboBox()
+        self.bg_combo.addItems(["Black", "White", "Grid"])
+        self.bg_combo.setToolTip("Background shown behind transparent pixels")
+        self.bg_combo.currentTextChanged.connect(self.set_bg_mode)
+        t_layout.addWidget(self.bg_combo)
+
+        # Node name, elided when the viewer is narrow
+        t_layout.addSpacing(12)
+        self.lbl_title = theme.set_role(_ElidedLabel("No node selected"), "faint")
+        self.lbl_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        self.lbl_title.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        t_layout.addWidget(self.lbl_title, 1)
+        t_layout.addSpacing(12)
+
+        # Readouts, right aligned
+        self.lbl_zoom = theme.set_role(QLabel("100%"), "mono")
+        self.lbl_zoom.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_zoom.setMinimumWidth(40)
+        self.lbl_zoom.setToolTip("Zoom (F to fit)")
+        t_layout.addWidget(self.lbl_zoom)
+        t_layout.addSpacing(12)
+
+        self.lbl_probe = theme.set_role(QLabel(self._probe_text()), "mono")
+        self.lbl_probe.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_probe.setToolTip("Pixel under the cursor")
+        self.lbl_probe.setMinimumWidth(
+            self.lbl_probe.fontMetrics().horizontalAdvance(self._probe_text(9999, 9999, 255, 255, 255)) + 4)
+        t_layout.addWidget(self.lbl_probe)
+
         main_layout.addWidget(toolbar)
-        
-        # ——— Video Display Area ———
+
+        # ——— Video display area ———
         display_area = QWidget()
-        display_area.setStyleSheet("background-color: #050505;")
         d_layout = QVBoxLayout(display_area)
         d_layout.setContentsMargins(0, 0, 0, 0)
-        
+
         self.stacked_display = QStackedWidget()
-        
-        self.img_display = InteractiveVideoCanvas("SELECT A NODE TO VIEW MEDIA")
+
+        self.img_display = InteractiveVideoCanvas("No media")
         self.img_display.interaction_requested.connect(self._on_canvas_interaction)
         self.img_display.zoom_changed.connect(self._on_zoom_changed)
         self.img_display.pixel_probed.connect(self._on_pixel_probed)
         self.stacked_display.addWidget(self.img_display)
-        
+
         self.point_cloud_viewer = PointCloudViewerWidget()
         self.stacked_display.addWidget(self.point_cloud_viewer)
-        
+
         d_layout.addWidget(self.stacked_display)
-        
+
         self.shortcut_fit.activated.connect(self.img_display.reset_zoom)
-        
+
         main_layout.addWidget(display_area, 1) # stretch = 1
-        
-        # ——— Bottom Timeline ———
+
+        # ——— Transport and timeline ———
         timeline = QWidget()
-        timeline.setFixedHeight(60)
-        timeline.setStyleSheet("background-color: #121212; border-top: 1px solid #27272a;")
+        timeline.setObjectName("Toolbar")
+        timeline.setFixedHeight(34)
         t_layout = QHBoxLayout(timeline)
-        t_layout.setContentsMargins(10, 0, 10, 0)
-        
-        # Playback Controls
-        self.btn_play = QPushButton("▶")
-        self.btn_play.setFixedSize(40, 40)
-        self.btn_play.setStyleSheet("""
-            QPushButton { 
-                background-color: #f59e0b; 
-                color: #000000; 
-                border-radius: 20px; 
-                border: 2px solid #e2e8f0; 
-                font-weight: bold; 
-                font-size: 18px; 
-                padding-left: 3px; 
-                padding-bottom: 2px;
-            }
-            QPushButton:hover { background-color: #fbbf24; }
-        """)
-        self.btn_play.clicked.connect(self.toggle_playback)
-        t_layout.addWidget(self.btn_play)
-        
-        self.lbl_start = QLabel("1")
-        self.lbl_start.setStyleSheet("color: #f59e0b; font-family: 'Space Grotesk'; font-size: 14px; padding: 0px 10px; font-weight: bold;")
+        t_layout.setContentsMargins(6, 0, 8, 0)
+        t_layout.setSpacing(2)
+
+        def transport_button(icon_name, tip, slot=None):
+            btn = QToolButton()
+            btn.setIcon(icons.icon(icon_name))
+            btn.setIconSize(icons.ICON_SIZE)
+            btn.setToolTip(tip)
+            theme.set_role(btn, "icon")
+            if slot:
+                btn.clicked.connect(slot)
+            t_layout.addWidget(btn)
+            return btn
+
+        self.btn_step_back = transport_button("step-back", "Previous frame (Left)", self.step_backward)
+        self.btn_play = transport_button("play", "Play / pause", self.toggle_playback)
+        self.btn_step_forward = transport_button("step-forward", "Next frame (Right)", self.step_forward)
+        self.btn_loop = transport_button("loop", "Playback loops between the in and out points")
+
+        t_layout.addSpacing(8)
+
+        # Current frame
+        self.lbl_start = theme.set_role(QLabel("1"), "mono")
+        self.lbl_start.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.lbl_start.setMinimumWidth(44)
+        self.lbl_start.setToolTip("Current frame")
         t_layout.addWidget(self.lbl_start)
+        t_layout.addSpacing(8)
 
         self.timeline = TimelineWidget()
         self.timeline.frame_seeked.connect(self.seek_frame)
         self.img_display.keyframes_changed.connect(self.timeline.set_keyframes)
         self.img_display.keyframes_changed.connect(self._sync_mask_keyframes)
         t_layout.addWidget(self.timeline, 1) # stretch = 1
-        
-        self.lbl_end = QLabel("1")
-        self.lbl_end.setStyleSheet("color: #71717a; font-family: 'Space Grotesk'; font-size: 11px; padding: 0px 10px;")
+        t_layout.addSpacing(8)
+
+        # Last frame
+        self.lbl_end = theme.set_role(QLabel("1"), "mono")
+        self.lbl_end.setMinimumWidth(36)
+        self.lbl_end.setToolTip("Last frame")
         t_layout.addWidget(self.lbl_end)
-        
-        self.btn_loop = QPushButton("🔁")
-        self.btn_loop.setFixedSize(30, 30)
-        self.btn_loop.setStyleSheet("""
-            QPushButton { 
-                background-color: transparent; 
-                color: #3b82f6; 
-                font-size: 18px; 
-                border: none; 
-            } 
-            QPushButton:hover { color: #60a5fa; }
-        """)
-        t_layout.addWidget(self.btn_loop)
-        
-        self.btn_clear_pts = QPushButton("Clear Frame Points")
-        self.btn_clear_pts.setStyleSheet("""
-            QPushButton { background-color: #1a1a1e; color: #a1a1aa; border: 1px solid #27272a; border-radius: 4px; padding: 4px 10px; font-size: 11px; }
-            QPushButton:hover { background-color: #27272a; color: #fafafa; }
-        """)
+        t_layout.addSpacing(4)
+
+        clear_range_btn = QToolButton()
+        clear_range_btn.setText("Clear in/out")
+        clear_range_btn.setToolTip("Clear the in and out points (set them with I and O)")
+        theme.set_role(clear_range_btn, "flat")
+        clear_range_btn.clicked.connect(self.clear_in_out)
+        t_layout.addWidget(clear_range_btn)
+
+        # Kept for callers that read it; the transport shows the same numbers.
+        self.frame_lbl = theme.set_role(QLabel("1 / 1", self), "mono")
+        self.frame_lbl.hide()
+
+        self.btn_clear_pts = QToolButton()
+        self.btn_clear_pts.setText("Clear points")
+        self.btn_clear_pts.setIcon(icons.icon("clear"))
+        self.btn_clear_pts.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_clear_pts.setToolTip("Clear the points on this frame")
+        theme.set_role(self.btn_clear_pts, "flat")
         self.btn_clear_pts.clicked.connect(self.img_display.clear_current_frame_points)
         self.btn_clear_pts.hide() # Hidden by default, shown when SAM3 node is selected
+        t_layout.addSpacing(6)
         t_layout.addWidget(self.btn_clear_pts)
-        
+
         main_layout.addWidget(timeline)
-        
+
         self.set_view_mode("COMP")
 
     def set_view_mode(self, mode):
         for m, btn in self.view_modes.items():
-            if m == mode:
-                btn.setStyleSheet("QPushButton { background: #2b5c3a; color: #a1fca9; border: 1px solid #4ade80; border-radius: 4px; padding: 4px 10px; font-weight: bold; }")
-            else:
-                btn.setStyleSheet("QPushButton { background: #1a1b1e; color: #9ca3af; border: 1px solid #374151; border-radius: 4px; padding: 4px 10px; }")
+            btn.setChecked(m == mode)
 
         self.current_view_mode = mode
         if self.current_node:
@@ -285,7 +278,7 @@ class Viewport(QWidget):
                     self.player_thread = None
                 
                 self.img_display.clear()
-                self.img_display.setText("LOADING...")
+                self.img_display.setText("Loading…")
                 self.player_thread = VideoPlayerThread(media_path)
                 self.player_thread.view_mode = mode
                 
@@ -326,7 +319,7 @@ class Viewport(QWidget):
     @Slot(str, int, float)
     def handle_media_loaded(self, path, total_frames, fps):
         self.img_display.clear()
-        self.img_display.setText("LOADING...")
+        self.img_display.setText("Loading…")
         self.player_thread = VideoPlayerThread(path)
         self.player_thread.frame_ready.connect(self.update_frame)
         self.player_thread.start()
@@ -378,19 +371,19 @@ class Viewport(QWidget):
             self.player_thread.stop()
             self.player_thread = None
         if not node:
-            self.lbl_title.setText("🔴 Monitor A // NO NODE SELECTED")
+            self.lbl_title.setText("No node selected")
             self.btn_clear_pts.hide()
             self.img_display.enable_interaction(False)
             self.img_display.clear()
-            self.img_display.setText("SELECT A NODE TO VIEW MEDIA")
-            self.frame_lbl.setText("F 1 / 1")
+            self.img_display.setText("No media")
+            self.frame_lbl.setText("1 / 1")
             self.lbl_start.setText("1")
             self.lbl_end.setText("1")
             self.timeline.set_frames(0, 1)
             self.timeline.set_keyframes([])
             return
             
-        self.lbl_title.setText(f"🔴 Monitor A // {node.name}")
+        self.lbl_title.setText(node.name)
         self.img_display.enable_interaction(node.plugin_type in ["sam3_rotoscope", "matte_anyone", "super_matte"])
         
         # Restore the mask keyframes from the new node
@@ -457,7 +450,7 @@ class Viewport(QWidget):
 
         if media_path and os.path.exists(media_path):
             self.img_display.clear()
-            self.img_display.setText("LOADING...")
+            self.img_display.setText("Loading…")
             self.player_thread = VideoPlayerThread(media_path)
             self.player_thread.view_mode = self.current_view_mode
             
@@ -488,8 +481,8 @@ class Viewport(QWidget):
             self.timeline.set_media_path(media_path, self.player_thread.is_sequence)
         else:
             self.img_display.clear()
-            self.img_display.setText("NO MEDIA OR CACHE GENERATED")
-            self.frame_lbl.setText("F 1 / 1")
+            self.img_display.setText("Nothing rendered yet")
+            self.frame_lbl.setText("1 / 1")
             self.lbl_start.setText("1")
             self.lbl_end.setText("1")
             self.timeline.set_frames(0, 1)
@@ -514,7 +507,7 @@ class Viewport(QWidget):
             
         self.img_display.set_current_frame(current_frame)
         self.point_cloud_viewer.set_current_frame(display_frame)
-        self.frame_lbl.setText(f"F {display_frame} / {end_display}")
+        self.frame_lbl.setText(f"{display_frame} / {end_display}")
         
         self.lbl_start.setText(str(display_frame))
         self.lbl_end.setText(str(end_display))
@@ -528,10 +521,10 @@ class Viewport(QWidget):
         if self.player_thread:
             if self.player_thread.is_paused:
                 self.player_thread.is_paused = False
-                self.btn_play.setText("⏸")
+                self.btn_play.setIcon(icons.icon("pause"))
             else:
                 self.player_thread.is_paused = True
-                self.btn_play.setText("▶")
+                self.btn_play.setIcon(icons.icon("play"))
 
     def seek_frame(self, position):
         if self.player_thread:
@@ -603,18 +596,28 @@ class Viewport(QWidget):
 
     def _on_zoom_changed(self):
         z = int(self.img_display.zoom_factor * 100)
-        self.lbl_zoom.setText(f"Zoom: {z}%")
-        
+        self.lbl_zoom.setText(f"{z}%")
+
+    @staticmethod
+    def _probe_text(px="-", py="-", r="-", g="-", b="-"):
+        return f"x {px:>4} y {py:>4}  r {r:>3} g {g:>3} b {b:>3}"
+
+    def _separator(self):
+        line = QFrame()
+        line.setFixedSize(1, 16)
+        line.setAutoFillBackground(True)
+        palette = line.palette()
+        palette.setColor(QPalette.ColorRole.Window, theme.qcolor(theme.BORDER_SOFT))
+        line.setPalette(palette)
+        return line
+
     def _on_pixel_probed(self, px, py, r, g, b):
-        self.lbl_probe.setText(f"X: {px:<4} Y: {py:<4} | R: {r:<3} G: {g:<3} B: {b:<3}")
+        self.lbl_probe.setText(self._probe_text(px, py, r, g, b))
 
     def set_bg_mode(self, mode):
-        for m, btn in self.bg_btns.items():
-            if m == mode:
-                btn.setStyleSheet("QPushButton { background: #3f3f46; color: white; border: 1px solid #71717a; border-radius: 4px; padding: 4px 8px; font-weight: bold; }")
-            else:
-                btn.setStyleSheet("QPushButton { background: #1a1b1e; color: #9ca3af; border: 1px solid #374151; border-radius: 4px; padding: 4px 8px; }")
-        
+        if self.bg_combo.currentText() != mode:
+            self.bg_combo.setCurrentText(mode)
+
         if mode == "Grid":
             self.img_display.bg_mode = "checkerboard"
         elif mode == "White":

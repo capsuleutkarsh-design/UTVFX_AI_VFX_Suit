@@ -1,111 +1,84 @@
 from PySide6.QtWidgets import QGraphicsPathItem, QGraphicsItem
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QLinearGradient, QPainter
+from PySide6.QtGui import QPen, QPainterPath, QPainter
 from PySide6.QtCore import Qt, QPointF
 
+from utvfx.ui import theme
+
+
 class ConnectionItem(QGraphicsPathItem):
-    """A sleek cubic bezier connection between two ports with dynamic color gradients."""
+    """A plain cubic bezier wire between two ports."""
     def __init__(self, port1, port2=None):
         super().__init__()
         self.port1 = port1
         self.port2 = port2
-        
+        self._hovered = False
+
         self.setZValue(-1)
         self.setAcceptHoverEvents(True)
         self.setFlags(QGraphicsItem.ItemIsSelectable)
-        
+
         self.update_path()
-        
+
     def update_path(self, target_pos=None):
         pos1 = self.port1.scenePos()
-        
+
         if self.port2:
             pos2 = self.port2.scenePos()
-            color1 = self.port1.node.accent_color
-            color2 = self.port2.node.accent_color
         elif target_pos:
             pos2 = target_pos
-            color1 = self.port1.node.accent_color
-            # Fade to a semi-transparent version of the start color during drag
-            color2 = QColor(color1.red(), color1.green(), color1.blue(), 100)
         else:
             pos2 = pos1
-            color1 = self.port1.node.accent_color
-            color2 = color1
-            
+
         path = QPainterPath()
         path.moveTo(pos1)
-        
-        # Calculate control points for cubic bezier
+
+        # Control points for the cubic bezier
         dx = abs(pos2.x() - pos1.x()) * 0.5
         dx = max(dx, 40.0)
-        
+
         cp1_x = pos1.x() + dx if self.port1.is_output else pos1.x() - dx
-        
+
         if self.port2:
             cp2_x = pos2.x() + dx if self.port2.is_output else pos2.x() - dx
         else:
             cp2_x = pos2.x() - dx if self.port1.is_output else pos2.x() + dx
-        
-        if not self.port2 and self.port1.is_output:
-            cp2_x = pos2.x() - dx
-        elif not self.port2 and not self.port1.is_output:
-            cp2_x = pos2.x() + dx
-            
+
         path.cubicTo(
             QPointF(cp1_x, pos1.y()),
             QPointF(cp2_x, pos2.y()),
             pos2
         )
         self.setPath(path)
-        
-        # Gradient along the connection curve
-        gradient = QLinearGradient(pos1, pos2)
-        
-        is_highlighted = self.isUnderMouse() or self.isSelected()
-        width = 4.0 if is_highlighted else 2.2
-        
-        if is_highlighted:
-            gradient.setColorAt(0, color1.lighter(115))
-            gradient.setColorAt(1, color2.lighter(115))
-        else:
-            gradient.setColorAt(0, color1)
-            gradient.setColorAt(1, color2)
-            
-        pen = QPen(QBrush(gradient), width)
+        self._update_pen()
+
+    def _update_pen(self):
+        highlighted = self._hovered or self.isSelected()
+        colour = theme.ACCENT if highlighted else theme.WIRE
+        pen = QPen(theme.qcolor(colour), 1.5)
         pen.setCapStyle(Qt.RoundCap)
+        if self.port2 is None:
+            pen.setStyle(Qt.DashLine)  # wire being dragged
         self.setPen(pen)
 
     def hoverEnterEvent(self, event):
-        self.update_path()
+        self._hovered = True
         super().hoverEnterEvent(event)
-        
+        self._update_pen()
+
     def hoverLeaveEvent(self, event):
-        self.update_path()
+        self._hovered = False
         super().hoverLeaveEvent(event)
+        self._update_pen()
+
+    def itemChange(self, change, value):
+        if change == QGraphicsItem.ItemSelectedHasChanged:
+            self._update_pen()
+        return super().itemChange(change, value)
 
     def paint(self, painter, option, widget=None):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(Qt.NoBrush)  # Crucial: prevent open Bezier paths from being filled!
-        
-        path = self.path()
-        pen = self.pen()
-        brush = pen.brush()
-        width = pen.widthF()
-        
-        # 1. Glow Layer (Thick, semi-transparent)
-        painter.save()
-        glow_pen = QPen(brush, width * 2.8)
-        glow_pen.setCapStyle(Qt.RoundCap)
-        painter.setOpacity(0.22)  # Soft neon glow
-        painter.setPen(glow_pen)
-        painter.drawPath(path)
-        painter.restore()
-        
-        # 2. Core Layer (Thin, solid)
-        core_pen = QPen(brush, width)
-        core_pen.setCapStyle(Qt.RoundCap)
-        painter.setPen(core_pen)
-        painter.drawPath(path)
-        
+        painter.setBrush(Qt.NoBrush)  # open bezier paths must not be filled
+        painter.setPen(self.pen())
+        painter.drawPath(self.path())
         painter.restore()

@@ -1,49 +1,77 @@
+import re
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QSlider, QLineEdit,
-    QCheckBox, QComboBox, QPushButton, QRadioButton, QFileDialog, QColorDialog
+    QCheckBox, QComboBox, QPushButton, QRadioButton, QFileDialog, QColorDialog,
+    QGroupBox, QSizePolicy
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 
+from utvfx.ui import icons, theme
+
+# Width of the label column, so every parameter row lines up.
+LABEL_WIDTH = 140
+
+# Words that stay capitalised when a label is put in sentence case.
+_PROPER_NOUNS = {"Nuke", "Blender"}
+
+
+def sentence_case(text):
+    """'SAM Model Version' -> 'SAM model version'. Acronyms and mixed-case words
+    (SAM, ViTMatte, GroundingDINO, I/O) are left alone."""
+    first = [True]
+
+    def visit(match):
+        word = match.group(0)
+        if first[0]:
+            first[0] = False
+            return word
+        # Only plain Capitalised words are lowered; ALLCAPS and camelCase stay.
+        if re.fullmatch(r"[A-Z][a-z]+", word) and word not in _PROPER_NOUNS:
+            return word.lower()
+        return word
+
+    return re.sub(r"[A-Za-z]+", visit, text)
+
+
+def _swatch_style(colour):
+    return (
+        f"QPushButton {{ background: {colour}; border: 1px solid {theme.BORDER_SOFT};"
+        f" border-radius: 2px; padding: 0; }}"
+        f"QPushButton:hover {{ border-color: {theme.TEXT_DIM}; }}"
+    )
+
+
 def build_param_widget(panel, param, color):
     ptype = param["type"]
     pid = param["id"]
-    
-    is_complex = ptype in ["layer_manager", "roto_layers"]
 
-    container = QWidget()
-    container.setObjectName("CardWidget")
-    
+    is_complex = ptype in ["layer_manager", "roto_layers"]
+    label_text = sentence_case(param["name"])
+    tooltip = param.get("tooltip", "")
+
     if is_complex:
-        container.setStyleSheet("""
-            #CardWidget {
-                background-color: #121212;
-                border: 1px solid #1f1f22;
-                border-radius: 8px;
-            }
-        """)
+        container = QGroupBox(label_text)
+        container.setObjectName("CardWidget")
         layout = QVBoxLayout(container)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(theme.SPACING)
     else:
-        container.setStyleSheet("""
-            #CardWidget {
-                background-color: transparent;
-            }
-        """)
+        container = QWidget()
+        container.setObjectName("CardWidget")
         layout = QHBoxLayout(container)
-        layout.setContentsMargins(0, 4, 0, 4)
-        layout.setSpacing(12)
-    
-    # Label
-    lbl = QLabel(param["name"].upper())
-    lbl.setStyleSheet("font-family: 'Inter'; font-size: 10px; font-weight: 800; color: #a1a1aa; letter-spacing: 1px; background: transparent; border: none;")
-    
-    if not is_complex:
-        lbl.setFixedWidth(180)
-        
-    layout.addWidget(lbl)
-    
+        layout.setContentsMargins(0, 2, 0, 2)
+        layout.setSpacing(8)
+
+        lbl = theme.set_role(QLabel(label_text), "dim")
+        lbl.setFixedWidth(LABEL_WIDTH)
+        lbl.setWordWrap(True)
+        lbl.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        if tooltip:
+            lbl.setToolTip(tooltip)
+        layout.addWidget(lbl)
+
     # Get value from node params, fallback to default
     if not hasattr(panel.current_node, "params"):
         panel.current_node.params = {}
@@ -61,15 +89,11 @@ def build_param_widget(panel, param, color):
         
         slider.setRange(int(param["min"] * mult), int(param["max"] * mult))
         slider.setValue(int(val * mult))
-        slider.setStyleSheet(f"""
-            QSlider::groove:horizontal {{ height: 6px; background: #27272a; border-radius: 3px; }}
-            QSlider::sub-page:horizontal {{ background: {color}; border-radius: 3px; }}
-            QSlider::handle:horizontal {{ background: #fafafa; border: 2px solid {color}; width: 14px; margin: -5px 0; border-radius: 7px; }}
-            QSlider::handle:horizontal:hover {{ background: {color}; }}
-        """)
-        
-        val_lbl = QLabel(str(val))
-        val_lbl.setStyleSheet(f"color: {color}; font-family: 'JetBrains Mono'; font-weight: bold; font-size: 12px; min-width: 50px; background: transparent; border: none;")
+        if tooltip:
+            slider.setToolTip(tooltip)
+
+        val_lbl = theme.set_role(QLabel(f"{val:.2f}" if mult == 100 else str(val)), "mono")
+        val_lbl.setMinimumWidth(44)
         val_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         
         def on_change(v, l=val_lbl, m=mult, p=pid):
@@ -99,21 +123,9 @@ def build_param_widget(panel, param, color):
         
     elif ptype == "text" or ptype == "file" or ptype == "folder":
         line = QLineEdit(str(val))
-        line.setStyleSheet(f"""
-            QLineEdit {{
-                background-color: #09090b; 
-                border: 1px solid #27272a; 
-                border-radius: 6px; 
-                padding: 8px 12px; 
-                color: #fafafa; 
-                font-size: 12px;
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {color};
-                background-color: #09090b;
-            }}
-        """)
-        
+        if tooltip:
+            line.setToolTip(tooltip)
+
         def text_changed(t, p=pid):
             old_val = panel.current_node.params.get(p, param["value"])
             
@@ -135,8 +147,8 @@ def build_param_widget(panel, param, color):
                                 shot_name = folder_name
                     sm.set_project_name(shot_name)
                     window = panel.window()
-                    if hasattr(window, "logo"):
-                        window.logo.setText(f"VFX.CORE — {shot_name}.utvfx")
+                    if hasattr(window, "set_project_title"):
+                        window.set_project_title(shot_name)
 
             scene = panel.current_node.scene()
             if scene and scene.undo_stack:
@@ -149,17 +161,18 @@ def build_param_widget(panel, param, color):
         line.editingFinished.connect(lambda: text_changed(line.text()))
         
         if ptype == "file" or ptype == "folder":
-            line.setPlaceholderText("Select " + ("file" if ptype == "file" else "folder") + " path...")
+            line.setPlaceholderText("Select " + ("file" if ptype == "file" else "folder") + " path…")
             h = QHBoxLayout()
-            btn = QPushButton("📂")
-            btn.setFixedSize(36, 36)
-            btn.setStyleSheet("background-color: #18181b; border: 1px solid #27272a; border-radius: 6px;")
-            
+            h.setSpacing(4)
+            btn = QPushButton()
+            btn.setIcon(icons.icon("folder" if ptype == "folder" else "open"))
+            btn.setToolTip("Browse")
+
             def open_file(*args, l=line, p=pid, is_folder=(ptype=="folder")):
                 if is_folder:
-                    path = QFileDialog.getExistingDirectory(panel, "Select Folder")
+                    path = QFileDialog.getExistingDirectory(panel, "Select folder")
                 else:
-                    path, _ = QFileDialog.getOpenFileName(panel, "Select File")
+                    path, _ = QFileDialog.getOpenFileName(panel, "Select file")
                     
                 if path:
                     l.setText(path)
@@ -177,32 +190,10 @@ def build_param_widget(panel, param, color):
         combo = QComboBox()
         combo.addItems(param["options"])
         combo.setCurrentText(str(val))
-        combo.setStyleSheet(f"""
-            QComboBox {{
-                background-color: #09090b; 
-                border: 1px solid #27272a; 
-                border-radius: 6px; 
-                padding: 8px 12px; 
-                color: #fafafa; 
-                font-size: 12px;
-            }}
-            QComboBox:hover, QComboBox:focus {{
-                border: 1px solid {color};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 24px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: #18181b;
-                color: #fafafa;
-                selection-background-color: {color};
-                selection-color: #000000;
-                border: 1px solid #27272a;
-                outline: none;
-            }}
-        """)
-        
+        combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        if tooltip:
+            combo.setToolTip(tooltip)
+
         def combo_changed(t, p=pid):
             old_val = panel.current_node.params.get(p, param["value"])
             scene = panel.current_node.scene()
@@ -217,15 +208,11 @@ def build_param_widget(panel, param, color):
         layout.addWidget(combo)
         
     elif ptype == "checkbox":
-        chk = QCheckBox("Enabled")
+        chk = QCheckBox()
         chk.setChecked(bool(val))
-        chk.setStyleSheet(f"""
-            QCheckBox {{ color: #fafafa; font-size: 12px; }}
-            QCheckBox::indicator {{ width: 16px; height: 16px; background: #09090b; border: 1px solid #27272a; border-radius: 4px; }}
-            QCheckBox::indicator:hover {{ border: 1px solid {color}; }}
-            QCheckBox::indicator:checked {{ background: {color}; border: 1px solid {color}; }}
-        """)
-        
+        if tooltip:
+            chk.setToolTip(tooltip)
+
         def checkbox_changed(checked, p=pid):
             old_val = panel.current_node.params.get(p, param["value"])
             scene = panel.current_node.scene()
@@ -238,13 +225,14 @@ def build_param_widget(panel, param, color):
                 
         chk.toggled.connect(checkbox_changed)
         layout.addWidget(chk)
+        layout.addStretch()
         
     elif ptype == "radio":
         h = QHBoxLayout()
         h.setContentsMargins(0,0,0,0)
+        h.setSpacing(12)
         for opt in param["options"]:
             rb = QRadioButton(opt)
-            rb.setStyleSheet(f"QRadioButton {{ color: #fafafa; font-size: 12px; }} QRadioButton::indicator:checked {{ background-color: {color}; border: 2px solid {color}; }}")
             if str(val) == opt:
                 rb.setChecked(True)
                 
@@ -261,6 +249,7 @@ def build_param_widget(panel, param, color):
                         
             rb.toggled.connect(radio_changed)
             h.addWidget(rb)
+        h.addStretch()
         layout.addLayout(h)
         
     elif ptype == "layer_manager":
@@ -271,14 +260,17 @@ def build_param_widget(panel, param, color):
         
     elif ptype == "color":
         btn = QPushButton()
-        btn.setFixedSize(60, 24)
-        btn.setStyleSheet(f"background-color: {val}; border: 1px solid #27272a; border-radius: 4px;")
+        btn.setFixedSize(28, 20)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setToolTip(str(val))
+        btn.setStyleSheet(_swatch_style(val))
         
         def choose_color(checked=False, b=btn, p=pid, init_color=val):
-            c = QColorDialog.getColor(QColor(panel.current_node.params.get(p, init_color)), panel, "Select Color")
+            c = QColorDialog.getColor(QColor(panel.current_node.params.get(p, init_color)), panel, "Select colour")
             if c.isValid():
                 h_color = c.name()
-                b.setStyleSheet(f"background-color: {h_color}; border: 1px solid #27272a; border-radius: 4px;")
+                b.setStyleSheet(_swatch_style(h_color))
+                b.setToolTip(h_color)
                 
                 old_val = panel.current_node.params.get(p, param["value"])
                 scene = panel.current_node.scene()
@@ -291,5 +283,6 @@ def build_param_widget(panel, param, color):
                 
         btn.clicked.connect(choose_color)
         layout.addWidget(btn)
+        layout.addStretch()
         
     return container

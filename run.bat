@@ -1,5 +1,5 @@
 @echo off
-echo Starting UTVFX AI ^& VFX Suit...
+echo Starting Contour VFX...
 set "BASE_DIR=%~dp0"
 set "PYTHON_EXE=%BASE_DIR%python_base\Scripts\python.exe"
 

@@ -1,6 +1,6 @@
 @echo off
 echo ==============================================
-echo Installing UTVFX AI ^& VFX Suit Environment...
+echo Installing Contour VFX Environment...
 echo ==============================================
 
 :: Check if Python is installed

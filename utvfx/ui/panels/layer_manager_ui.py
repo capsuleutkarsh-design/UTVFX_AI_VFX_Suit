@@ -3,6 +3,12 @@ import random
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget, QListWidgetItem, QInputDialog, QMessageBox, QDialog, QComboBox, QLabel, QFrame
 from PySide6.QtCore import Qt, QSize, Slot, QThread, Signal
 
+from utvfx.ui import icons, theme
+
+
+def _swatch_style(colour):
+    return f"background: {colour}; border: 1px solid {theme.BORDER}; border-radius: 2px;"
+
 class ScanWorker(QThread):
     finished = Signal(object, int)
     def __init__(self, client, f_path, frame_idx, text_prompt="", sam_version=""):
@@ -23,27 +29,29 @@ class LayerItemWidget(QWidget):
         self.parent_manager = parent_manager
         
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(6, 4, 6, 4)
-        layout.setSpacing(8)
-        
-        self.btn_vis = QPushButton("👁" if is_enabled else "◡")
-        self.btn_vis.setFixedSize(24, 24)
-        self.btn_vis.setStyleSheet("background: transparent; border: none; color: #a1a1aa; font-size: 14px;")
-        self.btn_vis.setCursor(Qt.CursorShape.PointingHandCursor)
+        layout.setContentsMargins(4, 0, 6, 0)
+        layout.setSpacing(theme.SPACING)
+
+        self.btn_vis = QPushButton()
+        self.btn_vis.setIcon(icons.icon("eye" if is_enabled else "eye-off", theme.TEXT_DIM))
+        self.btn_vis.setToolTip("Show or hide this layer")
+        theme.set_role(self.btn_vis, "flat")
+        # Layout only: a compact square button inside the list row.
+        self.btn_vis.setStyleSheet("padding: 2px;")
+        self.btn_vis.setFixedSize(22, 22)
         self.btn_vis.clicked.connect(self.toggle_vis)
         layout.addWidget(self.btn_vis)
-        
+
         self.swatch = QFrame()
-        self.swatch.setFixedSize(12, 12)
-        self.swatch.setStyleSheet(f"background-color: {color_hex}; border-radius: 6px;")
+        self.swatch.setFixedSize(10, 10)
+        self.swatch.setStyleSheet(_swatch_style(color_hex))
         self.swatch.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.swatch)
-        
+
         self.lbl_name = QLabel(name)
-        self.lbl_name.setStyleSheet("color: #fafafa; font-size: 12px; font-family: 'Inter';")
         self.lbl_name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         layout.addWidget(self.lbl_name)
-        
+
         layout.addStretch()
         
     def toggle_vis(self):
@@ -52,7 +60,7 @@ class LayerItemWidget(QWidget):
         if layer:
             new_state = not layer.get("enabled", True)
             layer["enabled"] = new_state
-            self.btn_vis.setText("👁" if new_state else "◡")
+            self.btn_vis.setIcon(icons.icon("eye" if new_state else "eye-off", theme.TEXT_DIM))
             scene = self.parent_manager.node.scene()
             if scene and hasattr(scene.views()[0], "window"):
                 main_window = scene.views()[0].window()
@@ -85,78 +93,53 @@ class LayerManagerWidget(QWidget):
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        
+        layout.setSpacing(theme.SPACING)
+
         # Tool Mode Row
         tool_layout = QHBoxLayout()
-        tool_lbl = QLabel("Tool:")
-        tool_lbl.setStyleSheet("color: #a1a1aa; font-size: 11px;")
+        tool_layout.setSpacing(theme.SPACING)
+        tool_lbl = theme.set_role(QLabel("Tool"), "dim")
         self.tool_combo = QComboBox()
         self.tool_combo.addItems(["Point", "Box"])
-        self.tool_combo.setStyleSheet("""
-            QComboBox { background-color: #27272a; color: white; border-radius: 4px; padding: 2px 6px; font-size: 11px; }
-            QComboBox::drop-down { border: none; }
-        """)
+        self.tool_combo.setItemIcon(0, icons.icon("points"))
+        self.tool_combo.setItemIcon(1, icons.icon("box"))
         self.tool_combo.setCurrentText(self.node.params.get("tool_mode", "Point"))
         self.tool_combo.currentTextChanged.connect(self.on_tool_mode_changed)
         tool_layout.addWidget(tool_lbl)
         tool_layout.addWidget(self.tool_combo)
         tool_layout.addStretch()
         layout.addLayout(tool_layout)
-        
+
         self.list_widget = QListWidget()
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background-color: #18181b;
-                border: 1px solid #27272a;
-                border-radius: 6px;
-                color: #fafafa;
-                font-family: 'Inter';
-                font-size: 12px;
-                outline: none;
-            }}
-            QListWidget::item {{
-                border-bottom: 1px solid #27272a;
-            }}
-            QListWidget::item:selected {{
-                background-color: #27272a;
-                border-left: 3px solid #71717a;
-            }}
-        """)
+        self.list_widget.setToolTip("Double-click a layer to rename it")
         self.list_widget.itemSelectionChanged.connect(self.on_selection_changed)
         self.list_widget.itemDoubleClicked.connect(self.on_item_double_clicked)
+        self.list_widget.setMinimumHeight(88)
+        self.list_widget.setMaximumHeight(180)
         layout.addWidget(self.list_widget)
-        
+
         btn_layout = QHBoxLayout()
-        self.btn_add = QPushButton("+ Add Layer")
-        self.btn_add.setStyleSheet("""
-            QPushButton { background-color: #27272a; color: white; border-radius: 4px; padding: 4px; font-size: 11px; }
-            QPushButton:hover { background-color: #3f3f46; }
-        """)
+        btn_layout.setSpacing(theme.SPACING)
+        self.btn_add = QPushButton("Add layer")
+        self.btn_add.setIcon(icons.icon("plus"))
         self.btn_add.clicked.connect(self.add_layer)
-        
-        self.btn_remove = QPushButton("- Remove")
-        self.btn_remove.setStyleSheet("""
-            QPushButton { background-color: #7f1d1d; color: white; border-radius: 4px; padding: 4px; font-size: 11px; }
-            QPushButton:hover { background-color: #991b1b; }
-        """)
+
+        self.btn_remove = QPushButton("Remove")
+        self.btn_remove.setIcon(icons.icon("trash"))
+        theme.set_role(self.btn_remove, "danger")
         self.btn_remove.clicked.connect(self.remove_layer)
-        
-        self.btn_auto_scan = QPushButton("Auto-Scan")
-        self.btn_auto_scan.setStyleSheet("""
-            QPushButton {
-                background-color: #3f3f46; color: white; border-radius: 4px; padding: 4px; font-size: 11px; font-weight: bold; }
-            QPushButton:hover { background-color: #0284c7; }
-        """)
+
+        self.btn_auto_scan = QPushButton("Auto-scan")
+        self.btn_auto_scan.setIcon(icons.icon("scan"))
+        self.btn_auto_scan.setToolTip("Find objects in the current frame and make a layer for each. May take a few minutes.")
         self.btn_auto_scan.clicked.connect(self.auto_scan_objects)
-        
+
         btn_layout.addWidget(self.btn_add)
         btn_layout.addWidget(self.btn_remove)
+        btn_layout.addStretch()
+        btn_layout.addWidget(self.btn_auto_scan)
         layout.addLayout(btn_layout)
-        
-        btn_layout2 = QHBoxLayout()
-        btn_layout2.addWidget(self.btn_auto_scan)
-        layout.addLayout(btn_layout2)
-        
+
     def on_tool_mode_changed(self, text):
         self.node.params["tool_mode"] = text
         
@@ -199,11 +182,11 @@ class LayerManagerWidget(QWidget):
 
         # Show status in the window's status bar instead of a blocking dialog
         if main_window and hasattr(main_window, "statusBar"):
-            main_window.statusBar().showMessage("Auto-Scan: Scanning image for objects...", 10000)
+            main_window.statusBar().showMessage("Auto-scan: looking for objects in the frame…", 10000)
         
         client = AIBridgeClient.get_instance()
         self.btn_auto_scan.setEnabled(False)
-        self.btn_auto_scan.setText("Scanning... (May take a few minutes)")
+        self.btn_auto_scan.setText("Scanning…")
         
         text_prompt = self.node.params.get("text_prompt", "")
         sam_version = self.node.params.get("sam_version")
@@ -221,10 +204,10 @@ class LayerManagerWidget(QWidget):
     @Slot(object, int)
     def on_scan_finished(self, objects, frame_idx):
         self.btn_auto_scan.setEnabled(True)
-        self.btn_auto_scan.setText("Auto-Scan")
+        self.btn_auto_scan.setText("Auto-scan")
         
         if not objects:
-            QMessageBox.warning(self, "Scan Failed", "No objects detected or model failed.")
+            QMessageBox.warning(self, "Scan failed", "No objects were found, or the model failed.")
             return
             
         import uuid
@@ -263,7 +246,7 @@ class LayerManagerWidget(QWidget):
             self.node.params["active_layer_id"] = layers[-new_layers_count]["id"]
         self.refresh_list()
         self.on_selection_changed()
-        QMessageBox.information(self, "Success", f"Created {new_layers_count} object layers!")
+        QMessageBox.information(self, "Auto-scan", f"Created {new_layers_count} object layers.")
         
     def refresh_list(self):
         self.list_widget.blockSignals(True)
@@ -274,7 +257,7 @@ class LayerManagerWidget(QWidget):
         for layer in layers:
             item = QListWidgetItem()
             item.setData(Qt.ItemDataRole.UserRole, layer["id"])
-            item.setSizeHint(QSize(0, 36))
+            item.setSizeHint(QSize(0, 28))
             self.list_widget.addItem(item)
             
             is_enabled = layer.get("enabled", True)
@@ -288,32 +271,10 @@ class LayerManagerWidget(QWidget):
         self.update_list_style()
         
     def update_list_style(self):
-        active_id = self.node.params.get("active_layer_id")
-        layers = self.node.params[self.pid]
-        active_layer = next((l for l in layers if l["id"] == active_id), None)
-        
-        color = active_layer["color"] if active_layer else "#71717a"
-        
-        self.list_widget.setStyleSheet(f"""
-            QListWidget {{
-                background-color: #18181b;
-                border: 1px solid #27272a;
-                border-radius: 6px;
-                color: #fafafa;
-                font-family: 'Inter';
-                font-size: 12px;
-                outline: none;
-            }}
-            QListWidget::item {{
-                padding: 0px;
-                border-bottom: 1px solid #27272a;
-            }}
-            QListWidget::item:selected {{
-                background-color: {color}20;
-                border-left: 3px solid {color};
-            }}
-        """)
-            
+        """Selection colours come from the global theme; each row carries its
+        layer colour in its swatch. Kept so existing callers still work."""
+        return
+
     def on_selection_changed(self):
         selected = self.list_widget.selectedItems()
         if selected:
@@ -331,14 +292,14 @@ class LayerManagerWidget(QWidget):
         layers = self.node.params[self.pid]
         layer = next((l for l in layers if l["id"] == layer_id), None)
         if layer:
-            name, ok = self._get_text_dialog("Rename Layer", "Enter new name:", layer["name"])
+            name, ok = self._get_text_dialog("Rename layer", "Name:", layer["name"])
             if ok and name:
                 layer["name"] = name
                 self.refresh_list()
                 
     def add_layer(self):
         layer_id = f"layer_{uuid.uuid4().hex[:8]}"
-        name, ok = self._get_text_dialog("New Layer", "Enter layer name:", "New Object")
+        name, ok = self._get_text_dialog("New layer", "Name:", "New object")
         if ok and name:
             colors = ["#ef4444", "#10b981", "#3b82f6", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4"]
             c = random.choice(colors)
@@ -366,13 +327,6 @@ class LayerManagerWidget(QWidget):
         dialog.setWindowTitle(title)
         dialog.setLabelText(label)
         dialog.setTextValue(text)
-        dialog.setStyleSheet("""
-            QInputDialog { background-color: #121212; }
-            QLabel { color: #fafafa; font-family: 'Inter'; }
-            QLineEdit { background-color: #1a1a1e; color: #fafafa; border: 1px solid #374151; border-radius: 4px; padding: 4px; }
-            QPushButton { background-color: #27272a; color: #fafafa; border: 1px solid #3f3f46; border-radius: 4px; padding: 4px 12px; }
-            QPushButton:hover { background-color: #3f3f46; }
-        """)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             return dialog.textValue(), True
         return "", False

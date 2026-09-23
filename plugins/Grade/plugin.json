@@ -1,7 +1,7 @@
 {
     "name": "Grade",
     "plugin_type": "grade",
-    "category": "🎨 Color",
+    "category": "Color",
     "color": "#ec4899",
     "inputs": ["Image"],
     "outputs": ["Image"],
