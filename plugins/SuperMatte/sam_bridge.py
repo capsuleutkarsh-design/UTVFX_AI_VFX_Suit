@@ -103,9 +103,31 @@ class SAM3Predictor:
     def set_image(self, image_rgb):
         self.image = image_rgb
         
+    def _tracker(self):
+        """SAM 3's interactive model: real point and box prompts (the concept model only takes boxes/text)."""
+        if getattr(self, "_tracker_model", None) is None:
+            from transformers import Sam3TrackerModel, Sam3TrackerProcessor
+            model_dir = os.path.join(ROOT_DIR, "models", "SAM3")
+            self._tracker_processor = Sam3TrackerProcessor.from_pretrained(model_dir, local_files_only=True)
+            self._tracker_model = Sam3TrackerModel.from_pretrained(model_dir, local_files_only=True).to(self.device).eval()
+        return self._tracker_model, self._tracker_processor
+
     def predict(self, points, labels, boxes=None):
+        if len(points) > 0 or boxes:
+            model, processor = self._tracker()
+            kwargs = {"images": self.image, "return_tensors": "pt"}
+            if len(points) > 0:
+                kwargs["input_points"] = [[[list(map(float, p)) for p in points]]]
+                kwargs["input_labels"] = [[[int(l) for l in labels]]]
+            if boxes:
+                kwargs["input_boxes"] = [[list(map(float, boxes[0]))]]
+            inputs = processor(**kwargs).to(self.device)
+            with torch.no_grad():
+                out = model(**inputs, multimask_output=False)
+            masks = processor.post_process_masks(out.pred_masks.cpu(), inputs["original_sizes"])[0]
+            return masks[0, 0].numpy() > 0
+
         H, W = self.image.shape[:2]
-        
         kwargs = {"images": self.image, "return_tensors": "pt"}
         
         all_boxes = []
@@ -341,7 +363,8 @@ class SamuraiVideoPredictor:
                 prompts_by_obj[obj_id].append(p)
                 
             for obj_id, obj_prompts in prompts_by_obj.items():
-                self.state = self.predictor.init_state(frames_dir, offload_video_to_cpu=True)
+                # Frames and tracking state live in RAM, so long shots don't fill the GPU.
+                self.state = self.predictor.init_state(frames_dir, offload_video_to_cpu=True, offload_state_to_cpu=True)
                 
                 # Reset SAMURAI's internal Kalman filter which doesn't support batching properly
                 if hasattr(self.predictor, 'kf_mean'):

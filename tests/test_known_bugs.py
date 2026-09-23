@@ -42,8 +42,8 @@ def test_nuke_camera_export_has_line_breaks(tmp_path):
 
 
 @pytest.mark.models
-@pytest.mark.xfail(reason="ISSUE-C3: ViTMatte padding is never cropped, so 1080-row plates break")
 def test_vitmatte_alpha_matches_plate_size():
+    """ISSUE-C3"""
     from transformers import VitMatteForImageMatting, VitMatteImageProcessor
     from plugins.SuperMatte.backend import SuperMatteWorker
 

@@ -162,6 +162,27 @@ class InteractiveVideoCanvas(QWidget):
     def clear_current_frame_points(self):
         self._edit_points(lambda pts: [], "Clear points")
 
+    def remove_point_near(self, norm_x, norm_y, radius_px, drawn_w, drawn_h):
+        """Remove the click or box corner nearest (norm_x, norm_y) within radius_px. Returns True if one was removed."""
+        def nearest(pts):
+            best, best_d = None, radius_px
+            for i, p in enumerate(pts):
+                corners = [(p[0], p[1])] if len(p) == 3 else [(p[0], p[1]), (p[2], p[3])]
+                for cx, cy in corners:
+                    d = (((cx - norm_x) * drawn_w) ** 2 + ((cy - norm_y) * drawn_h) ** 2) ** 0.5
+                    if d <= best_d:
+                        best, best_d = i, d
+            return best
+
+        found = {}
+
+        def drop(pts):
+            found["i"] = nearest(pts)
+            return pts if found["i"] is None else pts[:found["i"]] + pts[found["i"] + 1:]
+
+        self._edit_points(drop, "Remove point")
+        return found.get("i") is not None
+
     def wheelEvent(self, event):
         # Zoom in/out with mouse scroll
         if event.angleDelta().y() > 0:
@@ -265,6 +286,10 @@ class InteractiveVideoCanvas(QWidget):
                         self.update()
                         return
                     
+                    if event.modifiers() & Qt.ControlModifier:
+                        # Ctrl+click removes the point (or box) under the cursor.
+                        self.remove_point_near(norm_x, norm_y, 10, drawn_w, drawn_h)
+                        return
                     is_positive = (event.modifiers() != Qt.ShiftModifier)
                     # One undo step; sync_layers then asks for a live preview of the mask.
                     self.add_point((norm_x, norm_y, is_positive),

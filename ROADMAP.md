@@ -34,7 +34,7 @@ The app is being fixed and rebranded in passes. Each pass ends with a review bef
 Each node is done when it works on the test plates at HD, 4K and frame 1001, Cancel works, outputs keep quality and frame numbers, every option in its panel does something, it has a test, and its panel uses the new design.
 
 - [x] MediaPlate (M8)
-- [ ] SuperMatte (C3, C4, H13)
+- [x] SuperMatte (C3, C4, H13). Core/edge split and multi-channel EXR go with Unified Output (Pass 3)
 - [ ] RotoToShape (H17)
 - [ ] CorridorKey (H14)
 - [ ] Depth (H15)

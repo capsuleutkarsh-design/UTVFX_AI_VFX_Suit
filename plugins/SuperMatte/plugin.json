@@ -6,8 +6,8 @@
     "inputs": ["Video Plate"],
     "outputs": ["Alpha Matte"],
     "parameters": [
-        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 1 (ViT-H)", "options": ["SAM 1 (ViT-H)", "SAM 2 (SAMURAI)", "SAM 3 (ViT-B)"]},
-        {"id": "refiner_model", "name": "Refiner Model", "tab": "Main Settings", "type": "select", "value": "ViTMatte", "options": ["ViTMatte", "MEMatte", "VideoMaMa"]},
+        {"id": "sam_version", "name": "SAM Model Version", "tab": "Main Settings", "type": "select", "value": "SAM 2 (SAMURAI)", "options": ["SAM 2 (SAMURAI)", "SAM 1 (ViT-H)", "SAM 3 (ViT-B)"]},
+        {"id": "refiner_model", "name": "Refiner Model", "tab": "Main Settings", "type": "select", "value": "ViTMatte", "options": ["ViTMatte", "MEMatte", "VideoMaMa (slow, needs >16 GB VRAM)"]},
         {"id": "text_prompt", "name": "Text Prompt (GroundingDINO)", "tab": "Main Settings", "type": "text", "value": ""},
         {"id": "tool_mode", "name": "Interaction Mode", "tab": "Main Settings", "type": "radio", "value": "Point", "options": ["Point", "Box"]},
         {"id": "bg_color", "name": "Background Color", "tab": "Main Settings", "type": "color", "value": "#6aff9b"},

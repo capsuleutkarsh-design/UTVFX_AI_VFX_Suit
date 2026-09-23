@@ -211,3 +211,27 @@ def test_click_point_undo(window, matte, qapp):
     assert canvas.current_frame not in matte.params["mask_layers"][0]["keyframes"]
     window.undo_stack.undo()
     assert len(matte.params["mask_layers"][0]["keyframes"][canvas.current_frame]) == 1
+
+
+def test_ctrl_click_removes_one_point_and_undo_restores_it(window, matte, qapp):
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+
+    window.viewport.connect_to_node(matte)
+    canvas = window.viewport.img_display
+    canvas.resize(320, 240)
+    img = QImage(320, 240, QImage.Format.Format_RGB888)
+    img.fill(0)
+    canvas.last_raw_image = img
+    QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(100, 120))
+    QTest.mouseClick(canvas, Qt.LeftButton, Qt.NoModifier, QPoint(220, 120))
+    frame = canvas.current_frame
+    assert len(matte.params["mask_layers"][0]["keyframes"][frame]) == 2
+
+    QTest.mouseClick(canvas, Qt.LeftButton, Qt.ControlModifier, QPoint(222, 118))  # near the second point
+    pts = matte.params["mask_layers"][0]["keyframes"][frame]
+    assert len(pts) == 1 and abs(pts[0][0] * 320 - 100) < 3
+
+    window.undo_stack.undo()
+    assert len(matte.params["mask_layers"][0]["keyframes"][frame]) == 2

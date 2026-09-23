@@ -50,9 +50,10 @@ def test_clicks_on_later_frames_of_a_1001_plate_are_used(tmp_path, monkeypatch):
     worker.run_task()
 
     by_file = dict(bridge.calls)
-    assert list(by_file) == ["frame_001001.png", "frame_001002.png", "frame_001003.png", "frame_001004.png"]
-    assert by_file["frame_001001.png"] == [(15.0, 10.0)]
-    assert by_file["frame_001003.png"] == [(45.0, 20.0)]  # the correction, in pixels
+    # SAM reads the plate files directly (no copies), in timeline order.
+    assert list(by_file) == ["shot.1001.png", "shot.1002.png", "shot.1003.png", "shot.1004.png"]
+    assert by_file["shot.1001.png"] == [(15.0, 10.0)]
+    assert by_file["shot.1003.png"] == [(45.0, 20.0)]  # the correction, in pixels
     assert sorted(os.listdir(tmp_path / "cache" / "Matte")) == [f"matte_{n:06d}.png" for n in (1001, 1002, 1003, 1004)]
 
 

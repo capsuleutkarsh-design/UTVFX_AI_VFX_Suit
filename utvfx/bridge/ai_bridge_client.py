@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import secrets
+import select
 import socket
 import subprocess
 import sys
@@ -135,8 +136,10 @@ class AIBridgeClient:
                 sock.close()  # never leak the probe socket
                 time.sleep(0.25)
                 continue
+            sock.settimeout(None)  # blocking; replies are waited for with select(), so a wait never breaks the stream
             self.sock = sock
-            self.sock_in = sock.makefile('r', encoding='utf-8')
+            self._rbuf = b""
+            self.sock_in = True  # replies are read by _readline()
             self.sock_out = sock.makefile('w', encoding='utf-8')
             self._send({"token": self.token})
             self.is_ready = True
@@ -151,11 +154,23 @@ class AIBridgeClient:
         self.sock_out.write(json.dumps(payload) + "\n")
         self.sock_out.flush()
 
+    def _readline(self, wait):
+        """One reply line, or None if nothing arrived within `wait` seconds. '' means the engine closed."""
+        while b"\n" not in self._rbuf:
+            ready, _, _ = select.select([self.sock], [], [], wait)
+            if not ready:
+                return None
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                return ""
+            self._rbuf += chunk
+        line, self._rbuf = self._rbuf.split(b"\n", 1)
+        return line.decode("utf-8", errors="replace") + "\n"
+
     def _request(self, payload, timeout, on_progress=None):
         """Send one request and wait for its final JSON reply. Returns the reply or None."""
         self._send(payload)
         deadline = None if timeout is None else time.time() + timeout
-        self.sock.settimeout(1.0)
         while True:
             if self._cancel.is_set():
                 # The only way to stop the model mid-run is to end the process.
@@ -165,10 +180,9 @@ class AIBridgeClient:
                 self._fail(f"The AI engine did not answer within {timeout} s.")
                 self._shutdown_locked()
                 return None
-            try:
-                line = self.sock_in.readline()
-            except (socket.timeout, TimeoutError):
-                continue
+            line = self._readline(1.0)
+            if line is None:
+                continue  # nothing yet: check cancel and the deadline again
             if not line:
                 tail = "\n".join(self._stderr_tail[-8:])
                 self._fail("The AI engine closed the connection." + (f"\n{tail}" if tail else ""))
@@ -261,7 +275,7 @@ class AIBridgeClient:
                 self._send({"action": "shutdown"})
             except (OSError, ValueError):
                 pass
-        for closable in (self.sock_in, self.sock_out, self.sock):
+        for closable in (self.sock_out, self.sock):
             try:
                 if closable is not None:
                     closable.close()

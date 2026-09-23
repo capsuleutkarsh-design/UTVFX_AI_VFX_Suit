@@ -10,8 +10,8 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 |---|---|---|---|---|---|
 | C1 | Image I/O | EXR/DPX clipped to 1.0 and squeezed to 8-bit sRGB on load. ACES plates treated as sRGB. Every tool then works from 8-bit PNG/JPEG proxies | 1 | `test_exr_highlights_survive_loading` | ☑ |
 | C2 | Camera export | `.nk` / Blender `.py` written with literal `\n`. Exporter reads `sparse/0`, tracker writes `sparse/`. Camera axis flip doesn't match the points. Keys on 1..N, not plate frames | 3 | `test_nuke_camera_export_has_line_breaks` | ☐ |
-| C3 | SuperMatte | ViTMatte padding never cropped: 1080-row plates crash, 4K mattes shift ~16 px | 2 | `test_vitmatte_alpha_matches_plate_size` | ☐ |
-| C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☐ |
+| C3 | SuperMatte | ViTMatte padding never cropped: 1080-row plates crash, 4K mattes shift ~16 px | 2 | `test_vitmatte_alpha_matches_plate_size` | ☑ |
+| C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☑ |
 | C5 | Undo | Redo creates a new node id. Older commands hold dead objects. Undo after delete segfaults | 1 | `test_add_node_keeps_id_through_undo_redo`, `test_undo_after_delete_restores_graph_without_crashing` | ☑ |
 | C6 | Projects | Click keyframes come back as string keys after reload. Timeline paint crashes, points vanish or duplicate | 1 | `test_keyframes_stay_ints_after_save_and_reload` | ☑ |
 | C7 | Frame contract | Clicks stored by timeline position, looked up by file frame number. Corrections ignored on 1001 plates, one frame early on video | 1 | `tests/test_frame_contract.py` | ☑ |
@@ -32,7 +32,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☑ |
 | H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☑ |
 | H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ☑ plate loading, EXR colour tags, float pixel probe; OCIO node itself is M9 (Pass 2) |
-| H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☐ |
+| H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☑ |
 | H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
 | H16 | AI Roto | Depth units and direction wrong: hides limbs in front | 2 | | ☐ |
