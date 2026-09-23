@@ -4,13 +4,14 @@ import importlib
 import cv2
 import uuid
 import json
+import copy
 import hashlib
 import threading
 from PySide6.QtCore import QObject, Signal, Slot, QThread
 from PySide6.QtGui import QImage
 import numpy as np
 import gc
-from utvfx.core.media_resolver import get_node_cache, get_upstream_nodes, get_cached_output, resolve_media_input, resolve_alpha_input, resolve_tracking_input, resolve_shape_input
+from utvfx.core.media_resolver import get_node_cache, get_upstream_nodes, has_rendered_output, resolve_input, resolve_media_input, state_hash_path
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -120,6 +121,7 @@ class ExecutionEngine(QObject):
         os.makedirs(self.cache_dir, exist_ok=True)
         os.makedirs(self.temp_dir, exist_ok=True)
         self.active_workers = {}
+        self._start_hashes = {}
         self.execution_queue = []
         self.is_executing_pipeline = False
 
@@ -162,7 +164,8 @@ class ExecutionEngine(QObject):
         
         self.log_message.emit(node_id, f"Processing interaction: {len(points)} points on frame {frame_idx}...")
         
-        media_path = resolve_media_input(node, cache_dir=self.cache_dir)
+        inputs = getattr(node, "inputs", [])
+        media_path = resolve_input(node, inputs[0].name, self.cache_dir) if inputs else resolve_media_input(node, cache_dir=self.cache_dir)
         if not media_path or not os.path.exists(media_path):
             self.log_message.emit(node_id, "Interaction failed: No media connected.")
             return
@@ -528,11 +531,13 @@ class ExecutionEngine(QObject):
         # --- Smart Cache Validation ---
         try:
             current_hash = self._compute_node_hash(node)
-            hash_file = os.path.join(node_cache, "last_state_hash.txt")
+            # Fingerprint the settings as the render starts: edits made while it runs must not be marked cached.
+            self._start_hashes[node_id] = current_hash
+            hash_file = state_hash_path(node_cache)
             
             # 1. Check for explicit frozen state
             if getattr(node, 'is_frozen', False):
-                if get_cached_output(node, cache_dir=self.cache_dir):
+                if has_rendered_output(node, self.cache_dir):
                     self.log_message.emit(node_id, f"[Frozen] Node {node.name} is frozen. Using cached output.")
                     self._on_finished(node_id)
                     return
@@ -545,7 +550,7 @@ class ExecutionEngine(QObject):
                     saved_hash = f.read().strip()
                     
                 # If state hashes match perfectly AND the output cache folder isn't empty, skip execution.
-                if saved_hash == current_hash and get_cached_output(node, cache_dir=self.cache_dir):
+                if saved_hash == current_hash and has_rendered_output(node, self.cache_dir):
                     self.log_message.emit(node_id, f"[Cached] Output is already generated. Skipping execution for {node.name}.")
                     
                     if hasattr(node, 'set_cached_state'):
@@ -572,24 +577,15 @@ class ExecutionEngine(QObject):
             resolved_inputs = {}
             for inp in manifest_inputs:
                 inp_name = inp if isinstance(inp, str) else inp.get("name", "")
-                
-                # Check for standard names or implement types
-                inp_name_lower = inp_name.lower()
-                if "alpha" in inp_name_lower or "matte" in inp_name_lower:
-                    resolved_inputs[inp_name] = resolve_alpha_input(node, cache_dir=self.cache_dir)
-                elif "tracking" in inp_name_lower:
-                    resolved_inputs[inp_name] = resolve_tracking_input(node, cache_dir=self.cache_dir)
-                elif "shape" in inp_name_lower:
-                    resolved_inputs[inp_name] = resolve_shape_input(node, cache_dir=self.cache_dir)
-                else:
-                    resolved_inputs[inp_name] = resolve_media_input(node, cache_dir=self.cache_dir)
+                resolved_inputs[inp_name] = resolve_input(node, inp_name, self.cache_dir)
                     
             if plugin == "corridor_keyer":
                 params = self._map_corridor_key_params(params)
                 
             self.log_message.emit(node_id, f"Starting execution for {manifest.get('name', plugin)}. Cache: {node_cache}")
             
-            worker = worker_class(node_id, params, resolved_inputs, node_cache, self.cache_dir)
+            # Workers get their own copy, so edits made while they run cannot change their input.
+            worker = worker_class(node_id, copy.deepcopy(params), resolved_inputs, node_cache, self.cache_dir)
             
             worker.progress_update.connect(self._on_progress)
             worker.log_message.connect(self.log_message.emit)
@@ -640,10 +636,11 @@ class ExecutionEngine(QObject):
         target_node = self._get_node_by_id(node_id)
         if target_node:
             try:
-                current_hash = self._compute_node_hash(target_node)
+                current_hash = self._start_hashes.pop(node_id, None) or self._compute_node_hash(target_node)
                 node_cache = get_node_cache(target_node, self.cache_dir)
                 if os.path.exists(node_cache):
-                    hash_file = os.path.join(node_cache, "last_state_hash.txt")
+                    hash_file = state_hash_path(node_cache)
+                    os.makedirs(os.path.dirname(hash_file), exist_ok=True)
                     with open(hash_file, "w", encoding="utf-8") as f:
                         f.write(current_hash)
             except Exception as e:

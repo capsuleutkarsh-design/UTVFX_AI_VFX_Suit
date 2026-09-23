@@ -29,6 +29,26 @@ def get_node_cache(node, cache_dir=None):
             return os.path.join(cache_dir, "MediaCache", media_hash)
     return os.path.join(cache_dir, node.node_id)
 
+MEDIA_EXTS = (".png", ".jpg", ".jpeg", ".exr", ".tif", ".tiff", ".dpx", ".hdr", ".mov", ".mp4", ".json")
+
+# Bookkeeping lives here so it is never mistaken for a node's output.
+META_DIR = ".meta"
+
+
+def state_hash_path(node_cache):
+    return os.path.join(node_cache, META_DIR, "state_hash")
+
+
+def has_media(folder):
+    """True if `folder` holds rendered frames or data, not just bookkeeping."""
+    if not os.path.isdir(folder):
+        return False
+    return any(
+        name.lower().endswith(MEDIA_EXTS) and os.path.isfile(os.path.join(folder, name))
+        for name in os.listdir(folder)
+    )
+
+
 def get_cached_output(node, preferred_dirs=None, allow_fallback=True, cache_dir=None):
     node_cache = get_node_cache(node, cache_dir)
     preferred_dirs = preferred_dirs or ["fgr", "pha", "Comp", "FG", "Matte", "AlphaHint", "sam_masks"]
@@ -38,15 +58,122 @@ def get_cached_output(node, preferred_dirs=None, allow_fallback=True, cache_dir=
         if os.path.isdir(candidate) and os.listdir(candidate):
             return candidate
 
-    if allow_fallback and os.path.isdir(node_cache):
-        files = [
-            os.path.join(node_cache, name)
-            for name in os.listdir(node_cache)
-            if os.path.isfile(os.path.join(node_cache, name))
-        ]
-        if files:
-            return node_cache
+    if allow_fallback and has_media(node_cache):
+        return node_cache
     return None
+
+
+# Where each node writes each output port, most preferred first. "." is the node's cache folder.
+OUTPUT_FOLDERS = {
+    "media_plate": {"Video Plate": ["Video Plate"]},
+    "super_matte": {"Alpha Matte": ["Matte"]},
+    "corridor_keyer": {"Keyed RGBA": ["Output/Processed", "Output/FG"]},
+    "ai_depth_estimator": {"Dense Depth Map": ["."]},
+    "grade": {"Image": ["."]},
+    "ocio_colorspace": {"Image": ["."]},
+    "roto_to_shape": {"Shape Data": ["roto_shapes"]},
+    "ai_roto": {"Shape Data": ["roto_shapes"]},
+}
+
+# When a matte input is wired to a node whose output is an image, take that node's matte instead.
+ALPHA_FOLDERS = {
+    "corridor_keyer": ["Output/Matte", "AlphaHint"],
+    "super_matte": ["Matte"],
+}
+
+
+def input_kind(input_name):
+    name = input_name.lower()
+    if "alpha" in name or "matte" in name:
+        return "alpha"
+    if "3d" in name or "tracking" in name:
+        return "tracking"
+    if "shape" in name:
+        return "shape"
+    if "depth" in name:
+        return "depth"
+    if "keyed" in name:
+        return "keyed"
+    return "image"
+
+
+def _wired_source(port):
+    """The output port feeding an input port, or None."""
+    for conn in getattr(port, "connections", []):
+        for candidate in (conn.port1, conn.port2):
+            if candidate is not None and candidate is not port and getattr(candidate, "is_output", False):
+                return candidate
+    return None
+
+
+def output_path(node, port_name=None, want="image", cache_dir=None, _visited=None):
+    """The folder holding `node`'s output `port_name`, or None if it has not rendered.
+
+    Bypassed nodes and Dots pass their first input through, as in Nuke.
+    """
+    _visited = _visited or set()
+    if node in _visited:
+        return None
+    _visited.add(node)
+
+    ptype = getattr(node, "plugin_type", "")
+    if ptype == "dot_node" or getattr(node, "is_disabled", False):
+        inputs = getattr(node, "inputs", [])
+        src = _wired_source(inputs[0]) if inputs else None
+        return output_path(src.node, src.name, want, cache_dir, _visited) if src else None
+
+    if ptype == "media_plate":
+        return resolve_media_input(node, cache_dir=cache_dir)
+
+    node_cache = get_node_cache(node, cache_dir)
+    if ptype == "sfm_tracker":
+        return node_cache if os.path.isdir(os.path.join(node_cache, "sparse")) else None
+
+    outputs = OUTPUT_FOLDERS.get(ptype, {})
+    if want == "alpha" and ptype in ALPHA_FOLDERS:
+        folders = ALPHA_FOLDERS[ptype]
+    else:
+        folders = outputs.get(port_name) or next(iter(outputs.values()), ["."])
+    for folder in folders:
+        candidate = node_cache if folder == "." else os.path.normpath(os.path.join(node_cache, folder))
+        if has_media(candidate):
+            return candidate
+    return None
+
+
+def has_rendered_output(node, cache_dir=None):
+    ptype = getattr(node, "plugin_type", "")
+    node_cache = get_node_cache(node, cache_dir)
+    if ptype == "sfm_tracker":
+        return os.path.isdir(os.path.join(node_cache, "sparse"))
+    if ptype in OUTPUT_FOLDERS:
+        return any(
+            has_media(node_cache if f == "." else os.path.join(node_cache, f))
+            for folders in OUTPUT_FOLDERS[ptype].values() for f in folders
+        )
+    return get_cached_output(node, cache_dir=cache_dir) is not None
+
+
+def resolve_input(node, input_name, cache_dir=None):
+    """What arrives at `node`'s input `input_name`: the output of whatever is wired to it.
+
+    Unwired plate, matte, shape and tracking inputs fall back to searching upstream,
+    so graphs that only wire one input keep working. Unwired depth and keyed inputs
+    stay empty rather than silently receiving the plate.
+    """
+    kind = input_kind(input_name)
+    port = next((p for p in getattr(node, "inputs", []) if p.name == input_name), None)
+    src = _wired_source(port) if port is not None else None
+    if src is not None:
+        return output_path(src.node, src.name, kind, cache_dir)
+
+    fallback = {
+        "alpha": resolve_alpha_input,
+        "tracking": resolve_tracking_input,
+        "shape": resolve_shape_input,
+        "image": resolve_media_input,
+    }.get(kind)
+    return fallback(node, cache_dir=cache_dir) if fallback else None
 
 def resolve_media_input(node, visited=None, is_start_node=True, cache_dir=None):
     if visited is None:
@@ -169,11 +296,8 @@ def get_node_media_path(node, visited=None, view_mode="COMP"):
             if os.path.isdir(candidate) and os.listdir(candidate):
                 return candidate
         
-        if view_mode != "SRC":
-            files = glob.glob(os.path.join(node_cache, "*"))
-            files = [f for f in files if os.path.isfile(f)]
-            if files:
-                return node_cache
+        if view_mode != "SRC" and has_media(node_cache):
+            return node_cache
 
     for upstream_node in get_upstream_nodes(node):
         upstream_path = get_node_media_path(upstream_node, visited, view_mode)

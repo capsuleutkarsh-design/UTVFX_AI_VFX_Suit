@@ -89,8 +89,8 @@ def test_project_with_dot_node_can_be_saved(node_scene):
     json.dumps(node_scene.to_dict())
 
 
-@pytest.mark.xfail(reason="ISSUE-H3: the cache bookkeeping file is treated as rendered output")
 def test_hash_file_alone_is_not_rendered_output(tmp_path):
+    """ISSUE-H3"""
     from utvfx.core.media_resolver import get_cached_output
 
     node = types.SimpleNamespace(node_id="abc", plugin_type="grade", params={})
