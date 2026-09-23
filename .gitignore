@@ -37,3 +37,16 @@ releases/
 crash.log
 
 *.msgpack
+# Machine-local state (rewritten on every launch)
+settings.json
+crash.log
+
+# Model weights and caches that downloads add
+*.h5
+*.msgpack
+models/**/.cache/
+
+# Test runs (never commit footage or anything rendered from it)
+.pytest_cache/
+tests/*.log
+tests/output/
