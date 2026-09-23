@@ -189,7 +189,8 @@ class DepthWorker(BaseWorker):
             lo, hi = np.percentile(prev[0], (1, 99))
             low.append(lo)
             high.append(hi)
-            exr.write(os.path.join(depth_dir, f"depth_{number:06d}.exr"), result, ("Z",), half=False)
+            exr.write(os.path.join(depth_dir, f"depth_{number:06d}.exr"), result, ("Z",), half=False,
+                      attributes={"contour/depth": "metric" if metric else "relative, near = 1"})
             self.progress_update.emit(self.node_id, i + 1, 2 * total)
 
         # One range for the whole shot: relative depth becomes 0-1, the preview uses the same range.
@@ -211,7 +212,8 @@ class DepthWorker(BaseWorker):
                 near = depth
                 if not near_is_one:
                     depth = 1.0 - depth
-                exr.write(out, depth, ("Z",), half=False)
+                exr.write(out, depth, ("Z",), half=False,
+                          attributes={"contour/depth": "relative, near = 1" if near_is_one else "relative, near = 0"})
             picture = (np.power(np.clip(near, 0, 1), gamma) * 255 + 0.5).astype(np.uint8)
             picture = cv2.applyColorMap(picture, cmaps[colormap]) if colormap in cmaps else cv2.cvtColor(picture, cv2.COLOR_GRAY2BGR)
             cv2.imwrite(os.path.join(preview_dir, f"depth_{number:06d}.png"), picture)

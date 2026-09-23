@@ -71,24 +71,39 @@ NODE_HELP_DATA = {
         }
     },
     "corridor_keyer": {
-        "description": "The <b>Corridor Keyer</b> is a specialized matte extraction node designed for blue/green screens, offering aggressive spill suppression and auto-despeckling.",
+        "description": "The <b>Corridor Keyer</b> keys green and blue screens with the CorridorKey network, guided by a rough matte (wire SuperMatte, or leave it empty and BiRefNet makes one). It writes a straight foreground, the matte and a premultiplied RGBA as linear EXRs, plus a preview comp.",
         "params": {
-            "screen_color": "Select whether the background you want to remove is green, blue, or red.",
-            "despill_strength": "How aggressively to remove color cast from the background bouncing onto the foreground subject.",
-            "despill_limit_mode": "The math operation used to calculate neutral limits during despill (average usually works best, max can be safer for saturated subjects).",
-            "clean_islands": "Automatically deletes floating pixels (garbage) that shouldn't be part of the matte.",
-            "despeckle_thresh": "The maximum size of the floating noise islands to aggressively remove.",
-            "mask_expansion": "Dilates the generated mask to cover slight motion blur boundaries.",
-            "despeckle_blur": "Softens the despeckled areas to avoid jagged edges on the matte.",
-            "feather_radius": "Blurs the entire matte softly to blend the subject into the background.",
-            "detail_intensity": "Recovers sharp edge details from the original plate that might have been lost in the heavy key.",
-            "temporal_anti_flicker": "Reduces edge chatter/boiling across frames using temporal analysis.",
-            "sensor_noise": "Pre-blurs chroma noise in the image to prevent a grainy key.",
-            "output_dir": "If saving the key independently, this specifies the output folder.",
-            "foreground_output": "Whether to output a Straight RGB image (with a separate alpha) or Premultiplied RGB (rgb * alpha).",
-            "input_linear": "Check this if the input EXR plate is in linear light. The node mathematically requires linear light to operate correctly.",
-            "custom_bg": "Optionally load a background image specifically to preview the key in context.",
-            "proc_res": "The maximum processing resolution."
+            "screen_color": "Auto detects green or blue; pick one if it guesses wrong. Blue uses the dedicated blue-screen weights.",
+            "despill_strength": "How strongly the screen colour is removed from the subject.",
+            "despill_limit_mode": "Average suits most shots; Max removes less and keeps saturated costumes safer.",
+            "clean_islands": "Removes small floating specks from the matte.",
+            "despeckle_thresh": "The largest speck, in pixels, that Clean Islands removes.",
+            "mask_expansion": "Grows (positive) or shrinks (negative) the guide matte before keying, in pixels.",
+            "despeckle_blur": "A median filter on the finished matte: removes pin-holes and specks without softening edges.",
+            "feather_radius": "Softens the finished matte, in pixels.",
+            "detail_intensity": "How much fine edge detail (hair) the refiner adds.",
+            "temporal_anti_flicker": "Blends each matte with the previous one, moved along the image motion.",
+            "sensor_noise": "Denoises the plate before keying (the output foreground is not denoised).",
+            "foreground_output": "What the next node receives: premultiplied RGBA, or the straight foreground.",
+            "input_linear": "Keys the scene-linear plate (EXR or log sources) instead of the display copy.",
+            "custom_bg": "An image to put behind the preview comp. The EXRs are not affected.",
+            "proc_res": "The size the network works at. 2048 is a good balance; 4096 needs much more VRAM."
+        }
+    },
+    "ai_roto": {
+        "description": "The <b>AI Roto</b> node finds the person's skeleton (MediaPipe Pose) and cuts their matte into Nuke-ready shapes per body part: head, torso, upper and lower arms and legs. With a depth map wired, a limb that passes behind the torso fades out and comes back when it is in front again.",
+        "params": {
+            "target_points_limb": "Points in each limb shape (the same on every frame, so Nuke can animate them).",
+            "target_points_torso": "Points in the torso shape.",
+            "target_points_head": "Points in the head shape.",
+            "corner_threshold": "Turns sharper than this become cusps; gentler ones stay smooth.",
+            "edge_snap_radius": "How far points may move to sit exactly on the matte edge.",
+            "temporal_smoothing": "Averages each shape with the frames either side to calm jitter.",
+            "hysteresis_high": "A limb fades out when it is more than this far behind the torso (0.08 = 8% of the torso's distance from camera).",
+            "hysteresis_low": "A hidden limb shows again when it is less than this far behind the torso.",
+            "flow_decay": "When the skeleton is lost, how quickly shapes stop following the image motion and hold the last pose.",
+            "first_frame": "First plate frame to process (0 = start).",
+            "last_frame": "Last plate frame to process (0 = end)."
         }
     },
     "sfm_tracker": {

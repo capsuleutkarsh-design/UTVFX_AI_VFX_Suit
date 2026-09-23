@@ -1,6 +1,5 @@
 import os
 import json
-import re
 import cv2
 import numpy as np
 from PySide6.QtCore import Signal
@@ -89,55 +88,91 @@ class AIRotoWorker(BaseWorker):
             snapped[i] = best_pt
         return snapped
 
+    @staticmethod
+    def _read_bgr(path):
+        from utvfx.core.image_utils import load_frame
+        img = load_frame(path)
+        return None if img is None else np.ascontiguousarray(img[..., :3])
+
+    @staticmethod
+    def _read_nearness(path, convention):
+        """Depth as 'nearness' (larger = closer to the camera), or metres if the map is metric."""
+        from utvfx.core import exr as exr_io
+        if path.lower().endswith(".exr"):
+            depth = exr_io.read(path)[0][..., 0]
+        else:
+            depth = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+            if depth is None:
+                return None
+            if depth.ndim == 3:
+                depth = depth[..., 0]
+            depth = depth.astype(np.float32) / (65535.0 if depth.dtype == np.uint16 else 255.0)
+        if convention == "relative, near = 0":
+            depth = 1.0 - depth
+        return depth.astype(np.float32)
+
+    @staticmethod
+    def depth_convention(path):
+        """How a depth map is encoded: the Depth node records it; other maps are taken as near = 1."""
+        if path.lower().endswith(".exr"):
+            import OpenImageIO as oiio
+            inp = oiio.ImageInput.open(path)
+            if inp:
+                spec = inp.spec()
+                inp.close()
+                return spec.get_string_attribute("contour/depth") or "relative, near = 1"
+        return "relative, near = 1"
+
+    @staticmethod
+    def behind_amount(shape_depth, torso_depth, convention):
+        """How much farther than the torso a shape is, as a fraction of the torso's distance.
+
+        Positive = behind the torso, negative = in front. Relative maps are disparity-like
+        (nearness ~ 1 / distance), so the same fraction works for relative and metric maps.
+        """
+        if convention == "metric":
+            return (shape_depth - torso_depth) / max(torso_depth, 1e-6)
+        return (torso_depth - shape_depth) / max(torso_depth, 1e-6)
+
     def run_task(self):
-        if not self.video_path or not os.path.exists(self.video_path):
-            self.log_message.emit(self.node_id, "[ERROR] Missing Video Plate input path.")
-            return
-        if not self.matte_path or not os.path.exists(self.matte_path):
-            self.log_message.emit(self.node_id, "[ERROR] Missing Alpha Matte input path.")
-            return
-        if not self.depth_path or not os.path.exists(self.depth_path):
-            self.log_message.emit(self.node_id, "[ERROR] Missing Depth Map input path.")
-            return
+        from utvfx.core.plate import find_sequence
+
+        if not self.video_path or not os.path.isdir(self.video_path):
+            raise Exception("AI Roto needs the plate: wire a Media Plate into Video Plate.")
+        if not self.matte_path or not os.path.isdir(self.matte_path):
+            raise Exception("AI Roto needs a matte of the person: wire SuperMatte into Alpha Matte.")
 
         out_dir = os.path.join(self.cache_dir, "roto_shapes")
         os.makedirs(out_dir, exist_ok=True)
-        
-        # Layer discovery
-        layers_to_process = []
-        sam_masks_dir = os.path.join(os.path.dirname(self.matte_path), "sam_masks")
-        if os.path.isdir(sam_masks_dir):
-            for item in os.listdir(sam_masks_dir):
-                item_path = os.path.join(sam_masks_dir, item)
-                if os.path.isdir(item_path):
-                    layers_to_process.append({"name": item, "dir": item_path})
-        
-        if not layers_to_process:
-            layers_to_process.append({"name": "Shapes", "dir": self.matte_path})
-            
-        self.log_message.emit(self.node_id, f"Found {len(layers_to_process)} layers to process in AI Roto.")
-        
-        # Frame matching across video, depth, and layers
-        vid_files = sorted([f for f in os.listdir(self.video_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr'))])
-        depth_files = sorted([f for f in os.listdir(self.depth_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.tif'))])
-        
-        def get_frame_num(fname):
-            match = re.search(r'(?:_|)(\d+)\.\w+$', fname)
-            return int(match.group(1)) if match else -1
-            
-        vid_map = {get_frame_num(f): f for f in vid_files if get_frame_num(f) != -1}
-        depth_map = {get_frame_num(f): f for f in depth_files if get_frame_num(f) != -1}
-        
-        if not vid_map:
-            for i, f in enumerate(vid_files): vid_map[i] = f
-        if not depth_map:
-            for i, f in enumerate(depth_files): depth_map[i] = f
 
-        first_vid_frame = os.path.join(self.video_path, vid_files[0])
-        img_temp = cv2.imread(first_vid_frame)
+        # SuperMatte writes one matte per layer to alpha/<layer>/ next to its combined Matte/ folder.
+        layers_to_process = []
+        alpha_dir = os.path.join(os.path.dirname(os.path.normpath(self.matte_path)), "alpha")
+        if os.path.isdir(alpha_dir):
+            for item in sorted(os.listdir(alpha_dir)):
+                item_path = os.path.join(alpha_dir, item)
+                if os.path.isdir(item_path) and find_sequence(item_path):
+                    layers_to_process.append({"name": item, "dir": item_path})
+        if not layers_to_process:
+            layers_to_process.append({"name": "Person", "dir": self.matte_path})
+        self.log_message.emit(self.node_id, f"Found {len(layers_to_process)} layers to process in AI Roto.")
+
+        # Everything is matched by plate frame number.
+        vid_map = dict(find_sequence(self.video_path))
+        depth_map, convention = {}, None
+        if self.depth_path and os.path.isdir(self.depth_path):
+            depth_map = dict(find_sequence(self.depth_path))
+            if depth_map:
+                convention = self.depth_convention(next(iter(depth_map.values())))
+                self.log_message.emit(self.node_id, f"Depth map: {convention}.")
+        if not depth_map:
+            self.log_message.emit(self.node_id, "No depth map wired: every shape stays visible (no occlusion).")
+        if not vid_map:
+            raise Exception(f"No frames found in {self.video_path}.")
+
+        img_temp = self._read_bgr(next(iter(vid_map.values())))
         if img_temp is None:
-            self.log_message.emit(self.node_id, "[ERROR] Failed to read first video frame.")
-            return
+            raise Exception("Failed to read the first plate frame.")
         height, width = img_temp.shape[:2]
         diag = np.sqrt(width**2 + height**2)
         seam_buffer = max(2.0, 0.0015 * diag)
@@ -149,8 +184,8 @@ class AIRotoWorker(BaseWorker):
         corner_rad = np.radians(corner_threshold)
         edge_snap_radius = int(self.params.get("edge_snap_radius", 2))
         temporal_smoothing = self._parse_bool(self.params.get("temporal_smoothing", True))
-        h_low = float(self.params.get("hysteresis_low", 0.15))
-        h_high = float(self.params.get("hysteresis_high", 0.25))
+        h_low = float(self.params.get("hysteresis_low", 0.04))
+        h_high = float(self.params.get("hysteresis_high", 0.08))
         flow_decay = float(self.params.get("flow_decay", 0.05))
         first_frame_param = int(self.params.get("first_frame", 0))
         last_frame_param = int(self.params.get("last_frame", 0))
@@ -180,22 +215,16 @@ class AIRotoWorker(BaseWorker):
             layer_dir = layer_info["dir"]
             self.log_message.emit(self.node_id, f"Processing layer: {layer_name}")
             
-            frames = sorted([f for f in os.listdir(layer_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr'))])
-            if not frames: continue
-            
-            frame_indices = []
-            layer_map = {}
-            for i, f_name in enumerate(frames):
-                f_idx = get_frame_num(f_name)
-                if f_idx == -1: f_idx = i
-                
-                if first_frame_param > 0 and f_idx < first_frame_param:
-                    continue
-                if last_frame_param > 0 and f_idx > last_frame_param:
-                    continue
-                    
-                frame_indices.append(f_idx)
-                layer_map[f_idx] = f_name
+            sequence = find_sequence(layer_dir)
+            if self.frame_range:
+                sequence = [sequence[i] for i in self.positions(len(sequence))]
+            # First/Last frame are plate frame numbers; 0 means no limit.
+            sequence = [(n, f) for n, f in sequence if (first_frame_param <= 0 or n >= first_frame_param)
+                        and (last_frame_param <= 0 or n <= last_frame_param)]
+            if not sequence:
+                continue
+            frame_indices = [n for n, _ in sequence]
+            layer_map = dict(sequence)
                 
             self.log_message.emit(self.node_id, f"Step 1/5: Pre-scanning {layer_name} for skeletal landmarks...")
             raw_landmarks = {}
@@ -209,8 +238,7 @@ class AIRotoWorker(BaseWorker):
                     raw_landmarks[f_idx] = None
                     continue
                     
-                vid_path = os.path.join(self.video_path, vid_map[f_idx])
-                img_bgr = cv2.imread(vid_path)
+                img_bgr = self._read_bgr(vid_map[f_idx])
                 if img_bgr is None:
                     raw_landmarks[f_idx] = None
                     continue
@@ -281,22 +309,23 @@ class AIRotoWorker(BaseWorker):
                 if f_idx_str not in all_shapes_data:
                     all_shapes_data[f_idx_str] = {}
                 
-                matte_path = os.path.join(layer_dir, layer_map[f_idx])
-                matte_img = cv2.imread(matte_path, cv2.IMREAD_GRAYSCALE)
-                
-                if f_idx not in depth_map: continue
-                depth_img = cv2.imread(os.path.join(self.depth_path, depth_map[f_idx]), cv2.IMREAD_UNCHANGED)
-                if depth_img is not None and depth_img.shape[:2] != (height, width):
-                    depth_img = cv2.resize(depth_img, (width, height), interpolation=cv2.INTER_NEAREST)
-                
-                if matte_img is None or depth_img is None: continue
+                matte_img = cv2.imread(layer_map[f_idx], cv2.IMREAD_GRAYSCALE)
+                if matte_img is None:
+                    continue
+                if matte_img.shape != (height, width):
+                    matte_img = cv2.resize(matte_img, (width, height), interpolation=cv2.INTER_LINEAR)
+
+                depth_float = None
+                if f_idx in depth_map:
+                    depth_float = self._read_nearness(depth_map[f_idx], convention)
+                    if depth_float is not None and depth_float.shape != (height, width):
+                        depth_float = cv2.resize(depth_float, (width, height), interpolation=cv2.INTER_NEAREST)
+                elif depth_map:
+                    self.log_message.emit(self.node_id, f"Frame {f_idx}: no depth frame; shapes stay visible.")
                 
                 grad_x = cv2.Sobel(matte_img, cv2.CV_32F, 1, 0, ksize=3)
                 grad_y = cv2.Sobel(matte_img, cv2.CV_32F, 0, 1, ksize=3)
                 grad_mag = np.sqrt(grad_x**2 + grad_y**2)
-                
-                depth_float = depth_img.astype(np.float32)
-                if depth_img.dtype == np.uint16: depth_float /= 65535.0
                 
                 joints = interpolated_landmarks[f_idx]
                 joints["neck"] = 0.5 * (joints[11] + joints[12])
@@ -320,8 +349,7 @@ class AIRotoWorker(BaseWorker):
                 current_frame_shapes = {}
                 
                 if is_dropout and prev_raw_shapes and prev_img_gray is not None and f_idx in vid_map:
-                    vid_path = os.path.join(self.video_path, vid_map[f_idx])
-                    curr_img_bgr = cv2.imread(vid_path)
+                    curr_img_bgr = self._read_bgr(vid_map[f_idx])
                     curr_img_gray = cv2.cvtColor(curr_img_bgr, cv2.COLOR_BGR2GRAY) if curr_img_bgr is not None else None
                     
                     if curr_img_gray is not None:
@@ -358,7 +386,7 @@ class AIRotoWorker(BaseWorker):
                         prev_img_gray = curr_img_gray
                 else:
                     if f_idx in vid_map:
-                        prev_img_gray = cv2.cvtColor(cv2.imread(os.path.join(self.video_path, vid_map[f_idx])), cv2.COLOR_BGR2GRAY)
+                        prev_img_gray = cv2.cvtColor(self._read_bgr(vid_map[f_idx]), cv2.COLOR_BGR2GRAY)
                     
                     if len(white_pts) > 0:
                         dist_matrix = np.zeros((len(white_pts), 10), dtype=np.float32)
@@ -480,24 +508,34 @@ class AIRotoWorker(BaseWorker):
 
                 prev_raw_shapes = current_frame_shapes.copy()
                 
-                torso_avg_depth = 0.5
-                if "Torso" in current_frame_shapes:
+                # Occlusion: a limb well behind the torso fades out, and back in once it is in front
+                # again (hysteresis). Depth is the median inside both the shape and the matte.
+                torso_avg_depth = None
+                if depth_float is not None and "Torso" in current_frame_shapes:
                     t_mask = np.zeros_like(matte_img)
                     cv2.drawContours(t_mask, [current_frame_shapes["Torso"].astype(np.int32)], -1, 255, -1)
-                    torso_avg_depth = np.mean(depth_float[t_mask > 127]) if np.any(t_mask > 127) else 0.5
+                    inside = (t_mask > 127) & (matte_img > 127)
+                    if np.any(inside):
+                        torso_avg_depth = float(np.median(depth_float[inside]))
                     
                 frame_data = {}
                 for name, pts in current_frame_shapes.items():
-                    s_mask = np.zeros_like(matte_img)
-                    cv2.drawContours(s_mask, [pts.astype(np.int32)], -1, 255, -1)
-                    avg_d = np.mean(depth_float[s_mask > 127]) if np.any(s_mask > 127) else torso_avg_depth
-                    d_norm = avg_d - torso_avg_depth
-                    
-                    target_vis = 1.0
+                    avg_d = torso_avg_depth
+                    if torso_avg_depth is not None:
+                        s_mask = np.zeros_like(matte_img)
+                        cv2.drawContours(s_mask, [pts.astype(np.int32)], -1, 255, -1)
+                        inside = (s_mask > 127) & (matte_img > 127)
+                        if np.any(inside):
+                            avg_d = float(np.median(depth_float[inside]))
+
                     prev_vis = opacities.get(name, 1.0)
-                    if d_norm > h_high: target_vis = 0.0
-                    elif d_norm < h_low: target_vis = 1.0
-                    else: target_vis = prev_vis
+                    if torso_avg_depth is None or name == "Torso":
+                        target_vis = 1.0
+                    else:
+                        behind = self.behind_amount(avg_d, torso_avg_depth, convention)
+                        if behind > h_high: target_vis = 0.0
+                        elif behind < h_low: target_vis = 1.0
+                        else: target_vis = prev_vis
                     
                     if target_vis < prev_vis: current_vis = max(0.0, prev_vis - 0.2)
                     elif target_vis > prev_vis: current_vis = min(1.0, prev_vis + 0.2)
@@ -523,15 +561,15 @@ class AIRotoWorker(BaseWorker):
                         angle = np.zeros(len(pts_np))
                         
                     for j, pt in enumerate(pts_np):
-                        y_flipped = height - pt[1]
+                        # Pixel (x, y) from the top is (x + 0.5, height - y - 0.5) in Nuke.
                         curve_type = "cusp" if angle[j] > corner_rad else "smooth"
-                        pts_with_type.append([float(pt[0]), float(y_flipped), curve_type])
+                        pts_with_type.append([float(pt[0]) + 0.5, float(height - pt[1]) - 0.5, curve_type])
                         
                     shape_id = f"{layer_name}/{name}"
                     frame_data[shape_id] = {
                         "points": pts_with_type,
                         "opacity": current_vis,
-                        "average_depth": float(avg_d)
+                        "average_depth": None if avg_d is None else float(avg_d)
                     }
                     
                 all_shapes_data[f_idx_str].update(frame_data)
