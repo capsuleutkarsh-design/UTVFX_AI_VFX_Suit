@@ -377,9 +377,10 @@ class SuperMatteWorker(BaseWorker):
         
         if is_samurai:
             use_existing_jpgs = False
-            potential_jpg_dir = self.media_path + " JPG"
+            from utvfx.core.plate import plate_for_folder, tier_folder
+            potential_jpg_dir = tier_folder(self.media_path, "jpg", cancelled=lambda: self.is_cancelled)
             
-            if os.path.isdir(self.media_path) and os.path.basename(self.media_path) == "Video Plate" and os.path.isdir(potential_jpg_dir):
+            if plate_for_folder(self.media_path) is not None:
                 jpg_files = glob.glob(os.path.join(potential_jpg_dir, "*.jpg"))
                 if len(jpg_files) == total_frames:
                     use_existing_jpgs = True

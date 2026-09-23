@@ -12,13 +12,16 @@ import numpy as np
 import pytest
 
 
-@pytest.mark.xfail(reason="ISSUE-C1: EXR highlights are clipped to 1.0 and squeezed into 8-bit on load")
 def test_exr_highlights_survive_loading(hdr_exr_sequence):
+    """ISSUE-C1: scene-linear reads keep highlights; display reads roll them off instead of clipping."""
+    from utvfx.core import colour
     from utvfx.core.image_utils import load_frame
 
-    frame = load_frame(str(hdr_exr_sequence / "shot.1001.exr"))
-    assert frame.dtype.kind == "f"
-    assert frame.max() > 1.0
+    path = str(hdr_exr_sequence / "shot.1001.exr")
+    linear = colour.read_linear(path, "ACEScg")
+    assert linear.dtype == np.float32 and linear.max() > 3.9
+    display = load_frame(path, "ACEScg")
+    assert display[15, 15].max() < 255
 
 
 @pytest.mark.xfail(reason="ISSUE-C2: camera export writes literal '\\n' instead of line breaks")

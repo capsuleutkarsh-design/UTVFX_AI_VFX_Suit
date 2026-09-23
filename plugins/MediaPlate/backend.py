@@ -1,146 +1,49 @@
 import os
-import cv2
-import numpy as np
-import shutil
+
 from utvfx.bridge.base_worker import BaseWorker
+from utvfx.core.plate import Cancelled, Plate
+
 
 class MediaWorker(BaseWorker):
     """
-    Executes the Media Plate node to generate an optimized 8-bit PNG sequence.
-    This acts as a proxy cache for downstream AI nodes, preventing them from
-    having to repeatedly load and tone-map heavy EXR sequences or decode MP4s.
+    Decodes the plate once and builds the 16-bit working tier that the viewer and
+    downstream nodes read. Other tiers (fast JPG, float master) are built on demand
+    by the nodes that need them; see utvfx.core.plate.
     """
 
     def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
         super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
         self.plate_file = params.get("plate_file", "")
-        self.is_sequence = params.get("is_sequence", False)
+        self.is_sequence = params.get("is_sequence", True)
+        self.colourspace = params.get("colourspace", "Auto")
 
     def cancel(self):
         self.is_cancelled = True
 
     def run_task(self):
-        import json
-        import glob
-        
         if not self.plate_file or not os.path.exists(self.plate_file):
             raise FileNotFoundError("Media Plate has no valid file selected.")
 
-        self.log_message.emit(self.node_id, f"Initializing Proxy Sequence Generation for: {self.plate_file}")
-        
-        # Determine shot name and expected frames early
-        shot_name = os.path.basename(self.plate_file.rstrip('/\\'))
-        if self.is_sequence and os.path.isfile(self.plate_file):
-            media_dir = os.path.dirname(self.plate_file)
-            files = sorted([f for f in os.listdir(media_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx', '.hdr'))])
-            total_frames = len(files)
-            
-            def frame_generator():
-                import re
-                from utvfx.core.image_utils import load_frame
-                for f in files:
-                    match = re.search(r'(\d+)\.\w+$', f)
-                    f_idx = int(match.group(1)) if match else None
-                    yield load_frame(os.path.join(media_dir, f)), f_idx
-                    
-            generator = frame_generator()
-        else:
-            ext = os.path.splitext(self.plate_file)[1].lower()
-            if ext in [".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"]:
-                total_frames = 1
-                def frame_generator():
-                    import re
-                    from utvfx.core.image_utils import load_frame
-                    match = re.search(r'(\d+)\.\w+$', self.plate_file)
-                    f_idx = int(match.group(1)) if match else 1
-                    yield load_frame(self.plate_file), f_idx
-                generator = frame_generator()
-            else:
-                cap = cv2.VideoCapture(self.plate_file)
-                if not cap.isOpened():
-                    import imageio
-                    try:
-                        reader = imageio.get_reader(self.plate_file)
-                        try:
-                            total_frames = reader.count_frames()
-                        except Exception:
-                            total_frames = reader.get_meta_data().get('nframes', 0)
-                        def frame_generator():
-                            i = 1
-                            for frame_rgb in reader:
-                                yield cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR), i
-                                i += 1
-                        generator = frame_generator()
-                    except Exception:
-                        raise Exception(f"Failed to open video file: {self.plate_file}")
-                else:
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                    def frame_generator():
-                        i = 1
-                        while True:
-                            ret, frame = cap.read()
-                            if not ret: break
-                            yield frame, i
-                            i += 1
-                        cap.release()
-                    generator = frame_generator()
+        plate = Plate.prepare(self.plate_file, self.cache_dir, self.is_sequence, self.colourspace)
+        first, last = plate.frame_numbers[0], plate.frame_numbers[-1]
+        self.log_message.emit(
+            self.node_id,
+            f"{os.path.basename(self.plate_file)}: {len(plate)} frames ({first}-{last}), "
+            f"{plate.m['width']}x{plate.m['height']}, {plate.m['fps']:.3f} fps, colour space {plate.colourspace}",
+        )
 
-        if total_frames <= 0:
-            raise Exception("No readable frames found in media.")
-            
-        out_folder = os.path.join(self.cache_dir, "Video Plate")
-        out_folder_jpg = os.path.join(self.cache_dir, "Video Plate JPG")
-        info_file = os.path.join(self.cache_dir, "info.json")
-        
-        # Check cache
-        if os.path.exists(info_file) and os.path.exists(out_folder) and os.path.exists(out_folder_jpg):
-            try:
-                with open(info_file, 'r') as f:
-                    info = json.load(f)
-                if info.get("plate_file") == self.plate_file and info.get("total_frames") == total_frames:
-                    png_count = len(glob.glob(os.path.join(out_folder, "*.png")))
-                    jpg_count = len(glob.glob(os.path.join(out_folder_jpg, "*.jpg")))
-                    if png_count == total_frames and jpg_count == total_frames:
-                        self.log_message.emit(self.node_id, f"Valid cache found for shot '{shot_name}'. Skipping generation.")
-                        self.progress_update.emit(self.node_id, 100, 100)
-                        return
-            except Exception as e:
-                self.log_message.emit(self.node_id, f"Cache check failed, regenerating: {e}")
-                
-        # Cache invalid or missing, proceed with generation
-        if os.path.exists(out_folder):
-            shutil.rmtree(out_folder)
-        os.makedirs(out_folder, exist_ok=True)
-        
-        if os.path.exists(out_folder_jpg):
-            shutil.rmtree(out_folder_jpg)
-        os.makedirs(out_folder_jpg, exist_ok=True)
-        
-        with open(info_file, 'w') as f:
-            json.dump({"plate_file": self.plate_file, "shot_name": shot_name, "total_frames": total_frames}, f)
-            
+        if plate.has("png16"):
+            self.log_message.emit(self.node_id, "Working copy is up to date.")
+            self.progress_update.emit(self.node_id, 100, 100)
+            return
 
-
-        for i, (frame, actual_idx) in enumerate(generator):
-            if self.is_cancelled:
-                self.log_message.emit(self.node_id, "Media pre-processing cancelled.")
-                break
-                
-            if frame is None:
-                self.log_message.emit(self.node_id, f"Warning: Frame {i} is empty/corrupt. Skipping.")
-                continue
-                
-            f_idx = actual_idx if actual_idx is not None else (i + 1)
-
-            # Save PNG
-            out_path = os.path.join(out_folder, f"frame_{f_idx:06d}.png")
-            cv2.imwrite(out_path, frame)
-            
-            # Save JPG
-            out_path_jpg = os.path.join(out_folder_jpg, f"frame_{f_idx:06d}.jpg")
-            cv2.imwrite(out_path_jpg, frame, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
-            
-            progress_val = int(((i + 1) / total_frames) * 100)
-            self.progress_update.emit(self.node_id, progress_val, 100)
-
-        self.log_message.emit(self.node_id, "Proxy sequence generation complete.")
+        try:
+            plate.ensure(
+                "png16",
+                progress=lambda done, total: self.progress_update.emit(self.node_id, int(done * 100 / total), 100),
+                cancelled=lambda: self.is_cancelled,
+            )
+        except Cancelled:
+            self.log_message.emit(self.node_id, "Media pre-processing cancelled.")
+            return
+        self.log_message.emit(self.node_id, "Working copy (16-bit) ready.")

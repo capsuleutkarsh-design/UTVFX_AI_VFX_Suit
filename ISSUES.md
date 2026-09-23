@@ -8,7 +8,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 
 | ID | Area | Problem | Pass | Test | Status |
 |---|---|---|---|---|---|
-| C1 | Image I/O | EXR/DPX clipped to 1.0 and squeezed to 8-bit sRGB on load. ACES plates treated as sRGB. Every tool then works from 8-bit PNG/JPEG proxies | 1 | `test_exr_highlights_survive_loading` | ☐ |
+| C1 | Image I/O | EXR/DPX clipped to 1.0 and squeezed to 8-bit sRGB on load. ACES plates treated as sRGB. Every tool then works from 8-bit PNG/JPEG proxies | 1 | `test_exr_highlights_survive_loading` | ☑ |
 | C2 | Camera export | `.nk` / Blender `.py` written with literal `\n`. Exporter reads `sparse/0`, tracker writes `sparse/`. Camera axis flip doesn't match the points. Keys on 1..N, not plate frames | 3 | `test_nuke_camera_export_has_line_breaks` | ☐ |
 | C3 | SuperMatte | ViTMatte padding never cropped: 1080-row plates crash, 4K mattes shift ~16 px | 2 | `test_vitmatte_alpha_matches_plate_size` | ☐ |
 | C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☐ |
@@ -31,7 +31,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H9 | Security | BiRefNet runs its own code with an unpinned revision, re-downloaded on every run | 1 | | ☐ |
 | H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☐ |
 | H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☐ |
-| H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ☐ |
+| H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ◐ ACES config and plate loading done; OCIO node and viewer left |
 | H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☐ |
 | H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
@@ -51,7 +51,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | M5 | Playback | No frame cache. Video seek on every frame. Wipe decodes on UI thread. VRAM readout never shows | 1 | ☐ |
 | M6 | Downloads | Partial files count as installed. No hashes. No timeouts | 1 | ☐ |
 | M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☐ |
-| M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ☐ |
+| M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ◐ sequence grouping, TIFF, fps and default fixed in the plate module |
 | M9 | OCIO / Grade | Rec709 fails silently. Grade changes alpha | 2 | ☐ |
 | M10 | Roto export | Lifetime attribute names unverified in Nuke. Wrong JSON can be loaded. Path quoting unsafe | 3 | ☐ |
 | M11 | Licensing | CorridorKey, VideoMaMa, GVM, MatAnyone, Depth V2 Base/Large are non-commercial. No THIRD_PARTY_NOTICES | before release | ☐ |
