@@ -13,10 +13,11 @@ class RenderQueueDialog(QDialog):
         self.resize(420, 300)
 
         self.queue_items = [] # list of node_ids
+        self.failed = []      # names of queue items that failed or were refused in this run
         self.is_rendering = False
         self.setup_ui()
 
-        self.main_window.execution_engine.node_execution_finished.connect(self.on_node_finished)
+        self.main_window.execution_engine.pipeline_finished.connect(self.on_pipeline_finished)
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
@@ -67,7 +68,9 @@ class RenderQueueDialog(QDialog):
 
     def clear_queue(self):
         if self.is_rendering:
-            return
+            # Stop after the current node instead of refusing.
+            self.main_window.execution_engine.cancel_execution()
+            self._finish_run()
         self.list_widget.clear()
         self.queue_items.clear()
         self._update_count()
@@ -77,18 +80,23 @@ class RenderQueueDialog(QDialog):
             return
 
         self.is_rendering = True
+        self.failed = []
         self.btn_start.setText("Rendering...")
         self.btn_start.setEnabled(False)
-        self.btn_clear.setEnabled(False)
         self.process_next()
+
+    def _finish_run(self):
+        self.is_rendering = False
+        self.btn_start.setText("Start render")
+        self.btn_start.setEnabled(True)
+        self._update_count()
+        if self.failed:
+            self.count_label.setText(f"{len(self.failed)} failed: " + ", ".join(self.failed))
+            self.count_label.setToolTip("See each node's console for the error.")
 
     def process_next(self):
         if not self.queue_items:
-            self.is_rendering = False
-            self.btn_start.setText("Start render")
-            self.btn_start.setEnabled(True)
-            self.btn_clear.setEnabled(True)
-            self._update_count()
+            self._finish_run()
             return
 
         next_node_id = self.queue_items[0]
@@ -96,14 +104,18 @@ class RenderQueueDialog(QDialog):
             self.list_widget.item(0).setBackground(theme.qcolor(theme.ACCENT_MUTED))
         self.main_window.execution_engine.execute_node(next_node_id)
 
-    @Slot(str)
-    def on_node_finished(self, node_id):
-        if not self.is_rendering:
+    @Slot(str, str)
+    def on_pipeline_finished(self, node_id, status):
+        """Advance on every outcome, so a failed or refused node can never stall the queue."""
+        if not self.is_rendering or not self.queue_items or self.queue_items[0] != node_id:
             return
-
-        if self.queue_items and self.queue_items[0] == node_id:
-            self.queue_items.pop(0)
-            if self.list_widget.count() > 0:
-                self.list_widget.takeItem(0)
-            self._update_count()
-            self.process_next()
+        if status == "cancelled":
+            self._finish_run()
+            return
+        self.queue_items.pop(0)
+        if self.list_widget.count() > 0:
+            item = self.list_widget.takeItem(0)
+            if status in ("error", "rejected"):
+                self.failed.append(item.text())
+        self._update_count()
+        self.process_next()

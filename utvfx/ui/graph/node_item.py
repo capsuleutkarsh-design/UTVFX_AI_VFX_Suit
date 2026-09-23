@@ -20,6 +20,17 @@ class BackdropNodeItem(QGraphicsObject):
         self.setZValue(-1000)
         self.resizing = False
         self._contained_items = []
+        self.backdrop_id = None  # set by NodeScene.add_backdrop
+
+    def to_dict(self):
+        return {
+            "backdrop_id": self.backdrop_id,
+            "name": self.name,
+            "x": self.pos().x(),
+            "y": self.pos().y(),
+            "width": self.width,
+            "height": self.height,
+        }
 
     def boundingRect(self):
         return QRectF(0, 0, self.width, self.height)
@@ -398,8 +409,6 @@ class VFXNodeItem(QGraphicsObject):
             self.error_message = ""
             self.setToolTip("")
         self.update()
-
-        self.is_frozen = False
 
     def set_error_state(self, is_error, message=""):
         self.is_error = is_error

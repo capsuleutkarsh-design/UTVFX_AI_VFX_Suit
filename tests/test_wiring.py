@@ -90,3 +90,27 @@ def test_hash_file_in_meta_is_not_output(graph):
     assert not has_rendered_output(grade, cache)
     rendered(grade, ".")
     assert has_rendered_output(grade, cache)
+
+
+def test_graph_menus_add_nodes_and_wire_drop_connects_the_new_one(qtbot):
+    """ISSUE-H6: right-click Add Node, Tab search and wire-drop search used to do nothing."""
+    from main import VFXCoreWindow
+
+    win = VFXCoreWindow()
+    qtbot.addWidget(win)
+    view = win.node_view
+    plate = win.spawn_node("media_plate", override_pos=(0, 0))
+    assert plate is not None and plate in win.node_scene.nodes
+
+    view._spawn("grade", view.mapToScene(10, 10))  # what the right-click menu does
+    assert [n.plugin_type for n in win.node_scene.nodes] == ["media_plate", "grade"]
+
+    view._context_start_port = plate.outputs[0]  # a wire dragged from the plate onto empty space
+    view._on_search_node_selected("ai_depth_estimator")
+    depth = win.node_scene.nodes[-1]
+    assert depth.plugin_type == "ai_depth_estimator"
+    assert depth.inputs[0].connections and depth.inputs[0].connections[0].port1 is plate.outputs[0]
+
+    win.undo_stack.undo()  # one step removes both the node and its wire
+    assert [n.plugin_type for n in win.node_scene.nodes] == ["media_plate", "grade"]
+    assert not plate.outputs[0].connections

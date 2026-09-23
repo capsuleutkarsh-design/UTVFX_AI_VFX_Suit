@@ -100,7 +100,9 @@ class NodeView(QGraphicsView):
         self.search_menu.node_selected.connect(self._on_search_node_selected)
         self._last_search_pos = QPointF(0, 0)
         self._context_start_port = None
-        
+        # Set by the main window: spawn_callback(plugin_type, override_pos=(x, y)) -> new node.
+        self.spawn_callback = None
+
         from PySide6.QtGui import QShortcut, QKeySequence
         self.shortcut_disable = QShortcut(QKeySequence("D"), self)
         self.shortcut_disable.activated.connect(self.scene().toggle_selected_nodes_disable)
@@ -108,24 +110,26 @@ class NodeView(QGraphicsView):
         # Styling: the scene paints the background; no frame around the view
         self.setFrameShape(QFrame.NoFrame)
         
+    def _spawn(self, plugin_type, scene_pos=None):
+        if self.spawn_callback is None:
+            return None
+        pos = (scene_pos.x(), scene_pos.y()) if scene_pos is not None else None
+        return self.spawn_callback(plugin_type, override_pos=pos)
+
     def _on_search_node_selected(self, plugin_type):
-        parent_widget = self.scene().parent()
-        if hasattr(parent_widget, "add_node_requested"):
-            parent_widget.add_node_requested.emit(plugin_type, {"x": self._last_search_pos.x(), "y": self._last_search_pos.y()})
-            # If we originated from a wire drop, connect it immediately
-            if self._context_start_port:
-                # We need to defer this slightly so the node has time to spawn
-                from PySide6.QtCore import QTimer
-                QTimer.singleShot(50, lambda: self._connect_context_node(self._context_start_port))
-            self._context_start_port = None
-            
-    def _connect_context_node(self, start_port):
-        # The node that was just spawned is usually the last item added
-        # Or we can just find the most recent node
-        nodes = [item for item in self.scene().items() if isinstance(item, VFXNodeItem)]
-        if not nodes: return
-        new_node = max(nodes, key=lambda n: n.zValue() if hasattr(n, 'zValue') else 0)
-        
+        start_port, self._context_start_port = self._context_start_port, None
+        stack = self.scene().undo_stack
+        if start_port is not None and stack is not None:
+            stack.beginMacro("Add and connect node")  # one undo step for both
+        try:
+            new_node = self._spawn(plugin_type, self._last_search_pos)
+            if new_node is not None and start_port is not None:
+                self._connect_context_node(start_port, new_node)
+        finally:
+            if start_port is not None and stack is not None:
+                stack.endMacro()
+
+    def _connect_context_node(self, start_port, new_node):
         # Determine port to connect to
         target_port = None
         if start_port.is_output and new_node.inputs:
@@ -134,9 +138,11 @@ class NodeView(QGraphicsView):
             target_port = new_node.outputs[0]
             
         if target_port:
-            from utvfx.core.commands import ConnectCommand
+            from utvfx.core.commands import ConnectCommand, would_create_cycle
             out_p = start_port if start_port.is_output else target_port
             in_p = target_port if start_port.is_output else start_port
+            if would_create_cycle(out_p.node, in_p.node):
+                return
             if self.scene().undo_stack:
                 self.scene().undo_stack.push(ConnectCommand(self.scene(), out_p, in_p))
             
@@ -361,14 +367,16 @@ class NodeView(QGraphicsView):
                 cat_menu = add_menu.addMenu(cat)
                 for p_type, p_def in nodes:
                     act = cat_menu.addAction(icons.category_icon(p_type), p_def["name"])
-                    act.triggered.connect(lambda checked=False, pt=p_type: self.scene().parent().add_node_requested.emit(pt, {}))
+                    act.triggered.connect(lambda checked=False, pt=p_type, sp=scene_pos: self._spawn(pt, sp))
             
             action = menu.exec(event.globalPos())
             if action == action_backdrop:
-                from utvfx.ui.graph.node_item import BackdropNodeItem
-                backdrop = BackdropNodeItem()
-                backdrop.setPos(scene_pos)
-                self.scene().addItem(backdrop)
+                from utvfx.core.commands import AddBackdropCommand
+                data = {"x": scene_pos.x(), "y": scene_pos.y()}
+                if self.scene().undo_stack is not None:
+                    self.scene().undo_stack.push(AddBackdropCommand(self.scene(), data))
+                else:
+                    self.scene().add_backdrop(data)
         
     def wheelEvent(self, event):
         # Zoom support

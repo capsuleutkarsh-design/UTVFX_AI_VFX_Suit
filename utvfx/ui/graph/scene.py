@@ -10,6 +10,9 @@ from utvfx.ui.graph.constants import BG_COLOR, GRID_COLOR, GRID_SIZE
 
 def restore_params(params):
     """Undo what JSON does to node params: click keyframes are keyed by timeline position (int)."""
+    # Older projects stored the timeline In/Out in every node; it is engine state now.
+    params.pop("start_frame", None)
+    params.pop("end_frame", None)
     for layer in params.get("mask_layers", []) or []:
         keyframes = layer.get("keyframes")
         if isinstance(keyframes, dict):
@@ -37,6 +40,7 @@ class NodeScene(QGraphicsScene):
         
         self.nodes = []
         self.connections = []
+        self.backdrops = []
         self._next_id = 0
         
         # Interaction state
@@ -151,8 +155,11 @@ class NodeScene(QGraphicsScene):
                     # Make sure p1 is the output for logic simplicity
                     out_port = p1 if p1.is_output else p2
                     in_port = p2 if not p2.is_output else p1
-                    
-                    if self.undo_stack:
+
+                    from utvfx.core.commands import would_create_cycle
+                    if would_create_cycle(out_port.node, in_port.node):
+                        pass  # a loop would make the graph impossible to render
+                    elif self.undo_stack:
                         from utvfx.core.commands import ConnectCommand
                         cmd = ConnectCommand(self, out_port, in_port)
                         self.undo_stack.push(cmd)
@@ -191,7 +198,12 @@ class NodeScene(QGraphicsScene):
         
         # Check if nodes moved and push to undo stack
         if self.undo_stack:
-            from utvfx.core.commands import MoveNodeCommand, DisconnectCommand, ConnectCommand
+            from utvfx.core.commands import MoveNodeCommand, DisconnectCommand, ConnectCommand, would_create_cycle
+            moved = [n for n in self.selectedItems()
+                     if isinstance(n, (VFXNodeItem, DotNodeItem)) and getattr(n, "old_pos", None) is not None
+                     and n.old_pos != n.pos()]
+            if moved:
+                self.undo_stack.beginMacro("Move nodes" if len(moved) > 1 else "Move node")
             for node in self.selectedItems():
                 if isinstance(node, (VFXNodeItem, DotNodeItem)) and hasattr(node, "old_pos") and node.old_pos is not None:
                     if node.old_pos != node.pos():
@@ -208,7 +220,9 @@ class NodeScene(QGraphicsScene):
                                         # Find true output and input
                                         out_port = conn.port1 if conn.port1.is_output else conn.port2
                                         in_port = conn.port2 if not conn.port2.is_output else conn.port1
-                                        if out_port and in_port:
+                                        if (out_port and in_port
+                                                and not would_create_cycle(out_port.node, node)
+                                                and not would_create_cycle(node, in_port.node)):
                                             # Push commands
                                             self.undo_stack.push(DisconnectCommand(self, conn))
                                             self.undo_stack.push(ConnectCommand(self, out_port, node.inputs[0]))
@@ -218,18 +232,13 @@ class NodeScene(QGraphicsScene):
                         cmd = MoveNodeCommand(node, node.old_pos, node.pos())
                         self.undo_stack.push(cmd)
                     node.old_pos = None
+            if moved:
+                self.undo_stack.endMacro()
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Delete or event.key() == Qt.Key_Backspace:
             if self.undo_stack:
-                from utvfx.core.commands import DeleteNodeCommand, DisconnectCommand
-                for item in list(self.selectedItems()):
-                    if isinstance(item, (VFXNodeItem, DotNodeItem)):
-                        cmd = DeleteNodeCommand(self, item)
-                        self.undo_stack.push(cmd)
-                    elif isinstance(item, ConnectionItem):
-                        cmd = DisconnectCommand(self, item)
-                        self.undo_stack.push(cmd)
+                self.delete_selected_nodes()
             else:
                 for item in list(self.selectedItems()):
                     if isinstance(item, VFXNodeItem):
@@ -266,14 +275,21 @@ class NodeScene(QGraphicsScene):
     def delete_selected_nodes(self):
         """Helper to delete selected nodes from context menu etc."""
         if self.undo_stack:
-            from utvfx.core.commands import DeleteNodeCommand, DisconnectCommand
-            for item in list(self.selectedItems()):
-                if isinstance(item, (VFXNodeItem, DotNodeItem)):
-                    cmd = DeleteNodeCommand(self, item)
-                    self.undo_stack.push(cmd)
-                elif isinstance(item, ConnectionItem):
-                    cmd = DisconnectCommand(self, item)
-                    self.undo_stack.push(cmd)
+            from utvfx.core.commands import DeleteBackdropCommand, DeleteNodeCommand, DisconnectCommand
+            items = list(self.selectedItems())
+            if not items:
+                return
+            # Wires first, then nodes, all as one undo step.
+            self.undo_stack.beginMacro("Delete")
+            for item in items:
+                if isinstance(item, ConnectionItem) and item in self.connections:
+                    self.undo_stack.push(DisconnectCommand(self, item))
+            for item in items:
+                if isinstance(item, (VFXNodeItem, DotNodeItem)) and item in self.nodes:
+                    self.undo_stack.push(DeleteNodeCommand(self, item))
+                elif isinstance(item, BackdropNodeItem) and item in self.backdrops:
+                    self.undo_stack.push(DeleteBackdropCommand(self, item))
+            self.undo_stack.endMacro()
         else:
              for item in list(self.selectedItems()):
                     if isinstance(item, VFXNodeItem):
@@ -314,8 +330,25 @@ class NodeScene(QGraphicsScene):
             
         return {
             "nodes": nodes_data,
-            "connections": connections_data
+            "connections": connections_data,
+            "backdrops": [b.to_dict() for b in self.backdrops],
         }
+
+    def add_backdrop(self, data):
+        import uuid
+        item = BackdropNodeItem(data.get("name", "Backdrop"))
+        item.backdrop_id = data.get("backdrop_id") or str(uuid.uuid4())
+        item.width = data.get("width", item.width)
+        item.height = data.get("height", item.height)
+        item.setPos(data.get("x", 0), data.get("y", 0))
+        self.addItem(item)
+        self.backdrops.append(item)
+        return item
+
+    def remove_backdrop(self, item):
+        if item in self.backdrops:
+            self.backdrops.remove(item)
+        self.removeItem(item)
         
     def from_dict(self, data):
         from utvfx.core.data_model import NODES_REGISTRY
@@ -327,8 +360,13 @@ class NodeScene(QGraphicsScene):
             self.removeItem(conn)
         for node in list(self.nodes):
             self.removeItem(node)
+        for backdrop in list(self.backdrops):
+            self.removeItem(backdrop)
         self.connections.clear()
         self.nodes.clear()
+        self.backdrops.clear()
+        for b_data in data.get("backdrops", []):
+            self.add_backdrop(b_data)
         
         # Recreate nodes
         for n_data in data.get("nodes", []):

@@ -234,3 +234,62 @@ class ChangeParamCommand(QUndoCommand):
 
     def undo(self):
         self._set(self.old_val)
+
+
+def would_create_cycle(src_node, dst_node):
+    """True if wiring src_node's output into dst_node would make a loop."""
+    if src_node is dst_node:
+        return True
+    seen, todo = set(), [src_node]
+    while todo:  # walk upstream from the source; meeting the destination means a loop
+        node = todo.pop()
+        if node is dst_node:
+            return True
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        for port in getattr(node, "inputs", []):
+            for conn in port.connections:
+                other = conn.port1 if conn.port1 is not port else conn.port2
+                if other is not None:
+                    todo.append(other.node)
+    return False
+
+
+def _backdrop(scene, backdrop_id):
+    return next((b for b in scene.backdrops if b.backdrop_id == backdrop_id), None)
+
+
+class AddBackdropCommand(QUndoCommand):
+    def __init__(self, scene, data, description="Add Backdrop"):
+        super().__init__(description)
+        self.scene = scene
+        self.data = dict(data)
+        self.data.setdefault("backdrop_id", str(uuid.uuid4()))
+
+    def redo(self):
+        if _backdrop(self.scene, self.data["backdrop_id"]) is None:
+            self.scene.add_backdrop(self.data)
+
+    def undo(self):
+        item = _backdrop(self.scene, self.data["backdrop_id"])
+        if item is not None:
+            self.data = item.to_dict()
+            self.scene.remove_backdrop(item)
+
+
+class DeleteBackdropCommand(QUndoCommand):
+    def __init__(self, scene, item, description="Delete Backdrop"):
+        super().__init__(description)
+        self.scene = scene
+        self.data = item.to_dict()
+
+    def redo(self):
+        item = _backdrop(self.scene, self.data["backdrop_id"])
+        if item is not None:
+            self.data = item.to_dict()
+            self.scene.remove_backdrop(item)
+
+    def undo(self):
+        if _backdrop(self.scene, self.data["backdrop_id"]) is None:
+            self.scene.add_backdrop(self.data)

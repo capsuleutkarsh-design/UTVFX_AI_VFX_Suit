@@ -105,6 +105,8 @@ class ExecutionEngine(QObject):
     node_execution_started = Signal(str)
     node_execution_progress = Signal(str, int) # node_id, percentage
     node_execution_finished = Signal(str)
+    # target node id, "done" | "error" | "cancelled" | "rejected": the whole pipeline is over.
+    pipeline_finished = Signal(str, str)
     interactive_mask_ready = Signal(str, str, int, QImage) # node_id, layer_id, frame_idx, qimage
 
     @property
@@ -126,6 +128,10 @@ class ExecutionEngine(QObject):
         self._start_hashes = {}
         self.execution_queue = []
         self.is_executing_pipeline = False
+        self.is_cancelling = False
+        self.current_target_node_id = None
+        # (first, last) timeline positions to render, or None for the whole plate (timeline In/Out).
+        self.render_range = None
 
     def _build_execution_graph(self, target_node):
         visited = set()
@@ -143,9 +149,8 @@ class ExecutionEngine(QObject):
         return sorted_nodes
 
     def _get_node_by_id(self, node_id):
-        if not hasattr(self, "_node_index") or len(getattr(self, "_node_index", {})) != len(self.scene.nodes) or node_id not in getattr(self, "_node_index", {}):
-            self._node_index = {n.node_id: n for n in self.scene.nodes}
-        return self._node_index.get(node_id)
+        # A plain scan: the graph is small, and a cached index can hand back deleted nodes.
+        return next((n for n in self.scene.nodes if n.node_id == node_id), None)
 
     def _clear_vram(self):
         """Force cleanup of system and GPU memory."""
@@ -230,6 +235,9 @@ class ExecutionEngine(QObject):
         # Serialize node parameters, ignoring UI-only state that doesn't affect the output
         params = getattr(node, "params", {})
         hash_params = {k: v for k, v in params.items() if k not in ["active_layer_id", "ui_scroll_position"]}
+        # The In/Out range changes what gets rendered, except for the plate itself (always decoded whole).
+        if node.plugin_type != "media_plate":
+            hash_params["__render_range"] = self.render_range
         try:
             params_str = json.dumps(hash_params, sort_keys=True, default=str)
         except Exception:
@@ -457,13 +465,17 @@ class ExecutionEngine(QObject):
         raise ValueError(f"Unsupported tracker input type: {ext}")
 
     def execute_node(self, node_id):
+        """Render node_id and everything upstream. Returns False if the request was refused."""
         target_node = self._get_node_by_id(node_id)
         if not target_node:
-            return
-            
-        if self.is_executing_pipeline:
-            self.log_message.emit(node_id, "A pipeline is already executing. Please cancel it first.")
-            return
+            self.pipeline_finished.emit(node_id, "rejected")
+            return False
+
+        if self.is_executing_pipeline or self.active_workers:
+            msg = "Still stopping the previous render…" if self.is_cancelling else "A render is already running. Stop it first."
+            self.log_message.emit(node_id, msg)
+            self.pipeline_finished.emit(node_id, "rejected")
+            return False
 
         sorted_nodes = self._build_execution_graph(target_node)
         
@@ -474,12 +486,24 @@ class ExecutionEngine(QObject):
         
         self.log_message.emit(node_id, f"Pipeline queued with {len(self.execution_queue)} nodes. Starting execution...")
         self._pump_execution_queue()
+        return True
+
+    def _end_pipeline(self, status):
+        target = self.current_target_node_id
+        self.execution_queue.clear()
+        self.is_executing_pipeline = False
+        self.is_cancelling = False
+        self.current_target_node_id = None
+        if target:
+            self.pipeline_finished.emit(target, status)
 
     def _pump_execution_queue(self):
-        if not self.execution_queue:
-            self.is_executing_pipeline = False
+        if not self.is_executing_pipeline:
             return
-            
+        if not self.execution_queue:
+            self._end_pipeline("done")
+            return
+
         next_node_id = self.execution_queue.pop(0)
         self._run_single_node(next_node_id)
 
@@ -593,7 +617,9 @@ class ExecutionEngine(QObject):
             worker.log_message.connect(self.log_message.emit)
             worker.error_occurred.connect(lambda n, err, w=worker: self._on_error(n, err, w))
             worker.finished_success.connect(lambda n, w=worker: self._on_finished(n, w))
-            
+            worker.cancelled.connect(lambda n, w=worker: self._on_cancelled(n, w))
+            worker.frame_range = self.render_range
+
             self.active_workers[node_id] = worker
             worker.start()
 
@@ -625,10 +651,10 @@ class ExecutionEngine(QObject):
             from PySide6.QtCore import QTimer
             QTimer.singleShot(2000, worker.deleteLater)
             
+        self._start_hashes.pop(node_id, None)
         if self.is_executing_pipeline:
             self.log_message.emit(node_id, "Pipeline aborted due to error.")
-            self.execution_queue.clear()
-            self.is_executing_pipeline = False
+            self._end_pipeline("error")
 
     @Slot(str, object)
     def _on_finished(self, node_id, worker_ref=None):
@@ -672,17 +698,40 @@ class ExecutionEngine(QObject):
             
             self._pump_execution_queue()
 
-    @Slot(str)
-    def cancel_execution(self, node_id):
-        if self.is_executing_pipeline:
-            self.log_message.emit(node_id, "Cancelling pipeline execution...")
-            self.execution_queue.clear()
-            self.is_executing_pipeline = False
-            
-        worker = self.active_workers.get(node_id)
+    @Slot(str, object)
+    def _on_cancelled(self, node_id, worker_ref=None):
+        self.log_message.emit(node_id, "Stopped.")
+        self._start_hashes.pop(node_id, None)  # a stopped run is never cached
+        self.node_execution_finished.emit(node_id)
+        worker = worker_ref or self.active_workers.get(node_id)
         if worker:
+            if self.active_workers.get(node_id) is worker:
+                self.active_workers.pop(node_id)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(2000, worker.deleteLater)
+        if not self.active_workers and self.is_executing_pipeline:
+            self._end_pipeline("cancelled")
+
+    @Slot(str)
+    def cancel_execution(self, node_id=None):
+        """Stop the running render, whichever node is selected.
+
+        The engine stays busy until the running worker has actually stopped, so a
+        new render can never overlap it on the GPU.
+        """
+        if not self.is_executing_pipeline and not self.active_workers:
+            return
+        log_to = self.current_target_node_id or node_id
+        if log_to:
+            self.log_message.emit(log_to, "Stopping…")
+        self.execution_queue.clear()
+        self.is_cancelling = True
+        if not self.active_workers:
+            self._end_pipeline("cancelled")
+            return
+        for worker in list(self.active_workers.values()):
             if hasattr(worker, 'cancel'):
                 worker.cancel()
-            elif hasattr(worker, 'is_cancelled'):
+            else:
                 worker.is_cancelled = True
 

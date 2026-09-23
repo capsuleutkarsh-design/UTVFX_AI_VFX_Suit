@@ -221,6 +221,7 @@ class VFXCoreWindow(QMainWindow):
         # Node Scene & View
         self.node_scene = NodeScene()
         self.node_view = NodeView(self.node_scene)
+        self.node_view.spawn_callback = self.spawn_node
         g_layout.addWidget(self.node_view)
         
         self.center_splitter.addWidget(graph_container)
@@ -334,12 +335,13 @@ class VFXCoreWindow(QMainWindow):
             if n.node_id == node_id:
                 node = n
                 break
-        if node:
-            if hasattr(self.viewport.timeline, "_in_frame") and self.viewport.timeline._in_frame is not None:
-                node.params["start_frame"] = self.viewport.timeline._in_frame + 1
-            if hasattr(self.viewport.timeline, "_out_frame") and self.viewport.timeline._out_frame is not None:
-                node.params["end_frame"] = self.viewport.timeline._out_frame + 1
-            self.properties_panel.refresh_ui()
+        if node is None:
+            return
+        # The timeline In/Out limits the render; it is not a node setting.
+        timeline = self.viewport.timeline
+        in_frame, out_frame = getattr(timeline, "_in_frame", None), getattr(timeline, "_out_frame", None)
+        has_range = in_frame is not None or out_frame is not None
+        self.execution_engine.render_range = (in_frame, out_frame) if has_range else None
         self.execution_engine.execute_node(node_id)
         
     def _on_node_execution_started(self, node_id):
@@ -427,6 +429,7 @@ class VFXCoreWindow(QMainWindow):
             from utvfx.core.commands import AddNodeCommand
             cmd = AddNodeCommand(self.node_scene, node_data)
             self.undo_stack.push(cmd)
+            return cmd.node
         else:
             # Fallback if no undo stack
             node = self.node_scene.add_node(
@@ -438,9 +441,8 @@ class VFXCoreWindow(QMainWindow):
                 pos=pos
             )
             node.params = default_params
-        
+            return node
 
-        
     def reset_layout(self):
         if self.node_scene.views():
             view = self.node_scene.views()[0]
