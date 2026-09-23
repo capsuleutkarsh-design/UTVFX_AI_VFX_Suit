@@ -1,21 +1,102 @@
 {
-    "name": "Depth Anything V2",
+    "name": "Depth",
     "plugin_type": "ai_depth_estimator",
     "category": "Depth",
     "color": "#8b5cf6",
-    "inputs": ["Video Plate"],
-    "outputs": ["Dense Depth Map"],
-    "parameters": [
-        {"id": "model_size", "name": "Model Architecture", "type": "select", "value": "Small (vits)", "options": ["Small (vits)", "Base (vitb)", "Large (vitl)"]},
-        {"id": "input_size", "name": "Resolution Limit", "type": "select", "value": "518 (Fast)", "options": ["518 (Fast)", "742 (Balanced)", "1008 (Detail)"]},
-        {"id": "temporal_smoothing", "name": "Flicker Smoothing", "type": "slider", "value": 0.1, "min": 0.0, "max": 1.0},
-        {"id": "gamma", "name": "Contrast (Gamma)", "type": "slider", "value": 1.0, "min": 0.1, "max": 5.0},
-        {"id": "blur_radius", "name": "Post Blur", "type": "slider", "value": 0, "min": 0, "max": 50},
-        {"id": "colormap", "name": "Preview Colormap", "type": "select", "value": "Grayscale", "options": ["Grayscale", "Inferno", "Turbo", "Magma", "Plasma"]},
-        {"id": "invert_depth", "name": "Invert Depth", "type": "checkbox", "value": false}
+    "inputs": [
+        "Video Plate"
     ],
-    "actions": [
-        {"id": "run_depth", "label": "Execute Depth Anything V2"}
+    "outputs": [
+        "Dense Depth Map"
+    ],
+    "parameters": [
+        {
+            "id": "model_size",
+            "name": "Model",
+            "type": "select",
+            "value": "Small (vits)",
+            "options": [
+                "Small (vits)",
+                "Base (vitb)",
+                "Large (vitl)"
+            ]
+        },
+        {
+            "id": "input_size",
+            "name": "Detail (processing size)",
+            "type": "select",
+            "value": "518 (Fast)",
+            "options": [
+                "518 (Fast)",
+                "742 (Balanced)",
+                "1008 (Detail)"
+            ]
+        },
+        {
+            "id": "depth_type",
+            "name": "Depth Type",
+            "type": "select",
+            "value": "Relative (0-1 over the shot)",
+            "options": [
+                "Relative (0-1 over the shot)",
+                "Metric indoor (metres, up to 20 m)",
+                "Metric outdoor (metres, up to 80 m)"
+            ],
+            "tooltip": "Relative suits ZDefocus and fog. Metric gives distance from the camera in metres."
+        },
+        {
+            "id": "near_value",
+            "name": "Relative Depth Values",
+            "type": "select",
+            "value": "Near = 1, far = 0",
+            "options": [
+                "Near = 1, far = 0",
+                "Near = 0, far = 1"
+            ]
+        },
+        {
+            "id": "temporal_smoothing",
+            "name": "Flicker Smoothing",
+            "type": "slider",
+            "value": 0.3,
+            "min": 0.0,
+            "max": 1.0,
+            "step": 0.05,
+            "tooltip": "Blends each frame with the previous one, moved along the image motion."
+        },
+        {
+            "id": "blur_radius",
+            "name": "Soften Depth (px)",
+            "type": "slider",
+            "value": 0,
+            "min": 0,
+            "max": 50,
+            "step": 1
+        },
+        {
+            "id": "gamma",
+            "name": "Preview Contrast (Gamma)",
+            "type": "slider",
+            "value": 1.0,
+            "min": 0.1,
+            "max": 5.0,
+            "step": 0.05,
+            "tooltip": "Viewer picture only; the EXR is not changed."
+        },
+        {
+            "id": "colormap",
+            "name": "Preview Colormap",
+            "type": "select",
+            "value": "Grayscale",
+            "options": [
+                "Grayscale",
+                "Inferno",
+                "Turbo",
+                "Magma",
+                "Plasma"
+            ],
+            "tooltip": "Viewer picture only; the EXR is not changed."
+        }
     ],
     "worker_module": "plugins.DepthEstimator.backend",
     "worker_class": "DepthWorker"

@@ -1,211 +1,221 @@
+"""Depth Anything V2 depth maps for a plate.
+
+Output (the node's cache):
+  Depth/depth_<frame>.exr  - one float channel "Z", plate frame numbers.
+      Relative: 0-1 over the whole shot, near = 1 (or near = 0, a panel option).
+      Metric:   distance from the camera in metres (indoor or outdoor model).
+  Preview/depth_<frame>.png - 8-bit picture for the viewer (contrast and colormap only here).
+
+The relative model predicts depth up to an unknown scale and offset that change from
+frame to frame; normalising each frame on its own makes the whole map pump. Each frame
+is instead fitted (scale + offset) to the previous result, moved along the optical flow,
+and the whole shot is normalised once at the end.
+"""
+import importlib
 import os
+import shutil
 import sys
+import types
+
 import cv2
 import numpy as np
-import shutil
 import torch
-from PySide6.QtCore import QThread, Signal
 
-# Add Depth-Anything-V2 repo to path so we can import it
+from utvfx.bridge.base_worker import BaseWorker
+from utvfx.core import exr
+
 plugins_dir = os.path.dirname(os.path.dirname(__file__))
 depth_v2_dir = os.path.join(plugins_dir, "Depth-Anything-V2")
-
 if not os.path.exists(depth_v2_dir):
     raise ImportError(f"Missing required vendored repository: {depth_v2_dir}. Please ensure the Depth-Anything-V2 folder exists.")
-
 if depth_v2_dir not in sys.path:
     sys.path.append(depth_v2_dir)
 
-from depth_anything_v2.dpt import DepthAnythingV2
-from download_weights import download_depth_anything_v2
-
-class DepthHelper:
-    """Helper class for MatAnyone to generate depth on the fly."""
-    def __init__(self, model_size="vits", device="cuda", log_callback=None):
-        self.device = device
-        self.log_callback = log_callback
-        
-        # Download weights if missing
-        weights_path = download_depth_anything_v2(model_size, log_callback)
-        if not weights_path:
-            raise RuntimeError(f"Could not download Depth Anything V2 weights for {model_size}")
-            
-        model_configs = {
-            'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
-            'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
-            'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]}
-        }
-        
-        if self.log_callback:
-            self.log_callback(f"Loading DepthAnythingV2 ({model_size}) into VRAM...")
-            
-        self.model = DepthAnythingV2(**model_configs[model_size])
-        self.model.load_state_dict(torch.load(weights_path, map_location='cpu', weights_only=True))
-        self.model = self.model.to(self.device).eval()
-        
-    def infer_depth(self, frame, input_size=518, invert=False, blur_radius=0, gamma=1.0, colormap="Grayscale", smoothing=0.1):
-        """Returns a normalized uint8 depth map (0-255) for a given OpenCV frame (BGR)."""
-        depth = self.model.infer_image(frame, input_size=input_size)
-        
-        # Use percentiles to ignore extreme outliers that cause sudden flashes
-        d_min = np.percentile(depth, 1)
-        d_max = np.percentile(depth, 99)
-        
-        if not hasattr(self, 'd_min_ema') or self.d_min_ema is None:
-            self.d_min_ema = d_min
-            self.d_max_ema = d_max
-        else:
-            weight_new = 1.0 - smoothing
-            self.d_min_ema = weight_new * d_min + smoothing * self.d_min_ema
-            self.d_max_ema = weight_new * d_max + smoothing * self.d_max_ema
-            
-        if self.d_max_ema - self.d_min_ema > 1e-6:
-            depth = (depth - self.d_min_ema) / (self.d_max_ema - self.d_min_ema)
-        else:
-            depth = np.zeros_like(depth)
-            
-        depth = np.clip(depth, 0.0, 1.0)
-        
-        if gamma != 1.0:
-            depth = np.power(depth, gamma)
-            
-        depth = (depth * 255.0).astype(np.uint8)
-        
-        if invert:
-            depth = 255 - depth
-            
-        if blur_radius > 0:
-            k = int(blur_radius)
-            if k % 2 == 0: k += 1
-            depth = cv2.GaussianBlur(depth, (k, k), 0)
-            
-        if colormap != "Grayscale":
-            cmap_map = {
-                "Inferno": cv2.COLORMAP_INFERNO,
-                "Turbo": cv2.COLORMAP_TURBO,
-                "Magma": cv2.COLORMAP_MAGMA,
-                "Plasma": cv2.COLORMAP_PLASMA
-            }
-            if colormap in cmap_map:
-                depth = cv2.applyColorMap(depth, cmap_map[colormap])
-            
-        return depth
+MODEL_CONFIGS = {
+    'vits': {'encoder': 'vits', 'features': 64, 'out_channels': [48, 96, 192, 384]},
+    'vitb': {'encoder': 'vitb', 'features': 128, 'out_channels': [96, 192, 384, 768]},
+    'vitl': {'encoder': 'vitl', 'features': 256, 'out_channels': [256, 512, 1024, 1024]},
+}
+# Metric models: which weights, and the furthest depth each was trained for (metres).
+METRIC = {"indoor": ("hypersim", 20.0), "outdoor": ("vkitti", 80.0)}
+FLOW_WIDTH = 480  # frames are aligned at this width: enough for the fit, cheap to compute
 
 
-from utvfx.bridge.base_worker import BaseWorker
+def _metric_class():
+    """The metric DepthAnythingV2 class. Its package has the same name as the relative one."""
+    name = "depth_anything_v2_metric"
+    if name not in sys.modules:
+        package = types.ModuleType(name)
+        package.__path__ = [os.path.join(depth_v2_dir, "metric_depth", "depth_anything_v2")]
+        sys.modules[name] = package
+    return importlib.import_module(f"{name}.dpt").DepthAnythingV2
+
+
+def weights_path(model_size, metric=None):
+    from utvfx.core.settings_manager import SettingsManager
+    folder = os.path.join(SettingsManager().models_dir, "DepthAnythingV2")
+    if metric:
+        name = f"depth_anything_v2_metric_{METRIC[metric][0]}_{model_size}.pth"
+    else:
+        name = f"depth_anything_v2_{model_size}.pth"
+    path = os.path.join(folder, name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{name} is not installed. Run SETUP (first_setup.py) to download the depth models.")
+    return path
+
+
+def load_model(model_size="vits", metric=None, device="cuda"):
+    if metric:
+        model = _metric_class()(**MODEL_CONFIGS[model_size], max_depth=METRIC[metric][1])
+    else:
+        from depth_anything_v2.dpt import DepthAnythingV2
+        model = DepthAnythingV2(**MODEL_CONFIGS[model_size])
+    model.load_state_dict(torch.load(weights_path(model_size, metric), map_location='cpu', weights_only=True))
+    return model.to(device).eval()
+
+
+def _small_gray(bgr):
+    h, w = bgr.shape[:2]
+    scale = min(1.0, FLOW_WIDTH / w)
+    small = cv2.resize(bgr, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
+    return cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+
+def _warp_previous(prev_small, gray, prev_gray):
+    """The previous result moved to where the image is now (flow from current to previous)."""
+    flow = cv2.calcOpticalFlowFarneback(gray, prev_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    h, w = gray.shape
+    gx, gy = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+    return cv2.remap(prev_small, gx + flow[..., 0], gy + flow[..., 1], cv2.INTER_LINEAR,
+                     borderMode=cv2.BORDER_REPLICATE)
+
+
+def fit_scale_offset(source, target):
+    """Robust least squares for s, b in s * source + b = target (worst 20% of pixels ignored)."""
+    x, y = source.ravel().astype(np.float64), target.ravel().astype(np.float64)
+    keep = np.ones_like(x, bool)
+    s, b = 1.0, 0.0
+    for _ in range(2):
+        A = np.stack([x[keep], np.ones(keep.sum())], axis=1)
+        (s, b), *_ = np.linalg.lstsq(A, y[keep], rcond=None)
+        residual = np.abs(s * x + b - y)
+        keep = residual <= np.percentile(residual, 80)
+    return float(s), float(b)
+
 
 class DepthWorker(BaseWorker):
-    """Standalone Node Engine for Dense Depth Map Generation"""
+    """Dense depth for every frame of the plate."""
 
     def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
         super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
         self.video_path = inputs.get("Video Plate")
 
-    def cancel(self):
-        self.is_cancelled = True
-
     def run_task(self):
-        self.log_message.emit(self.node_id, "Initializing Depth Anything V2 Engine...")
-            
-        # Map parameters
-        model_size_str = self.params.get("model_size", "Small (vits)")
-        if "vits" in model_size_str: model_size = "vits"
-        elif "vitb" in model_size_str: model_size = "vitb"
-        else: model_size = "vitl"
-        
-        input_size_str = self.params.get("input_size", "518 (Fast)")
-        if "742" in input_size_str: input_size = 742
-        elif "1008" in input_size_str: input_size = 1008
-        else: input_size = 518
-        
-        smoothing = float(self.params.get("temporal_smoothing", 0.1))
-        gamma = float(self.params.get("gamma", 1.0))
-        blur_radius = int(self.params.get("blur_radius", 0))
-        colormap = self.params.get("colormap", "Grayscale")
-        invert_depth = self.params.get("invert_depth", False)
-        
-        device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        
-        self.log_message.emit(self.node_id, f"Using device: {device}")
-        
-        helper = DepthHelper(model_size=model_size, device=device, log_callback=lambda msg: self.log_message.emit(self.node_id, msg))
-        
-        # Parse video input
-        if os.path.isdir(self.video_path):
-            from utvfx.core.plate import tier_folder
-            active_dir = tier_folder(self.video_path, "jpg", cancelled=lambda: self.is_cancelled)
-                    
-            files = sorted([f for f in os.listdir(active_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx'))])
-            total_frames = len(files)
-            
-            def read_frame_safely(path):
-                from utvfx.core.image_utils import load_frame
-                frame = load_frame(path)
-                if frame is None: return None
-                
-                # frame is now guaranteed BGR or BGRA. Ensure BGR
-                if len(frame.shape) == 3 and frame.shape[2] == 4:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-                return frame
+        from utvfx.core.image_utils import load_frame
+        from utvfx.core.plate import find_sequence
 
-            frame_generator = (read_frame_safely(os.path.join(active_dir, f)) for f in files)
-        else:
-            cap = cv2.VideoCapture(self.video_path)
-            if not cap.isOpened():
-                import imageio
-                reader = imageio.get_reader(self.video_path)
-                try:
-                    total_frames = reader.count_frames()
-                except Exception:
-                    total_frames = reader.get_meta_data().get('nframes', 0)
-                def gen():
-                    for frame_rgb in reader:
-                        yield cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
-                frame_generator = gen()
-            else:
-                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-                def gen():
-                    while True:
-                        ret, frame = cap.read()
-                        if not ret: break
-                        yield frame
-                    cap.release()
-                frame_generator = gen()
-            
-        if total_frames <= 0:
-            raise Exception("Could not read video frames.")
-            
-        # Create output cache directory
-        os.makedirs(self.cache_dir, exist_ok=True)
-        # Remove existing depth files
-        for f in os.listdir(self.cache_dir):
+        if not self.video_path or not os.path.isdir(self.video_path):
+            raise Exception("Depth needs an image sequence: wire a Media Plate into Video Plate.")
+        sequence = find_sequence(self.video_path)
+        if not sequence:
+            raise Exception(f"No frames found in {self.video_path}.")
+        sequence = [sequence[i] for i in self.positions(len(sequence))]
+
+        size_str = self.params.get("model_size", "Small (vits)")
+        model_size = "vits" if "vits" in size_str else "vitb" if "vitb" in size_str else "vitl"
+        size_str = str(self.params.get("input_size", "518 (Fast)"))
+        input_size = 1008 if "1008" in size_str else 742 if "742" in size_str else 518
+        kind = str(self.params.get("depth_type", "Relative"))
+        metric = "indoor" if "indoor" in kind.lower() else "outdoor" if "outdoor" in kind.lower() else None
+        near_is_one = not str(self.params.get("near_value", "Near = 1")).startswith("Near = 0")
+        smoothing = float(self.params.get("temporal_smoothing", 0.1))
+        blur = float(self.params.get("blur_radius", 0) or 0)
+
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.log_message.emit(self.node_id, f"Loading Depth Anything V2 ({model_size}, "
+                                            f"{'metric ' + metric if metric else 'relative'}) on {device}...")
+        model = load_model(model_size, metric, device)
+
+        depth_dir = os.path.join(self.cache_dir, "Depth")
+        preview_dir = os.path.join(self.cache_dir, "Preview")
+        for folder in (depth_dir, preview_dir):
+            shutil.rmtree(folder, ignore_errors=True)
+            os.makedirs(folder)
+        for f in os.listdir(self.cache_dir):  # 8-bit maps from older versions
             if f.startswith("depth_") and f.endswith(".png"):
                 os.remove(os.path.join(self.cache_dir, f))
-        
-        self.log_message.emit(self.node_id, "Starting depth inference...")
-        
-        for i, frame in enumerate(frame_generator):
+
+        prev = None  # (aligned result at flow size, gray at flow size)
+        low, high = [], []
+        total = len(sequence)
+        for i, (number, path) in enumerate(sequence):
             if self.is_cancelled:
-                self.log_message.emit(self.node_id, "Depth Estimation Cancelled.")
-                break
-                
-            depth_map = helper.infer_depth(
-                frame, 
-                input_size=input_size, 
-                invert=invert_depth, 
-                blur_radius=blur_radius, 
-                gamma=gamma, 
-                colormap=colormap, 
-                smoothing=smoothing
-            )
-            
-            # Save as 3-channel grayscale for compatibility with media players and nodes
-            if len(depth_map.shape) == 2:
-                depth_map_3c = cv2.cvtColor(depth_map, cv2.COLOR_GRAY2BGR)
+                return
+            frame = load_frame(path)
+            if frame is None:
+                raise Exception(f"Could not read {path}.")
+            frame = frame[..., :3]
+            with torch.no_grad():
+                raw = model.infer_image(frame, input_size=input_size).astype(np.float32)
+
+            gray = _small_gray(frame)
+            small = cv2.resize(raw, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_AREA)
+            if metric:
+                result = raw
+                if prev is not None and smoothing > 0:
+                    warped = _warp_previous(prev[0], gray, prev[1])
+                    up = cv2.resize(warped, (raw.shape[1], raw.shape[0]), interpolation=cv2.INTER_LINEAR)
+                    result = (1 - 0.5 * smoothing) * raw + 0.5 * smoothing * up
+            elif prev is None:
+                lo, hi = np.percentile(small, (1, 99))
+                s = 1.0 / max(hi - lo, 1e-6)
+                result = (raw - lo) * s
             else:
-                depth_map_3c = depth_map
-            out_path = os.path.join(self.cache_dir, f"depth_{i:05d}.png")
-            cv2.imwrite(out_path, depth_map_3c)
-            
-            progress_val = int(((i + 1) / total_frames) * 100)
-            self.progress_update.emit(self.node_id, progress_val, 100)
+                warped = _warp_previous(prev[0], gray, prev[1])
+                s, b = fit_scale_offset(small, warped)
+                if s <= 0:  # a cut or a failed fit: start again from this frame
+                    lo, hi = np.percentile(small, (1, 99))
+                    s, b = 1.0 / max(hi - lo, 1e-6), -lo / max(hi - lo, 1e-6)
+                    self.log_message.emit(self.node_id, f"Frame {number}: depth could not be matched to the "
+                                                        f"previous frame (a cut?); starting a new range.")
+                result = s * raw + b
+                if smoothing > 0:
+                    up = cv2.resize(warped, (raw.shape[1], raw.shape[0]), interpolation=cv2.INTER_LINEAR)
+                    result = (1 - 0.5 * smoothing) * result + 0.5 * smoothing * up
+            result = result.astype(np.float32)
+            prev = (cv2.resize(result, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_AREA), gray)
+            if blur > 0:
+                result = cv2.GaussianBlur(result, (0, 0), blur)
+            lo, hi = np.percentile(prev[0], (1, 99))
+            low.append(lo)
+            high.append(hi)
+            exr.write(os.path.join(depth_dir, f"depth_{number:06d}.exr"), result, ("Z",), half=False)
+            self.progress_update.emit(self.node_id, i + 1, 2 * total)
+
+        # One range for the whole shot: relative depth becomes 0-1, the preview uses the same range.
+        lo, hi = float(np.min(low)), float(np.max(high))
+        span = max(hi - lo, 1e-6)
+        gamma = float(self.params.get("gamma", 1.0) or 1.0)
+        colormap = self.params.get("colormap", "Grayscale")
+        cmaps = {"Inferno": cv2.COLORMAP_INFERNO, "Turbo": cv2.COLORMAP_TURBO,
+                 "Magma": cv2.COLORMAP_MAGMA, "Plasma": cv2.COLORMAP_PLASMA}
+        for j, (number, _) in enumerate(sequence):
+            if self.is_cancelled:
+                return
+            out = os.path.join(depth_dir, f"depth_{number:06d}.exr")
+            depth = exr.read(out)[0][..., 0]
+            if metric:
+                near = 1.0 - np.clip((depth - lo) / span, 0, 1)  # preview: near is bright
+            else:
+                depth = np.clip((depth - lo) / span, 0.0, 1.0)
+                near = depth
+                if not near_is_one:
+                    depth = 1.0 - depth
+                exr.write(out, depth, ("Z",), half=False)
+            picture = (np.power(np.clip(near, 0, 1), gamma) * 255 + 0.5).astype(np.uint8)
+            picture = cv2.applyColorMap(picture, cmaps[colormap]) if colormap in cmaps else cv2.cvtColor(picture, cv2.COLOR_GRAY2BGR)
+            cv2.imwrite(os.path.join(preview_dir, f"depth_{number:06d}.png"), picture)
+            self.progress_update.emit(self.node_id, total + j + 1, 2 * total)
+        units = "metres" if metric else ("0-1, near = 1" if near_is_one else "0-1, near = 0")
+        self.log_message.emit(self.node_id, f"Depth written for {total} frames ({units}; "
+                                            f"shot range {lo:.3g}-{hi:.3g}).")

@@ -69,7 +69,7 @@ OUTPUT_FOLDERS = {
     "media_plate": {"Video Plate": ["Video Plate"]},
     "super_matte": {"Alpha Matte": ["Matte"]},
     "corridor_keyer": {"Keyed RGBA": ["Output/Processed", "Output/FG"]},
-    "ai_depth_estimator": {"Dense Depth Map": ["."]},
+    "ai_depth_estimator": {"Dense Depth Map": ["Depth", "."]},
     "grade": {"Image": ["."]},
     "ocio_colorspace": {"Image": ["."]},
     "roto_to_shape": {"Shape Data": ["roto_shapes"]},
@@ -290,7 +290,7 @@ def get_node_media_path(node, visited=None, view_mode="COMP"):
         if view_mode == "MATTE":
             preferred = ("pha", "Output/Matte", "Matte", "AlphaHint", "roto_shapes/previews", "roto_shapes")
         elif view_mode == "COMP" or view_mode == "3D":
-            preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG", "roto_shapes/previews", "roto_shapes")
+            preferred = ("fgr", "Output/Comp", "Output/FG", "Comp", "FG", "Preview", "roto_shapes/previews", "roto_shapes")
         else:
             preferred = ()
             

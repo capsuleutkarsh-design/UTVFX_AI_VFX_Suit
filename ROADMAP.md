@@ -37,7 +37,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] SuperMatte (C3, C4, H13). Core/edge split and multi-channel EXR go with Unified Output (Pass 3)
 - [x] RotoToShape (H17)
 - [x] CorridorKey (H14)
-- [ ] Depth (H15)
+- [x] Depth (H15)
 - [ ] AI Roto (H16)
 - [ ] Grade / OCIO (M9)
 - [ ] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)

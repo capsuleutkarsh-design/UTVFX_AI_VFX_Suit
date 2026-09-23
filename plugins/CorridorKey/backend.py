@@ -28,6 +28,7 @@ if SYSTEM_DIR not in sys.path:
     sys.path.append(SYSTEM_DIR)
 
 from utvfx.bridge.base_worker import BaseWorker  # noqa: E402
+from utvfx.core import exr  # noqa: E402
 
 _DESPILL_LIMIT = {"mode": "average"}
 
@@ -92,11 +93,7 @@ def _link_or_copy(src, dst):
 
 def _read_exr(path):
     """An EXR as float32, channels in OpenCV order (BGR / BGRA); a single channel stays 2-D."""
-    import OpenImageIO as oiio
-    buf = oiio.ImageBuf(path)
-    if buf.has_error:
-        raise IOError(f"Could not read {path}: {buf.geterror()}")
-    img = buf.get_pixels(oiio.TypeFloat)
+    img, _ = exr.read(path)
     if img.shape[2] == 1:
         return img[..., 0]
     order = [2, 1, 0] + ([3] if img.shape[2] > 3 else [])
@@ -105,28 +102,16 @@ def _read_exr(path):
 
 def _write_exr(path, img, chromaticities=None):
     """Write a half-float EXR from an OpenCV-ordered array (gray, BGR or BGRA)."""
-    import OpenImageIO as oiio
     img = np.asarray(img, np.float32)
     if img.ndim == 2:
-        img, names = img[..., None], ["Y"]
+        exr.write(path, img, ("Y",))
     elif img.shape[2] == 3:
-        img, names = img[..., [2, 1, 0]], ["R", "G", "B"]
+        exr.write(path, img[..., [2, 1, 0]], ("R", "G", "B"), chromaticities=chromaticities)
     else:
-        img, names = img[..., [2, 1, 0, 3]], ["R", "G", "B", "A"]
-    spec = oiio.ImageSpec(img.shape[1], img.shape[0], img.shape[2], oiio.TypeHalf)
-    spec.channelnames = tuple(names)
-    if names[-1] == "A":
-        spec.alpha_channel = 3
-    spec.attribute("compression", "zip")
-    if chromaticities:
-        spec.attribute("chromaticities", oiio.TypeDesc("float[8]"), chromaticities)
-    buf = oiio.ImageBuf(spec)
-    buf.set_pixels(oiio.ROI(), np.ascontiguousarray(img))
-    if not buf.write(path):
-        raise IOError(f"Could not write {path}: {buf.geterror()}")
+        exr.write(path, img[..., [2, 1, 0, 3]], ("R", "G", "B", "A"), chromaticities=chromaticities)
 
 
-REC709_CHROMATICITIES = (0.64, 0.33, 0.30, 0.60, 0.15, 0.06, 0.3127, 0.3290)
+REC709_CHROMATICITIES = exr.REC709_CHROMATICITIES
 
 
 def _srgb_to_linear(x):

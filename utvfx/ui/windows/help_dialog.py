@@ -38,15 +38,16 @@ NODE_HELP_DATA = {
         }
     },
     "ai_depth_estimator": {
-        "description": "The <b>AI Depth Estimator</b> node uses Depth Anything V2 to analyze a 2D image and predict a 3D depth map (Z-Depth). This is heavily used for atmospheric haze and simulated depth-of-field.",
+        "description": "The <b>Depth</b> node uses Depth Anything V2 to predict a depth map for every frame of the plate. It writes one float EXR channel (Z) per frame, numbered like the plate, for ZDefocus, fog and depth-sorted roto. The viewer shows a separate preview picture.",
         "params": {
-            "model_size": "The size of the AI model. Small is fastest; Large provides the most detailed depth but requires heavy VRAM.",
-            "input_size": "The maximum resolution to process. Larger values yield sharper depth edges but drastically slow down computation.",
-            "temporal_smoothing": "Amount of blending between adjacent frames to prevent the depth map from flickering in video.",
-            "gamma": "Adjust the contrast of the generated depth map.",
-            "blur_radius": "A post-process blur to smooth out the depth gradients.",
-            "colormap": "The false-color map used when viewing the depth visually. (Grayscale is usually needed if plugging into other math nodes).",
-            "invert_depth": "Inverts the Z-depth (swaps near and far planes)."
+            "model_size": "Small is fastest; Large gives the most detailed depth and needs more VRAM.",
+            "input_size": "The size the model works at. Larger values give sharper depth edges but take longer.",
+            "depth_type": "Relative: 0-1 over the whole shot, the same range on every frame (no pumping). Metric: distance from the camera in metres, with the indoor (up to 20 m) or outdoor (up to 80 m) model.",
+            "near_value": "For relative depth: whether near objects are 1 (Nuke ZDefocus 'far = 0') or 0.",
+            "temporal_smoothing": "Blends each frame with the previous one, moved along the image motion, to calm flicker.",
+            "blur_radius": "Softens the depth map (written into the EXR).",
+            "gamma": "Contrast of the viewer preview only; the EXR is not changed.",
+            "colormap": "Colours of the viewer preview only; the EXR is not changed."
         }
     },
     "composite_output": {
