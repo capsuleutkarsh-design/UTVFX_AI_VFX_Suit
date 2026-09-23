@@ -118,6 +118,26 @@ def _start_offset(first_number):
     return 1 if first_number == 0 else first_number
 
 
+def sequence_fps(media_path, files):
+    """Playback rate of an image sequence: the plate's own rate, or the EXR tag, else 24."""
+    try:
+        from utvfx.core.plate import plate_for_folder
+        plate = plate_for_folder(media_path if os.path.isdir(media_path) else os.path.dirname(media_path))
+        if plate is not None and plate.m.get("fps"):
+            return float(plate.m["fps"])
+        if files and files[0].lower().endswith((".exr", ".dpx")):
+            import OpenImageIO as oiio
+            inp = oiio.ImageInput.open(files[0])
+            if inp is not None:
+                fps = inp.spec().getattribute("FramesPerSecond")
+                inp.close()
+                if isinstance(fps, tuple) and fps[1]:
+                    return float(fps[0]) / float(fps[1])
+    except Exception:
+        pass
+    return 24.0
+
+
 def sequence_files(media_path):
     """(files, start_frame_offset, index_of_media_path) for an image or a folder of images.
 
@@ -229,6 +249,7 @@ class MediaReader:
         if self.is_sequence:
             self.sequence_files, self.start_frame_offset, self.first_index = sequence_files(media_path)
             self.total_frames = len(self.sequence_files)
+            self.fps = sequence_fps(media_path, self.sequence_files)
 
     def open(self):
         """Open the video container (slow for some codecs, so call it off the UI thread)."""

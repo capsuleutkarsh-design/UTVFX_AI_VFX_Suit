@@ -88,7 +88,9 @@ def read_image(path):
     buf = oiio.ImageBuf(path)
     if buf.has_error:
         raise IOError(f"Cannot read {path}: {buf.geterror()}")
-    pixels = buf.get_pixels(oiio.TypeFloat)
+    # The full (display) window: an EXR may store only a cropped data window, and every frame
+    # of a plate must come out the same size. Pixels outside the data window are black/clear.
+    pixels = buf.get_pixels(oiio.TypeFloat, buf.roi_full)
     if pixels.ndim == 2:
         pixels = pixels[..., None]
     return pixels, buf.spec()

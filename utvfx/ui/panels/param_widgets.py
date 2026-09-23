@@ -208,7 +208,9 @@ def build_param_widget(panel, param, color):
                 if is_folder:
                     path = QFileDialog.getExistingDirectory(panel, "Select folder")
                 else:
-                    path, _ = QFileDialog.getOpenFileName(panel, "Select file")
+                    from utvfx.core.plate import MEDIA_FILTER
+                    file_filter = MEDIA_FILTER if p == "plate_file" else "All files (*)"
+                    path, _ = QFileDialog.getOpenFileName(panel, "Select file", "", file_filter)
 
                 if path:
                     l.setText(path)

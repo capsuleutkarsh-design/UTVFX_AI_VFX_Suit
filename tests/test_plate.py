@@ -68,7 +68,7 @@ def test_tier_folder_swaps_media_plate_folders_only(hdr_exr_sequence, tmp_path):
 
 def test_video_is_decoded_at_16_bits(tmp_path):
     video = str(tmp_path / "grad.mov")
-    subprocess.run([ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "gradients=s=320x180:d=0.5:r=24",
+    subprocess.run([ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "gradients=s=320x180:d=0.5:r=24:seed=7:c0=black:c1=white:nb_colors=2",
                     "-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le", video], check=True)
     plate = Plate.prepare(video, str(tmp_path / "cache"))
     assert plate.m["kind"] == "video" and len(plate) == 12
@@ -95,3 +95,74 @@ def test_colour_space_tag_in_our_own_exrs_is_honoured(tmp_path):
     _write_exr(path, np.full((4, 4, 3), 0.5, np.float32))
     assert colour.detect_colourspace(path) == "ACEScg"
     assert np.allclose(colour.read_linear(path), 0.5, atol=1e-3)  # no conversion applied
+
+
+def _write(path, pixels, **attrs):
+    import OpenImageIO as oiio
+    h, w, c = pixels.shape
+    spec = oiio.ImageSpec(w, h, c, oiio.TypeHalf)
+    for k, v in attrs.items():
+        if k == "window":
+            spec.x, spec.y, spec.full_width, spec.full_height = v
+        elif k == "fps":
+            spec.attribute("FramesPerSecond", oiio.TypeRational, v)
+        else:
+            spec.attribute(k, v)
+    out = oiio.ImageOutput.create(path)
+    out.open(path, spec)
+    out.write_image(pixels.astype(np.float32))
+    out.close()
+
+
+def test_exr_data_window_comes_out_full_size(tmp_path):
+    """A cropped data window is placed inside the full frame, so every frame is the same size."""
+    folder = tmp_path / "dw"
+    folder.mkdir()
+    for n in (1001, 1002):
+        _write(str(folder / f"sh.{n}.exr"), np.full((10, 20, 3), 0.18, np.float32), window=(30, 12, 64, 48))
+    plate = Plate.prepare(str(folder / "sh.1001.exr"), str(tmp_path / "cache"), colourspace="ACEScg")
+    assert (plate.m["width"], plate.m["height"]) == (64, 48)
+    plate.ensure("png16")
+    img = cv2.imread(plate.paths("png16")[0], cv2.IMREAD_UNCHANGED)
+    assert img.shape[:2] == (48, 64)
+    assert img[15, 35].max() > 0 and img[0, 0].max() == 0  # inside vs outside the data window
+
+
+def test_pixel_aspect_and_exr_frame_rate_are_recorded(tmp_path):
+    from utvfx.playback.video_player import sequence_fps
+    folder = tmp_path / "ana"
+    folder.mkdir()
+    for n in (1, 2):
+        _write(str(folder / f"ana.{n:04d}.exr"), np.zeros((8, 8, 3)), PixelAspectRatio=2.0, fps=(25, 1))
+    plate = Plate.prepare(str(folder / "ana.0001.exr"), str(tmp_path / "cache"))
+    assert plate.m["pixel_aspect"] == pytest.approx(2.0)
+    assert plate.m["fps"] == pytest.approx(25.0)
+    files = sorted(str(p) for p in folder.iterdir())
+    assert sequence_fps(str(folder), files) == pytest.approx(25.0)
+
+
+def test_video_can_start_at_1001_and_work_at_half_resolution(tmp_path):
+    video = str(tmp_path / "v.mov")
+    subprocess.run([ffmpeg_exe(), "-v", "error", "-f", "lavfi", "-i", "testsrc=s=320x180:d=0.25:r=24",
+                    "-c:v", "prores_ks", video], check=True)
+    plate = Plate.prepare(video, str(tmp_path / "cache"), first_frame=1001, working_scale=0.5)
+    assert plate.frame_numbers[0] == 1001 and plate.frame_numbers[-1] == 1001 + len(plate) - 1
+    plate.ensure("png16", "master")
+    assert cv2.imread(plate.paths("png16")[0], cv2.IMREAD_UNCHANGED).shape[:2] == (90, 160)
+    assert colour.read_image(plate.paths("master")[0])[0].shape[:2] == (180, 320)  # master stays full size
+    assert os.path.basename(plate.paths("png16")[0]) == "frame_001001.png"
+    # Changing the working resolution invalidates the working copy.
+    assert not Plate.prepare(video, str(tmp_path / "cache"), first_frame=1001, working_scale=1.0).has("png16")
+
+
+def test_tiff_sequences_and_dpx_are_offered(tmp_path):
+    from utvfx.core.plate import MEDIA_FILTER
+    for ext in ("*.dpx", "*.tif", "*.tiff", "*.exr", "*.mov", "*.mxf"):
+        assert ext in MEDIA_FILTER
+    folder = tmp_path / "tif"
+    folder.mkdir()
+    for n in (1, 2, 3):
+        cv2.imwrite(str(folder / f"t.{n:04d}.tif"), np.full((12, 16, 3), 100, np.uint16) * 100)
+    plate = Plate.prepare(str(folder / "t.0001.tif"), str(tmp_path / "cache"))
+    assert plate.frame_numbers == [1, 2, 3]
+    plate.ensure("png16")

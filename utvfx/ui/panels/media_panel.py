@@ -129,6 +129,7 @@ class MediaPanel(QWidget):
             item.setExpanded(not item.isExpanded())
 
     def _on_load_media(self):
-        file_path, _ = QFileDialog.getOpenFileName(self, "Select media file", "", "Video/Image Files (*.mp4 *.mov *.png *.jpg *.exr)")
+        from utvfx.core.plate import MEDIA_FILTER
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select media file", "", MEDIA_FILTER)
         if file_path:
             self.add_node_requested.emit("media_plate", {"plate_file": file_path})

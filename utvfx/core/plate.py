@@ -27,6 +27,11 @@ MANIFEST = "plate.json"
 TIER_FOLDERS = {"master": "Master", "png16": "Video Plate", "jpg": "Video Plate JPG"}
 TIER_EXT = {"master": ".exr", "png16": ".png", "jpg": ".jpg"}
 IMAGE_EXTS = (".exr", ".dpx", ".hdr", ".tif", ".tiff", ".png", ".jpg", ".jpeg")
+VIDEO_EXTS = colour.VIDEO_EXTS
+# File-dialog filter listing everything a Media Plate can read.
+MEDIA_FILTER = ("Plates (" + " ".join("*" + e for e in IMAGE_EXTS + VIDEO_EXTS) + ");;"
+                "Image sequences (" + " ".join("*" + e for e in IMAGE_EXTS) + ");;"
+                "Video (" + " ".join("*" + e for e in VIDEO_EXTS) + ");;All files (*)")
 _FRAME_RE = re.compile(r"^(.*?)(\d+)(\.[^.]+)$")
 
 
@@ -154,8 +159,14 @@ class Plate:
         return cls(cache_dir, manifest)
 
     @classmethod
-    def prepare(cls, source, cache_dir, is_sequence=True, colourspace=colour.AUTO):
-        """Describe `source` and reuse the cached plate if nothing about it changed."""
+    def prepare(cls, source, cache_dir, is_sequence=True, colourspace=colour.AUTO, first_frame=None,
+                working_scale=1.0):
+        """Describe `source` and reuse the cached plate if nothing about it changed.
+
+        first_frame numbers a video's frames (default 1); image sequences keep their own numbers.
+        working_scale < 1 makes the 16-bit and JPG working tiers smaller (e.g. 0.5 for 4K plates);
+        the master tier always stays full size.
+        """
         ext = os.path.splitext(source)[1].lower()
         if os.path.isdir(source) or (is_sequence and ext in IMAGE_EXTS):
             frames = find_sequence(source)
@@ -172,7 +183,8 @@ class Plate:
             fps = spec.getattribute("FramesPerSecond")
             manifest = {
                 "kind": "sequence", "source_paths": paths, "frame_numbers": numbers,
-                "width": spec.width, "height": spec.height,
+                "width": spec.full_width, "height": spec.full_height,
+                "pixel_aspect": float(spec.getattribute("PixelAspectRatio") or 1.0),
                 "fps": float(fps[0]) / float(fps[1]) if isinstance(fps, tuple) else 24.0,
                 "colourspace": colour.resolve_colourspace(paths[0], colourspace, spec),
                 "signature": _signature(paths),
@@ -181,16 +193,19 @@ class Plate:
             manifest = cls._single_image(source, colourspace)
         else:
             count, fps, w, h = _video_info(source)
+            start = int(first_frame) if first_frame else 1
             manifest = {
-                "kind": "video", "source_paths": [source], "frame_numbers": list(range(1, count + 1)),
-                "width": w, "height": h, "fps": fps,
+                "kind": "video", "source_paths": [source], "frame_numbers": list(range(start, start + count)),
+                "width": w, "height": h, "fps": fps, "pixel_aspect": 1.0,
                 "colourspace": colour.resolve_colourspace(source, colourspace),
                 "signature": _signature([source]),
             }
-        manifest.update({"version": VERSION, "source": source, "tiers": {}})
+        manifest.update({"version": VERSION, "source": source, "tiers": {},
+                         "working_scale": float(working_scale or 1.0)})
 
         existing = cls.open(cache_dir)
-        if existing and all(existing.m.get(k) == manifest[k] for k in ("source", "signature", "colourspace", "frame_numbers")):
+        keys = ("source", "signature", "colourspace", "frame_numbers", "working_scale")
+        if existing and all(existing.m.get(k) == manifest[k] for k in keys):
             return existing
         plate = cls(cache_dir, manifest)
         os.makedirs(cache_dir, exist_ok=True)
@@ -208,7 +223,8 @@ class Plate:
         m = _FRAME_RE.match(os.path.basename(path))
         return {
             "kind": "sequence", "source_paths": [path], "frame_numbers": [int(m.group(2)) if m else 1],
-            "width": spec.width, "height": spec.height, "fps": 24.0,
+            "width": spec.full_width, "height": spec.full_height, "fps": 24.0,
+            "pixel_aspect": float(spec.getattribute("PixelAspectRatio") or 1.0),
             "colourspace": colour.resolve_colourspace(path, colourspace, spec),
             "signature": _signature([path]),
         }
@@ -258,6 +274,7 @@ class Plate:
             os.makedirs(self.folder(tier), exist_ok=True)
         targets = {t: self.paths(t) for t in todo}
         space = self.colourspace
+        scale = float(self.m.get("working_scale", 1.0))
 
         def write(i, rgb):
             if rgb is None:
@@ -266,6 +283,9 @@ class Plate:
                 _write_exr(targets["master"][i], colour.to_scene_linear(rgb, space))
             if "png16" in targets or "jpg" in targets:
                 display = colour.to_display(rgb, space)[..., :3]
+                if scale < 1.0:
+                    size = (max(1, round(display.shape[1] * scale)), max(1, round(display.shape[0] * scale)))
+                    display = cv2.resize(display, size, interpolation=cv2.INTER_AREA)
                 if "png16" in targets:
                     _write_png16(targets["png16"][i], display)
                 if "jpg" in targets:

@@ -51,7 +51,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | M5 | Playback | No frame cache. Video seek on every frame. Wipe decodes on UI thread. VRAM readout never shows | 1 | ☑ |
 | M6 | Downloads | Partial files count as installed. No hashes. No timeouts | 1 | ☑ |
 | M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☑ |
-| M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ◐ sequence grouping, TIFF, fps and default fixed in the plate module |
+| M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ☑ |
 | M9 | OCIO / Grade | Rec709 fails silently. Grade changes alpha | 2 | ☐ |
 | M10 | Roto export | Lifetime attribute names unverified in Nuke. Wrong JSON can be loaded. Path quoting unsafe | 3 | ☐ |
 | M11 | Licensing | CorridorKey, VideoMaMa, GVM, MatAnyone, Depth V2 Base/Large are non-commercial. No THIRD_PARTY_NOTICES | before release | ☐ |

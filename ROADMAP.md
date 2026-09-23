@@ -33,7 +33,7 @@ The app is being fixed and rebranded in passes. Each pass ends with a review bef
 ## Pass 2: Node by node (in data-flow order)
 Each node is done when it works on the test plates at HD, 4K and frame 1001, Cancel works, outputs keep quality and frame numbers, every option in its panel does something, it has a test, and its panel uses the new design.
 
-- [ ] MediaPlate (M8)
+- [x] MediaPlate (M8)
 - [ ] SuperMatte (C3, C4, H13)
 - [ ] RotoToShape (H17)
 - [ ] CorridorKey (H14)

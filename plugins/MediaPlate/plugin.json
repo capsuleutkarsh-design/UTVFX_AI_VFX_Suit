@@ -8,6 +8,8 @@
     "parameters": [
         {"id": "plate_file", "name": "Media File", "type": "file", "value": ""},
         {"id": "is_sequence", "name": "Load as Image Sequence", "type": "checkbox", "value": true},
+        {"id": "first_frame", "name": "First frame (video)", "type": "slider", "value": 1, "min": 0, "max": 100000, "step": 1},
+        {"id": "working_resolution", "name": "Working resolution", "type": "select", "value": "Full", "options": ["Full", "Half (faster on 4K)"]},
         {"id": "colourspace", "name": "Input Colour Space", "type": "select", "value": "Auto", "options": [
             "Auto",
             "ACES2065-1",

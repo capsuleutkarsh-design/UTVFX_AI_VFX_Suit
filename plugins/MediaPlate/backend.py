@@ -16,6 +16,8 @@ class MediaWorker(BaseWorker):
         self.plate_file = params.get("plate_file", "")
         self.is_sequence = params.get("is_sequence", True)
         self.colourspace = params.get("colourspace", "Auto")
+        self.first_frame = int(params.get("first_frame", 1) or 1)
+        self.working_scale = 0.5 if str(params.get("working_resolution", "Full")).startswith("Half") else 1.0
 
     def cancel(self):
         self.is_cancelled = True
@@ -24,12 +26,17 @@ class MediaWorker(BaseWorker):
         if not self.plate_file or not os.path.exists(self.plate_file):
             raise FileNotFoundError("Media Plate has no valid file selected.")
 
-        plate = Plate.prepare(self.plate_file, self.cache_dir, self.is_sequence, self.colourspace)
+        plate = Plate.prepare(self.plate_file, self.cache_dir, self.is_sequence, self.colourspace,
+                              first_frame=self.first_frame, working_scale=self.working_scale)
         first, last = plate.frame_numbers[0], plate.frame_numbers[-1]
+        aspect = plate.m.get("pixel_aspect", 1.0)
         self.log_message.emit(
             self.node_id,
             f"{os.path.basename(self.plate_file)}: {len(plate)} frames ({first}-{last}), "
-            f"{plate.m['width']}x{plate.m['height']}, {plate.m['fps']:.3f} fps, colour space {plate.colourspace}",
+            f"{plate.m['width']}x{plate.m['height']}"
+            + (f" (pixel aspect {aspect:g}, anamorphic)" if abs(aspect - 1.0) > 1e-3 else "")
+            + f", {plate.m['fps']:.3f} fps, colour space {plate.colourspace}"
+            + (" — half-resolution working copy" if self.working_scale < 1 else ""),
         )
 
         if plate.has("png16"):
