@@ -32,6 +32,7 @@ workspace/
 *.exr
 *.jpg
 !resources/*.png
+!branding/png/*.png
 
 releases/
 crash.log
