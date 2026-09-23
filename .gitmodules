@@ -10,3 +10,4 @@
 [submodule "plugins/Depth-Anything-V2"]
 	path = plugins/Depth-Anything-V2
 	url = https://github.com/DepthAnything/Depth-Anything-V2.git
+	ignore = untracked
