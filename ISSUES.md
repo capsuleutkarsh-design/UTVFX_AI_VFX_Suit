@@ -14,7 +14,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☐ |
 | C5 | Undo | Redo creates a new node id. Older commands hold dead objects. Undo after delete segfaults | 1 | `test_add_node_keeps_id_through_undo_redo`, `test_undo_after_delete_restores_graph_without_crashing` | ☑ |
 | C6 | Projects | Click keyframes come back as string keys after reload. Timeline paint crashes, points vanish or duplicate | 1 | `test_keyframes_stay_ints_after_save_and_reload` | ☑ |
-| C7 | Frame contract | Clicks stored by timeline position, looked up by file frame number. Corrections ignored on 1001 plates, one frame early on video | 1 | | ☐ |
+| C7 | Frame contract | Clicks stored by timeline position, looked up by file frame number. Corrections ignored on 1001 plates, one frame early on video | 1 | `tests/test_frame_contract.py` | ☑ |
 
 ## High: wrong results, broken features
 

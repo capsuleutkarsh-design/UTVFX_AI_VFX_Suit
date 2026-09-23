@@ -284,28 +284,15 @@ class SuperMatteWorker(BaseWorker):
         
         if os.path.isdir(self.media_path):
             self.is_sequence = True
-            exts = ("*.png", "*.jpg", "*.jpeg", "*.exr", "*.dpx", "*.tif", "*.tiff", "*.hdr")
-            for ext in exts:
-                self.sequence_files.extend(glob.glob(os.path.join(self.media_path, ext)))
-            if not self.sequence_files:
-                # Fallback: maybe files have no extension (e.g. raw DPX scans)
-                all_files = [os.path.join(self.media_path, f) for f in os.listdir(self.media_path) if os.path.isfile(os.path.join(self.media_path, f))]
-                self.sequence_files.extend(all_files)
-            
-            self.sequence_files.sort()
-            if not self.sequence_files:
+            from utvfx.core.plate import find_sequence
+            sequence = find_sequence(self.media_path)
+            if not sequence:
                 raise Exception("No image files found in sequence directory.")
+            # Frame numbers only name output files; clicks and loops use the position i.
+            self.frame_indices = [n for n, _ in sequence]
+            self.sequence_files = [p for _, p in sequence]
             total_frames = len(self.sequence_files)
             fps = 24.0
-            
-            import re
-            self.frame_indices = []
-            for f in self.sequence_files:
-                match = re.search(r'(\d+)\.\w+$', f)
-                if match:
-                    self.frame_indices.append(int(match.group(1)))
-                else:
-                    self.frame_indices.append(len(self.frame_indices) + 1)
         else:
             ext = os.path.splitext(self.media_path)[1].lower()
             if ext in [".png", ".jpg", ".jpeg", ".exr", ".dpx", ".tif", ".tiff", ".hdr"]:
@@ -348,7 +335,8 @@ class SuperMatteWorker(BaseWorker):
             self.log_message.emit(self.node_id, "No mask layers defined. Yielding empty output.")
             return
         
-        # Find the earliest keyframe across all layers
+        # Find the earliest keyframe across all layers. Keyframes are keyed by timeline
+        # position (0 = first frame of the plate), never by file frame number.
         start_frame = float('inf')
         layer_pts = {}
         for layer in mask_layers:
@@ -444,7 +432,7 @@ class SuperMatteWorker(BaseWorker):
                         continue
                         
                     prompts.append({
-                        "frame": f_idx - start_frame,
+                        "frame": f_idx,
                         "obj_id": i,
                         "points": pts_list if pts_list else None,
                         "labels": lbls_list if lbls_list else None,
@@ -501,7 +489,7 @@ class SuperMatteWorker(BaseWorker):
                 gray = None
             
             # Skip until we hit the first keyframe (only for non-SAMURAI which only tracks forward)
-            if not is_samurai and frame_idx < start_frame:
+            if not is_samurai and i < start_frame:
                 prev_gray = gray
                 self.progress_update.emit(self.node_id, i + 1, total_frames)
                 continue
@@ -523,8 +511,8 @@ class SuperMatteWorker(BaseWorker):
                         # Create empty mask if missing
                         cv2.imwrite(sam_mask_path, np.zeros(frame.shape[:2], dtype=np.uint8))
                 else:
-                    if frame_idx in kfs or str(frame_idx) in kfs:
-                        layer_pts[layer_id] = kfs.get(frame_idx, kfs.get(str(frame_idx)))
+                    if i in kfs or str(i) in kfs:
+                        layer_pts[layer_id] = kfs.get(i, kfs.get(str(i)))
                     elif prev_gray is not None:
                         layer_pts[layer_id] = self.track_points_pyrlk(prev_gray, gray, layer_pts[layer_id])
                         
@@ -645,7 +633,7 @@ class SuperMatteWorker(BaseWorker):
                     
             self.log_message.emit(self.node_id, "VideoMaMa Inference Complete. Saving outputs...")
             
-            valid_indices = self.frame_indices if is_samurai else [f for f in self.frame_indices if f >= start_frame]
+            valid_indices = self.frame_indices if is_samurai else self.frame_indices[start_frame:]
             for idx, (frame_idx, alpha) in enumerate(zip(valid_indices, final_alphas)):
                 frame_path = os.path.join(frames_dir, f"frame_{frame_idx:06d}.png")
                 if not os.path.exists(frame_path):

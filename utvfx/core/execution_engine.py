@@ -40,9 +40,11 @@ class InteractionWorker(QThread):
             
             if os.path.isdir(self.media_path):
                 # Sequence
-                files = sorted([f for f in os.listdir(self.media_path) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.dpx', '.hdr'))])
+                # frame_idx is the timeline position; sort by frame number, not by name.
+                from utvfx.core.plate import find_sequence
+                files = [p for _, p in find_sequence(self.media_path)]
                 if 0 <= self.frame_idx < len(files):
-                    frame_file = os.path.join(self.media_path, files[self.frame_idx])
+                    frame_file = files[self.frame_idx]
                     
                     from utvfx.core.image_utils import load_frame
                     frame = load_frame(frame_file)
