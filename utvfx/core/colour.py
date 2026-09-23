@@ -27,10 +27,21 @@ VIDEO_EXTS = (".mov", ".mp4", ".mxf", ".avi", ".mkv", ".m4v")
 # Red primary (x, y) from an EXR's chromaticities attribute.
 _AP0_RED = (0.7347, 0.2653)
 _AP1_RED = (0.713, 0.293)
+# (red xy, green xy, blue xy, white xy) for ACEScg, as stored in EXR "chromaticities".
+AP1_CHROMATICITIES = (0.713, 0.293, 0.165, 0.830, 0.128, 0.044, 0.32168, 0.33767)
 
 
 def colourspace_names():
     return list(oiio.ColorConfig().getColorSpaceNames())
+
+
+_NAMES = []
+
+
+def _config_names():
+    if not _NAMES:
+        _NAMES.extend(colourspace_names())
+    return _NAMES
 
 
 def is_display_referred(space):
@@ -56,6 +67,11 @@ def detect_colourspace(path, spec=None):
                 return "ACES2065-1"
             if np.allclose(red, _AP1_RED, atol=2e-3):
                 return SCENE_LINEAR
+        # A colour space written into the file (e.g. our own ACEScg masters). OIIO's generic
+        # guesses such as "lin_rec709" say nothing the default doesn't, so only config names count.
+        tagged = spec.getattribute("oiio:ColorSpace") if spec is not None else None
+        if tagged and tagged in _config_names():
+            return tagged
         return LINEAR_REC709
     if ext == ".dpx":
         # DPX is often log; there is no reliable tag, so default to video and let the user override.

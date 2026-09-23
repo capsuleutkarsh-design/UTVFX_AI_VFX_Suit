@@ -67,7 +67,6 @@ usage_to_weights_file = {
     'General-Lite-2K': 'BiRefNet_lite-2K',
     'General-reso_512': 'BiRefNet-reso_512',
     'Matting': 'BiRefNet-matting',
-    'Matting-HR': 'BiRefNet_HR-Matting',
     'Portrait': 'BiRefNet-portrait',
     'DIS': 'BiRefNet-DIS5K',
     'HRSOD': 'BiRefNet-HRSOD',
@@ -77,14 +76,14 @@ usage_to_weights_file = {
 }
 
 # Choose the version of BiRefNet here.
-usage = 'General'
+usage = 'Portrait'
 
 # Set resolution
 if usage in ['General-Lite-2K']:
     resolution = (2560, 1440)
 elif usage in ['General-reso_512']:
     resolution = (512, 512)
-elif usage in ['General-HR', 'Matting-HR']:
+elif usage in ['General-HR']:
     resolution = (2048, 2048)
 else:
     resolution = (1024, 1024) 

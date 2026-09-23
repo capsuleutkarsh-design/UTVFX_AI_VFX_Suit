@@ -7,7 +7,9 @@ from transformers import PretrainedConfig
 
 class Config(PretrainedConfig):
     def __init__(self) -> None:
-        # Compatible with the latest version of transformers
+        # Compatible with the latest version of transformers.
+        # Error source: https://github.com/huggingface/transformers/commit/9568b506ed511c76ab4d0c6ed591c7fce8e048a5
+        # Previous solution in the users' end: https://github.com/ZhengPeng7/BiRefNet/issues/189#issuecomment-2716688688
         super().__init__()
 
         # PATH settings

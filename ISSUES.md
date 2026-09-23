@@ -31,7 +31,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | H9 | Security | BiRefNet runs its own code with an unpinned revision, re-downloaded on every run | 1 | | ☑ |
 | H10 | Security | `torch.load` without `weights_only` (MEMatte, SAM 1). Offline ZIP importer can install plugin code | 1 | | ☑ |
 | H11 | Install | Three conflicting install paths. PyInstaller spec points at a missing folder. Unpinned deps | 1 | | ☑ |
-| H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ◐ ACES config and plate loading done; OCIO node and viewer left |
+| H12 | Colour | One hard-coded linear→sRGB conversion. OCIO node has no config. Viewer double-applies sRGB to EXR outputs | 1 | | ☑ plate loading, EXR colour tags, float pixel probe; OCIO node itself is M9 (Pass 2) |
 | H13 | SuperMatte | Temporal Stabilization warps the previous matte the wrong way (adds ghosting) | 2 | | ☐ |
 | H14 | CorridorKey | Keys the JPEG proxy. 8 of 16 settings unused. Red screen crashes. Result never reaches downstream nodes | 2 | | ☐ |
 | H15 | Depth | 8-bit, per-frame normalised (pumps), preview colormap baked into output, frames numbered from 0 | 2 | | ☐ |
@@ -57,4 +57,6 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | M11 | Licensing | CorridorKey, VideoMaMa, GVM, MatAnyone, Depth V2 Base/Large are non-commercial. No THIRD_PARTY_NOTICES | before release | ☐ |
 
 ## Low
-Dead code (`_build_mask_dict`, dead UI files `CorridorKey/ui.py` and `3DTracker/ui.py`, unused signals), shot auto-naming copied three times, README drift (logo, clone URL, MatAnyone 2), stale uv download, repo junk (`.pdb` files, `get-pip.py`, `sqlite3.dll.bak`).
+☑ done in Pass 1: dead engine/viewer code, unused signals, dead UI files, shot naming unified, junk files, uv download. Still open: README polish.
+
+Original list: Dead code (`_build_mask_dict`, dead UI files `CorridorKey/ui.py` and `3DTracker/ui.py`, unused signals), shot auto-naming copied three times, README drift (logo, clone URL, MatAnyone 2), stale uv download, repo junk (`.pdb` files, `get-pip.py`, `sqlite3.dll.bak`).

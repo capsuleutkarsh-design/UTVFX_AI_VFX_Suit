@@ -320,16 +320,8 @@ def _name_untitled_project(panel, plate_path):
     sm = SettingsManager()
     if sm.current_project_name != "Untitled":
         return
-    name, ext = os.path.splitext(os.path.basename(plate_path))
-    shot_name = name
-    if ext.lower() in [".exr", ".png", ".jpg", ".jpeg", ".tiff", ".dpx"]:
-        clean_name = re.sub(r'[\._-]?\d+$', '', name)
-        if clean_name:
-            shot_name = clean_name
-        else:
-            folder_name = os.path.basename(os.path.dirname(plate_path))
-            if folder_name and folder_name.lower() not in ["", "render", "renders", "output", "outputs", "frames", "images", "img"]:
-                shot_name = folder_name
+    from utvfx.core.project import shot_name_from_path
+    shot_name = shot_name_from_path(plate_path)
     sm.set_project_name(shot_name)
     window = panel.window()
     if hasattr(window, "set_project_title"):

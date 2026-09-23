@@ -61,3 +61,4 @@ python_base.part/
 
 # Binaries installed by first_setup.py (COLMAP 4.2.0, FFmpeg)
 plugins/3DTracker/bin/
+models/**/*.gif

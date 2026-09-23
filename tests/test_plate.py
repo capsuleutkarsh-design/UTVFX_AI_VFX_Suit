@@ -85,3 +85,13 @@ def test_real_mp4_builds_all_tiers(footage_dir, tmp_path):
     plate.ensure("png16", "jpg")
     assert (plate.m["width"], plate.m["height"]) == (1920, 1080)
     assert all(os.path.isfile(p) for p in plate.paths("jpg"))
+
+
+def test_colour_space_tag_in_our_own_exrs_is_honoured(tmp_path):
+    """Master EXRs are tagged ACEScg; reading them back must not treat them as linear Rec.709."""
+    from utvfx.core.plate import _write_exr
+
+    path = str(tmp_path / "master.exr")
+    _write_exr(path, np.full((4, 4, 3), 0.5, np.float32))
+    assert colour.detect_colourspace(path) == "ACEScg"
+    assert np.allclose(colour.read_linear(path), 0.5, atol=1e-3)  # no conversion applied

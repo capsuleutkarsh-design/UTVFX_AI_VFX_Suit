@@ -22,7 +22,7 @@ import numpy as np
 
 from utvfx.core import colour
 
-VERSION = 2
+VERSION = 3  # 3: master EXRs carry ACEScg chromaticities
 MANIFEST = "plate.json"
 TIER_FOLDERS = {"master": "Master", "png16": "Video Plate", "jpg": "Video Plate JPG"}
 TIER_EXT = {"master": ".exr", "png16": ".png", "jpg": ".jpg"}
@@ -127,6 +127,8 @@ def _write_exr(path, rgb):
     spec = oiio.ImageSpec(w, h, 3, oiio.TypeHalf)
     spec.attribute("compression", "piz")
     spec.attribute("oiio:ColorSpace", colour.SCENE_LINEAR)
+    # The EXR-standard way to say "ACEScg": AP1 primaries with the ACES white point.
+    spec.attribute("chromaticities", oiio.TypeDesc("float[8]"), colour.AP1_CHROMATICITIES)
     out = oiio.ImageOutput.create(path)
     if out is None or not out.open(path, spec):
         raise IOError(f"Cannot write {path}")

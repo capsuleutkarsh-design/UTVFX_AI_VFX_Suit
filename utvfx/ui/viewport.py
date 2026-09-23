@@ -190,7 +190,7 @@ class Viewport(QWidget):
         self.lbl_probe.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.lbl_probe.setToolTip("Pixel under the cursor")
         self.lbl_probe.setMinimumWidth(
-            self.lbl_probe.fontMetrics().horizontalAdvance(self._probe_text(9999, 9999, 255, 255, 255)) + 4)
+            self.lbl_probe.fontMetrics().horizontalAdvance("x 9999 y 9999  r 10.000 g 10.000 b 10.000") + 4)
         t_layout.addWidget(self.lbl_probe)
 
         main_layout.addWidget(toolbar)
@@ -257,7 +257,6 @@ class Viewport(QWidget):
         self.timeline = TimelineWidget()
         self.timeline.frame_seeked.connect(self.seek_frame)
         self.img_display.keyframes_changed.connect(self.timeline.set_keyframes)
-        self.img_display.keyframes_changed.connect(self._sync_mask_keyframes)
         t_layout.addWidget(self.timeline, 1) # stretch = 1
         t_layout.addSpacing(8)
 
@@ -336,9 +335,6 @@ class Viewport(QWidget):
 
 
 
-    def _sync_mask_keyframes(self, kfs=None):
-        pass # UI updates handled elsewhere
-
     def _on_canvas_interaction(self, frame_idx, points):
         if self.current_node:
             self.interaction_requested.emit(self.current_node.node_id, frame_idx, points)
@@ -351,6 +347,7 @@ class Viewport(QWidget):
 
     @Slot(str, int, float)
     def handle_media_loaded(self, path, total_frames, fps):
+        """Show media that is not attached to a node (also used by the tests)."""
         self.img_display.clear()
         self.img_display.setText("Loading…")
         self.player_thread = self._new_player(path, self.current_view_mode, keep_length=False)
@@ -692,7 +689,34 @@ class Viewport(QWidget):
         line.setPalette(palette)
         return line
 
+    def _linear_source(self):
+        """Scene-linear pixels (ACEScg) of the frame on screen, if it is a float image."""
+        player = self.player_thread
+        if player is None or not getattr(player, "is_sequence", False) or not player.sequence_files:
+            return None
+        index = min(max(int(getattr(player, "current_frame", 0)), 0), len(player.sequence_files) - 1)
+        path = player.sequence_files[index]
+        if not path.lower().endswith((".exr", ".hdr")):
+            return None
+        cached = getattr(self, "_probe_cache", None)
+        if cached is None or cached[0] != path:
+            from utvfx.core import colour
+            try:
+                self._probe_cache = (path, colour.read_linear(path))
+            except (IOError, RuntimeError):
+                self._probe_cache = (path, None)
+        return self._probe_cache[1]
+
     def _on_pixel_probed(self, px, py, r, g, b):
+        # For float plates show the real scene-linear values (highlights above 1.0 included),
+        # not the 8-bit display pixels.
+        linear = self._linear_source()
+        if linear is not None and 0 <= py < linear.shape[0] and 0 <= px < linear.shape[1]:
+            fr, fg, fb = (float(v) for v in linear[py, px, :3])
+            self.lbl_probe.setText(f"x {px:>4} y {py:>4}  r {fr:6.3f} g {fg:6.3f} b {fb:6.3f}")
+            self.lbl_probe.setToolTip("Scene-linear ACEScg values of the pixel under the cursor")
+            return
+        self.lbl_probe.setToolTip("Display values (0-255) of the pixel under the cursor")
         self.lbl_probe.setText(self._probe_text(px, py, r, g, b))
 
     def set_bg_mode(self, mode):
