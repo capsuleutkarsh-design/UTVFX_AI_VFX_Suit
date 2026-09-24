@@ -44,7 +44,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 
 ## Pass 3: Export
 - [x] Camera to Nuke/Blender/Alembic/USD, reusing the Automated Tracker's tested writers (C2)
-- [ ] Unified Output: proper RGBA/multi-channel EXR, premult, no gamma on data (H19)
+- [x] Unified Output: proper RGBA/multi-channel EXR, premult, no gamma on data (H19)
 - [ ] Roto export hardening (M10)
 
 ## Before any public or commercial release

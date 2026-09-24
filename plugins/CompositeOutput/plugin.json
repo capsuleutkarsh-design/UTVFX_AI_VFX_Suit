@@ -19,29 +19,73 @@
     "parameters": [
         {
             "id": "output_dir",
-            "name": "Output Directory",
+            "name": "Output Folder",
             "type": "folder",
             "value": ""
         },
         {
-            "id": "gamma",
-            "name": "Display LUT Gamma",
-            "type": "slider",
-            "value": 2.2,
-            "min": 1.0,
-            "max": 3.2,
-            "step": 0.1
+            "id": "shot_name",
+            "name": "Shot Name (blank = project name)",
+            "type": "text",
+            "value": ""
         },
         {
-            "id": "bit_depth",
-            "name": "Target Render Bitrate",
+            "id": "file_format",
+            "name": "File Format",
             "type": "select",
-            "value": "16-bit Float EXR",
+            "value": "EXR half float",
             "options": [
-                "8-bit PNG",
-                "16-bit Float EXR",
-                "32-bit Float EXR"
+                "EXR half float",
+                "EXR full float",
+                "PNG 16-bit (display)",
+                "PNG 8-bit (display)"
             ]
+        },
+        {
+            "id": "exr_colourspace",
+            "name": "EXR Colour Space",
+            "type": "select",
+            "value": "ACEScg",
+            "options": [
+                "ACEScg",
+                "ACES2065-1",
+                "Linear Rec.709 (sRGB)"
+            ]
+        },
+        {
+            "id": "png_display",
+            "name": "PNG Display",
+            "type": "select",
+            "value": "sRGB (ACES SDR Video)",
+            "options": [
+                "sRGB (ACES SDR Video)",
+                "Rec.709 (ACES SDR Video)",
+                "sRGB (Un-tone-mapped)"
+            ]
+        },
+        {
+            "id": "combine_exr",
+            "name": "Also One Multi-channel EXR per Frame",
+            "type": "checkbox",
+            "value": false
+        },
+        {
+            "id": "premultiply",
+            "name": "Premultiply Plate by the Matte (combined EXR)",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "split_core_edge",
+            "name": "Also Write Core and Edge Mattes",
+            "type": "checkbox",
+            "value": false
+        },
+        {
+            "id": "write_nuke_reads",
+            "name": "Nuke Script with a Read per Layer",
+            "type": "checkbox",
+            "value": true
         },
         {
             "id": "export_camera",

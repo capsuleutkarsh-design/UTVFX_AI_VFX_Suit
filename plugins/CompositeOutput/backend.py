@@ -1,13 +1,22 @@
+"""Unified Output: everything the graph made, delivered for comp.
+
+  <output>/<layer>/<shot>_<layer>.<frame>.exr   plate, keyed RGBA, mattes, depth (plate frame numbers)
+  <output>/combined/...                          optional one multi-channel EXR per frame
+  <output>/tracking/                             camera (camera.py)
+  <output>/roto/                                 Nuke roto shapes
+  <output>/<shot>_reads.nk                       a Read for every layer
+  <output>/<shot>_export.json                    what was written, colour spaces and frame ranges
+"""
 import os
-import cv2
-import numpy as np
-import traceback
-from PySide6.QtCore import QThread, Signal
+import shutil
 
-# Import our new exporter
 from plugins.CompositeOutput.roto_exporter import export_roto_to_nuke
-
 from utvfx.bridge.base_worker import BaseWorker
+
+
+def safe_name(text):
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(text)).strip("_") or "shot"
+
 
 class CompositeOutputWorker(BaseWorker):
     def __init__(self, node_id, params, inputs, cache_dir, output_dir, parent=None):
@@ -19,135 +28,105 @@ class CompositeOutputWorker(BaseWorker):
         self.depth_path = inputs.get("Dense Depth Map")
         self.tracking_path = inputs.get("3D Sparse Points") or inputs.get("3D Camera Path")
         self.shape_path = inputs.get("Shape Data")
-        
-        # Fallback if generic input key was passed or standard keys were missed
-        if not any([self.rgba_path, self.alpha_path, self.plate_path, self.depth_path]):
-            for k, val in inputs.items():
-                if val and os.path.exists(str(val)) and os.path.isdir(str(val)) and k not in ["3D Sparse Points", "3D Camera Path", "Shape Data"]:
-                    k_lower = k.lower()
-                    if "alpha" in k_lower or "matte" in k_lower:
-                        self.alpha_path = val
-                    elif "depth" in k_lower:
-                        self.depth_path = val
-                    elif "plate" in k_lower or "video" in k_lower or "rgb" in k_lower:
-                        self.plate_path = val
-                    else:
-                        self.rgba_path = val
-                    break
-        
+
         from utvfx.core.settings_manager import SettingsManager
+        settings = SettingsManager()
         # An absolute folder on the node wins; otherwise the project's output folder from Settings.
         chosen = params.get("output_dir") or ""
-        self.output_dir = chosen if os.path.isabs(chosen) else SettingsManager().get("output_dir")
+        self.output_dir = chosen if os.path.isabs(chosen) else settings.get("output_dir")
+        self.shot = safe_name(params.get("shot_name") or getattr(settings, "current_project_name", "shot"))
 
-    def cancel(self):
-        self.is_cancelled = True
+    def _exists(self, path):
+        return bool(path) and os.path.isdir(str(path))
 
-    def _export_image_sequence(self, input_dir, subfolder_name, bit_depth, gamma):
-        if not input_dir or not os.path.exists(str(input_dir)) or not os.path.isdir(str(input_dir)):
-            return 0
-            
-        target_dir = os.path.join(self.output_dir, subfolder_name)
-        os.makedirs(target_dir, exist_ok=True)
-        self.log_message.emit(self.node_id, f"Exporting {subfolder_name} sequence to: {target_dir}")
-        
-        frames = sorted([f for f in os.listdir(str(input_dir)) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.exr', '.tif'))])
-        total_frames = len(frames)
-        if total_frames == 0:
-            return 0
-            
-        os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
-        for i, frame_name in enumerate(frames):
-            if self.is_cancelled:
-                self.log_message.emit(self.node_id, f"Export cancelled during {subfolder_name}.")
-                return i
-                
-            frame_path = os.path.join(str(input_dir), frame_name)
-            img = cv2.imread(frame_path, cv2.IMREAD_UNCHANGED)
-            if img is None:
-                continue
-                
-            is_float = (img.dtype == np.float32 or img.dtype == np.float64)
-            if not is_float:
-                max_val = 65535.0 if img.dtype == np.uint16 else 255.0
-                img_float = img.astype(np.float32) / max_val
-            else:
-                img_float = img.copy()
-                
-            base_name = os.path.splitext(frame_name)[0]
-            
-            if "8-bit PNG" in bit_depth:
-                img_display = np.power(np.clip(img_float, 0.0, 1.0), 1.0 / gamma)
-                out_path = os.path.join(target_dir, f"{base_name}.png")
-                img_out = np.clip(img_display * 255.0, 0, 255).astype(np.uint8)
-                cv2.imwrite(out_path, img_out)
-            else:
-                # Default to EXR (16-bit Float EXR or 32-bit Float EXR) for VFX compositing workflows
-                out_path = os.path.join(target_dir, f"{base_name}.exr")
-                if "32-bit" in bit_depth:
-                    img_out = img_float.astype(np.float32)
-                else:
-                    img_out = img_float.astype(np.float16)
-                cv2.imwrite(out_path, img_out.astype(np.float32) if img_out.dtype == np.float16 else img_out)
-                
-            self.progress_update.emit(self.node_id, i + 1, total_frames)
-            
-        self.log_message.emit(self.node_id, f"Saved {total_frames} frames to {subfolder_name}/")
-        return total_frames
+    def _frame_numbers(self):
+        """Plate frame numbers inside the timeline's In/Out, taken from the first image layer wired."""
+        from utvfx.core.image_nodes import Frames
+        from utvfx.core.plate import find_sequence
+        for path, colour_layer in ((self.plate_path, True), (self.rgba_path, True), (self.alpha_path, False),
+                                   (self.depth_path, False)):
+            if self._exists(path):
+                sequence = Frames(path).sequence if colour_layer else find_sequence(path)
+                if sequence:
+                    return {sequence[i][0] for i in self.positions(len(sequence))}
+        return None
 
     def run_task(self):
-        self.log_message.emit(self.node_id, "Initializing Unified Output render...")
-        os.makedirs(self.output_dir, exist_ok=True)
-        self.log_message.emit(self.node_id, f"Output directory resolved to: {self.output_dir}")
+        from plugins.CompositeOutput import deliver
+        from plugins.CompositeOutput.images import ImageExporter
 
-        # 1. Camera: the tracker's solve through the Automated Tracker's writers (camera.py).
-        if self.tracking_path and os.path.isdir(self.tracking_path) and self.params.get("export_camera", True):
+        os.makedirs(self.output_dir, exist_ok=True)
+        self.log_message.emit(self.node_id, f"Writing to {self.output_dir} as shot '{self.shot}'.")
+        log = lambda text: self.log_message.emit(self.node_id, text)  # noqa: E731
+        numbers = self._frame_numbers() if self.frame_range else None
+        stage = {"n": 0}
+        stages = sum(1 for p in (self.plate_path, self.rgba_path, self.alpha_path, self.depth_path) if self._exists(p))
+        stages += bool(self.params.get("combine_exr")) + 1
+
+        def progress(done, total):
+            self.progress_update.emit(self.node_id, int(100 * (stage["n"] + done / max(total, 1)) / max(stages, 1)), 100)
+
+        images = ImageExporter(self.output_dir, self.shot, self.params, numbers, log,
+                               cancelled=lambda: self.is_cancelled, progress=progress)
+
+        def step(fn, *args):
+            if not self.is_cancelled:
+                fn(*args)
+                stage["n"] += 1
+
+        if self._exists(self.plate_path):
+            step(images.colour_layer, self.plate_path, "plate")
+        if self._exists(self.rgba_path):
+            step(images.colour_layer, self.rgba_path, "keyed")
+        if self._exists(self.alpha_path):
+            step(images.matte_layer, self.alpha_path, "matte", bool(self.params.get("split_core_edge", False)))
+        if self._exists(self.depth_path):
+            step(images.depth_layer, self.depth_path)
+        if self.params.get("combine_exr", False):
+            colour_source = self.rgba_path if self._exists(self.rgba_path) else self.plate_path
+            if self._exists(colour_source):
+                matte = None if colour_source == self.rgba_path else (self.alpha_path if self._exists(self.alpha_path) else None)
+                step(images.combined, colour_source, matte, self.depth_path if self._exists(self.depth_path) else None,
+                     bool(self.params.get("premultiply", True)))
+            else:
+                log("Combined EXR needs the plate or the keyed RGBA; skipped.")
+        if self.is_cancelled:
+            return
+
+        camera = None
+        if self._exists(self.tracking_path) and self.params.get("export_camera", True):
             import importlib
             from plugins.CompositeOutput.camera import export_camera
-            self.log_message.emit(self.node_id, "Exporting the camera...")
+            log("Exporting the camera...")
             colmap_exe = importlib.import_module("plugins.3DTracker.backend").COLMAP_EXE
-            result = export_camera(self.tracking_path, self.output_dir, self.params,
-                                   lambda text: self.log_message.emit(self.node_id, text), colmap_exe=colmap_exe)
-            self.log_message.emit(self.node_id, f"Camera: {result['frames_count']} frames, {result['points_count']} "
-                                                f"points -> {len(result['exported_files'])} files in tracking/.")
+            camera = export_camera(self.tracking_path, self.output_dir, self.params, log, colmap_exe=colmap_exe)
+            log(f"Camera: {camera['frames_count']} frames, {camera['points_count']} points -> "
+                f"{len(camera['exported_files'])} files in tracking/.")
 
-        # 1.5 Process Shape Data (Roto to Shape)
-        if self.shape_path and os.path.exists(self.shape_path):
-            if self.params.get("export_roto_nuke", True):
-                self.log_message.emit(self.node_id, "Found Roto Shape data. Exporting Nuke Roto generator (.nk)...")
+        roto = None
+        if self._exists(self.shape_path) and self.params.get("export_roto_nuke", True):
+            shapes_json = os.path.join(self.shape_path, "shapes.json")
+            if os.path.isfile(shapes_json):
                 roto_dir = os.path.join(self.output_dir, "roto")
                 os.makedirs(roto_dir, exist_ok=True)
-                shapes_json = os.path.join(self.shape_path, "shapes.json")
-                if os.path.exists(shapes_json):
-                    nk_script = os.path.join(roto_dir, "roto_shapes.nk")
-                    interp_mode = self.params.get("roto_interpolation", "Linear")
-                    export_roto_to_nuke(shapes_json, nk_script, interp_mode)
-                    self.log_message.emit(self.node_id, f"Exported Nuke Roto to {nk_script}")
-                    try:
-                        import shutil
-                        dest_json = os.path.join(roto_dir, "shapes.json")
-                        if os.path.abspath(shapes_json) != os.path.abspath(dest_json):
-                            shutil.copy2(shapes_json, dest_json)
-                    except Exception as e:
-                        self.log_message.emit(self.node_id, f"Note: could not copy shapes.json to roto folder: {e}")
-        
-        # 2. Process Image Sequences (Comp, Alpha, Plate, Depth, and Separate Layers)
-        gamma = float(self.params.get("gamma", 2.2))
-        bit_depth = self.params.get("bit_depth", "16-bit Float EXR")
-        
-        if self.rgba_path:
-            self._export_image_sequence(self.rgba_path, "comp", bit_depth, gamma)
-        if self.alpha_path:
-            self._export_image_sequence(self.alpha_path, "alpha", bit_depth, gamma)
-        if self.plate_path:
-            self._export_image_sequence(self.plate_path, "plate", bit_depth, gamma)
-        if self.depth_path:
-            self._export_image_sequence(self.depth_path, "depth", bit_depth, gamma)
-            
-        processed_dirs = {self.rgba_path, self.alpha_path, self.plate_path, self.depth_path, self.tracking_path, self.shape_path}
-        for k, val in self.inputs.items():
-            if val and val not in processed_dirs and os.path.exists(str(val)) and os.path.isdir(str(val)):
-                clean_folder = str(k).lower().replace(" ", "_").replace("/", "_")
-                self._export_image_sequence(val, clean_folder, bit_depth, gamma)
+                roto = os.path.join(roto_dir, f"{self.shot}_roto.py")
+                dest_json = os.path.join(roto_dir, f"{self.shot}_shapes.json")
+                shutil.copy2(shapes_json, dest_json)
+                export_roto_to_nuke(dest_json, roto, self.params.get("roto_interpolation", "Linear"))
+                log(f"Roto: {roto}")
 
-        self.log_message.emit(self.node_id, "Unified Output Complete!")
+        fps, size = None, (None, None)
+        from utvfx.core.plate import plate_for_folder
+        plate = plate_for_folder(self.plate_path) if self._exists(self.plate_path) else None
+        if plate is not None:
+            fps, size = plate.m.get("fps"), (plate.m.get("width"), plate.m.get("height"))
+        if images.layers and self.params.get("write_nuke_reads", True):
+            deliver.nuke_reads(os.path.join(self.output_dir, f"{self.shot}_reads.nk"), images.layers, fps, *size)
+        deliver.sidecar(os.path.join(self.output_dir, f"{self.shot}_export.json"), self.shot, images.layers, {
+            "fps": fps, "plate_size": list(size) if size[0] else None,
+            "frame_range": [min(numbers), max(numbers)] if numbers else None,
+            "camera": [os.path.relpath(p, self.output_dir) for p in camera["exported_files"]] if camera else None,
+            "roto": os.path.relpath(roto, self.output_dir) if roto else None,
+        })
+        self.progress_update.emit(self.node_id, 100, 100)
+        log("Unified Output complete.")

@@ -57,15 +57,25 @@ NODE_HELP_DATA = {
         }
     },
     "composite_output": {
-        "description": "The <b>Composite Output</b> node handles exporting the final result of your node graph to disk, or exporting camera and 3D data to external DCC software.",
+        "description": "The <b>Unified Output</b> node delivers everything for comp: the plate and keyed RGBA at full quality, mattes in the alpha channel and depth in Z (never colour-converted), the camera for Nuke, Blender and USD, and roto shapes. Files are named shot_layer.frame with the plate's frame numbers and follow the timeline's In/Out. A Nuke script with a Read for every layer and a JSON sidecar are written next to them.",
         "params": {
-            "output_dir": "The destination directory where the rendered image sequence or project data will be saved.",
-            "gamma": "Bakes a gamma curve into the output. Leave at 1.0 for linear output formats like EXR.",
-            "bit_depth": "The output precision. Use 16-bit or 32-bit float for EXR to preserve high dynamic range.",
-            "export_nuke": "Generates an automatic Nuke script (.nk) reproducing the 3D track, cameras, and compositing setup.",
-            "export_blender": "Generates a Python script that builds the 3D tracking scene and cameras directly inside Blender.",
-            "export_roto_nuke": "Exports AI-generated masks directly as Nuke Roto nodes with animated splines.",
-            "scene_scale": "Scales the exported 3D scene (cameras, point clouds) to match the world scale of your 3D software."
+            "output_dir": "Where to write. Blank uses the project's output folder from Settings.",
+            "shot_name": "Used in every file name. Blank uses the project name.",
+            "file_format": "EXR keeps the full range (half float is standard for comp; full float for data-heavy work). PNG is display-referred, for review.",
+            "exr_colourspace": "Colour space of the plate and keyed RGBA in EXR files. ACEScg matches the app's working space.",
+            "png_display": "The view transform used for PNG files.",
+            "combine_exr": "Also writes one EXR per frame with R, G, B, A and depth.Z together.",
+            "premultiply": "When the combined EXR takes its colour from the plate and its alpha from the matte, multiply the colour by the alpha.",
+            "split_core_edge": "Also writes the matte's solid core and its soft edge as separate mattes.",
+            "write_nuke_reads": "Writes shot_reads.nk with a Read node for every layer; mattes and depth are read raw.",
+            "export_camera": "Writes the 3D Tracker's camera for Nuke (.nk and .chan), Blender, USD (if installed) and a PLY point cloud.",
+            "scene_scale": "Multiplies the whole scene. COLMAP's units are arbitrary; set this so a known distance comes out right.",
+            "level_ground": "Rotates the scene so the ground found in the point cloud is level.",
+            "write_undistort": "Writes STMaps (undistort and redistort) and an undistorted plate for the solved lens.",
+            "overscan": "Extra border around the undistorted plate so the barrel's corners are not cut (0.1 = 10%).",
+            "blender_exe": "Path to blender.exe. When set, the camera is also baked to Alembic (.abc) and a .blend.",
+            "export_roto_nuke": "Writes a Python script that builds Nuke Roto shapes from Roto to Shape or AI Roto.",
+            "roto_interpolation": "How the roto shapes move between keyframes in Nuke."
         }
     },
     "roto_to_shape": {
