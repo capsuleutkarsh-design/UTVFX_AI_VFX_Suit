@@ -329,7 +329,12 @@ def setup_git_submodules():
         return
     try:
         subprocess.check_call(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        subprocess.check_call(["git", "submodule", "update", "--init", "--recursive"], cwd=ROOT)
+        # Only the pinned commit of each submodule is needed. CorridorKey's full history is so
+        # large that a normal clone of it fails ("invalid index-pack output").
+        try:
+            subprocess.check_call(["git", "submodule", "update", "--init", "--recursive", "--depth", "1"], cwd=ROOT)
+        except subprocess.CalledProcessError:
+            subprocess.check_call(["git", "submodule", "update", "--init", "--recursive"], cwd=ROOT)
         print("[OK] Git submodules initialized.")
     except Exception as e:
         print(f"[WARNING] Could not update git submodules: {e}")

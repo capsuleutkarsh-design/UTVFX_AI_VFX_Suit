@@ -35,7 +35,7 @@ There is one supported way to install: `first_setup.py`. `install.bat` is a thin
 
 1. Clone the repository with its submodules:
    ```bat
-   git clone --recurse-submodules https://github.com/capsuleutkarsh-design/UTVFX_AI_VFX_Suit.git
+   git clone --recurse-submodules --shallow-submodules https://github.com/capsuleutkarsh-design/UTVFX_AI_VFX_Suit.git
    cd UTVFX_AI_VFX_Suit
    ```
 2. Run the installer:
