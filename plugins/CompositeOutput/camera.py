@@ -122,6 +122,9 @@ def export_camera(tracking_cache, output_dir, params, log, colmap_exe=None):
         shutil.copy2(os.path.join(model, "cameras.txt"), os.path.join(scene, "sparse", "cameras.txt"))
     shutil.copy2(os.path.join(model, "points3D.txt"), os.path.join(scene, "sparse", "points3D.txt"))
     renumber_images_txt(os.path.join(model, "images.txt"), os.path.join(scene, "sparse", "images.txt"), frames, first)
+    mesh = os.path.join(sparse, "environment_mesh.ply")
+    if os.path.isfile(mesh):
+        shutil.copy2(mesh, os.path.join(scene, "environment_mesh.ply"))  # the writers load it from here
     work_images = os.path.join(tracking_cache, "work", "images")
     if os.path.isdir(work_images):
         link_frames(work_images, os.path.join(scene, "images"), frames, first)

@@ -10,7 +10,7 @@ from PySide6.QtGui import QColor
 
 from utvfx.ui import icons, theme
 from utvfx.ui.number_field import NumberField
-from utvfx.ui.param_undo import push_param
+from utvfx.ui.param_undo import push_param, push_params
 from utvfx.ui.swatch import SwatchButton
 
 # Width of the label column, so every parameter row lines up.
@@ -36,6 +36,36 @@ def sentence_case(text):
         return word
 
     return re.sub(r"[A-Za-z]+", visit, text)
+
+
+def push_with_presets(panel, node, param, old, new_val, description):
+    """Push one edit, keeping shot presets honest.
+
+    A select parameter with "presets" ({option: {param id: value}}) sets every value its
+    choice lists, as one undo step. Changing by hand a value the current preset set turns
+    that preset to its non-preset option ("Custom"), so the panel never claims a preset
+    that is not what will run.
+    """
+    pid = param["id"]
+    params_def = (getattr(panel, "node_def", None) or {}).get("parameters", [])
+    defaults = {p["id"]: p["value"] for p in params_def}
+
+    def value_of(p):
+        return node.params.get(p, defaults.get(p))
+
+    presets = param.get("presets")
+    if presets and new_val in presets:
+        changes = [(pid, old, new_val, False)] + [(k, value_of(k), v, False) for k, v in presets[new_val].items()]
+        return push_params(node, changes, f"Preset: {new_val}")
+    for other in params_def:
+        table = other.get("presets")
+        chosen = table.get(value_of(other["id"]), {}) if table else {}
+        if pid in chosen and chosen[pid] != new_val:
+            custom = next((o for o in other.get("options", []) if o not in table), None)
+            if custom:
+                return push_params(node, [(pid, old, new_val, False),
+                                          (other["id"], value_of(other["id"]), custom, False)], description)
+    return push_param(node, pid, old, new_val, description)
 
 
 def build_param_widget(panel, param, color):
@@ -80,7 +110,7 @@ def build_param_widget(panel, param, color):
     def push(new_val, description=None, old_val=None):
         """One undoable edit of this parameter (skipped when nothing changed)."""
         old = current() if old_val is None else old_val
-        return push_param(node, pid, old, new_val, description or f"Change {label_text.lower()}")
+        return push_with_presets(panel, node, param, old, new_val, description or f"Change {label_text.lower()}")
 
     # Every row can be re-synced from the node (after undo/redo) without a rebuild.
     container.param_id = pid

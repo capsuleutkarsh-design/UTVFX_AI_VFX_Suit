@@ -51,6 +51,7 @@ FEATURES = {
 }
 VOCAB_TREE = "vocab_tree_faiss_flickr100K_words256K.bin"
 RETRY_BELOW = 0.9      # coverage under which the mapper ladder tries again
+MESH_TIMEOUT = 90      # seconds; see the environment mesh step
 MIN_POINTS = 30        # fewer points than max(this, 2 per frame) = a collapsed solve
 # COLMAP logs every step at INFO level; the node log keeps warnings, errors and these results.
 KEEP_INFO = ("reconstruction(s)", "Registered images", "Mean reprojection error", "Global mapping failed",
@@ -89,14 +90,16 @@ def cuda_library_dirs():
     return [lib] if os.path.isfile(os.path.join(lib, "cublasLt64_12.dll")) else []
 
 
-def mapper_args(tri_angle=2.5, inliers=40, abs_inliers=None, forward=1.0, trials=500, refine=True, extra=()):
+def mapper_args(tri_angle=2.5, inliers=40, abs_inliers=None, forward=1.0, trials=500, refine=True, gpu=True,
+                extra=()):
     """The Automated Tracker's incremental mapper settings."""
     r = "1" if refine else "0"
     args = ["--Mapper.init_min_tri_angle", str(tri_angle), "--Mapper.init_min_num_inliers", str(inliers),
             "--Mapper.abs_pose_min_num_inliers", str(abs_inliers or max(15, inliers // 2)),
             "--Mapper.init_max_forward_motion", str(forward), "--Mapper.init_num_trials", str(trials),
             "--Mapper.ba_refine_focal_length", r, "--Mapper.ba_refine_extra_params", r,
-            "--Mapper.ba_refine_principal_point", "0", "--Mapper.num_threads", str(os.cpu_count() or 4)]
+            "--Mapper.ba_refine_principal_point", "0", "--Mapper.num_threads", str(os.cpu_count() or 4),
+            "--Mapper.ba_use_gpu", "1" if gpu else "0"]
     return args + list(extra)
 
 
@@ -120,14 +123,23 @@ class TrackerWorker(BaseWorker):
             self.process.kill()
 
     # ---- running COLMAP ---------------------------------------------------
-    def _run(self, args, check=True):
-        """Run one COLMAP command. Returns True on success; raises on failure when `check`."""
+    def _run(self, args, check=True, timeout=None):
+        """Run one COLMAP command. Returns True on success; raises on failure when `check`.
+
+        With `timeout` (seconds) the command is stopped when it runs longer and counts as failed.
+        """
         if self.is_cancelled:
             return False
         cmd = [COLMAP_EXE] + [str(a) for a in args]
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
         self.process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                                         text=True, encoding="utf-8", errors="replace", env=self.env, creationflags=flags)
+        timer = None
+        if timeout:
+            import threading
+            timer = threading.Timer(timeout, self.process.kill)
+            timer.daemon = True
+            timer.start()
         tail = []
         for line in self.process.stdout:
             line = line.rstrip()
@@ -140,6 +152,8 @@ class TrackerWorker(BaseWorker):
                 line = line.split("] ", 1)[-1] if line[0] == "I" else line
             self.log_message.emit(self.node_id, line)
         self.process.wait()
+        if timer is not None:
+            timer.cancel()
         code = self.process.returncode
         if self.is_cancelled:
             return False
@@ -159,6 +173,13 @@ class TrackerWorker(BaseWorker):
         if len(sequence) < 3:
             raise Exception("The tracker needs at least 3 frames.")
         sequence = [sequence[i] for i in self.positions(len(sequence))]
+        step = max(1, int(self.params.get("frame_step", 1) or 1))
+        if step > 1:
+            sequence = sequence[::step]
+            self.log_message.emit(self.node_id, f"Frame step {step}: solving every {step}th frame "
+                                                f"({len(sequence)} frames); the camera is keyed on those frames.")
+        if len(sequence) < 3:
+            raise Exception("Fewer than 3 frames to solve; lower the frame step or widen In/Out.")
         pixel_aspect = float(plate.m.get("pixel_aspect", 1.0)) if plate else 1.0
         working_scale = float(plate.m.get("working_scale", 1.0)) if plate else 1.0
 
@@ -238,7 +259,12 @@ class TrackerWorker(BaseWorker):
         extractor, matcher, ext_models, match_models, max_opt = FEATURES[feature_name]
         camera_model = self.params.get("camera_model", "SIMPLE_RADIAL")
         refine = bool(self.params.get("refine_lens", True))
-        solver = self.params.get("solver", "Global (GLOMAP, fast)")
+        solver = self.params.get("solver", "Incremental (robust)")
+        gpu = bool(self.params.get("gpu_features", True))
+        gpu_ba = bool(self.params.get("gpu_ba", True))
+        single = bool(self.params.get("single_camera", True))
+        base = dict(tri_angle=float(self.params.get("tri_angle", 2.5)), inliers=int(self.params.get("inliers", 40)),
+                    forward=float(self.params.get("forward_motion", 1.0)), refine=refine, gpu=gpu_ba)
 
         self.log_message.emit(self.node_id, "Preparing frames...")
         prep = self._prepare_frames(images_dir, masks_dir)
@@ -249,8 +275,8 @@ class TrackerWorker(BaseWorker):
 
         self.log_message.emit(self.node_id, f"Finding features ({feature_name}) in {total} frames...")
         args = ["feature_extractor", "--database_path", db, "--image_path", images_dir,
-                "--ImageReader.camera_model", camera_model, "--ImageReader.single_camera", "1",
-                "--FeatureExtraction.type", extractor, "--FeatureExtraction.use_gpu", "1",
+                "--ImageReader.camera_model", camera_model, "--ImageReader.single_camera", "1" if single else "0",
+                "--FeatureExtraction.type", extractor, "--FeatureExtraction.use_gpu", "1" if gpu else "0",
                 "--FeatureExtraction.max_image_size", str(int(self.params.get("max_image_size", 3200))),
                 max_opt, str(int(self.params.get("max_features", 8192)))]
         for option, name in ext_models.items():
@@ -271,7 +297,7 @@ class TrackerWorker(BaseWorker):
 
         self.log_message.emit(self.node_id, "Matching frames...")
         args = ["sequential_matcher", "--database_path", db, "--FeatureMatching.type", matcher,
-                "--FeatureMatching.use_gpu", "1", "--SequentialMatching.overlap", str(int(self.params.get("overlap", 35)))]
+                "--FeatureMatching.use_gpu", "1" if gpu else "0", "--SequentialMatching.overlap", str(int(self.params.get("overlap", 35)))]
         for option, name in match_models.items():
             args += [option, local_model(name)]
         if extractor == "SIFT" and self.params.get("loop_detection", True):
@@ -303,13 +329,22 @@ class TrackerWorker(BaseWorker):
                 shutil.copy2(db, calibrated)
                 self._run(["view_graph_calibrator", "--database_path", calibrated], check=False)
                 global_map(calibrated, "sparse_global_calibrated")
+        elif solver.startswith("Hierarchical"):
+            # Splits a long shot into overlapping clusters, solves them and merges them.
+            self.log_message.emit(self.node_id, "Solving with the hierarchical mapper (clusters, for long shots)...")
+            folder = os.path.join(work, "sparse_hierarchical")
+            os.makedirs(folder)
+            self._run(["hierarchical_mapper", "--database_path", db, "--image_path", images_dir,
+                       "--output_path", folder] + mapper_args(**base), check=False)
+            candidates.append(folder)
         if self.is_cancelled:
             return
 
-        ladder = [("sparse", mapper_args(refine=refine)),
-                  ("sparse_wide", mapper_args(8, 60, 15, refine=refine)),
-                  ("sparse_relaxed", mapper_args(0.5, 15, 10, trials=1000, refine=refine,
-                                                 extra=["--Mapper.filter_min_tri_angle", "0.5"]))]
+        # The node's thresholds first, then the Automated Tracker's wider and more relaxed tries.
+        ladder = [("sparse", mapper_args(**base)),
+                  ("sparse_wide", mapper_args(8, 60, 15, forward=base["forward"], refine=refine, gpu=gpu_ba)),
+                  ("sparse_relaxed", mapper_args(0.5, 15, 10, forward=base["forward"], trials=1000, refine=refine,
+                                                 gpu=gpu_ba, extra=["--Mapper.filter_min_tri_angle", "0.5"]))]
         for folder_name, extra in ladder:
             best = self._best(candidates)
             have = model_stats(best)[0] if best else 0
@@ -361,10 +396,23 @@ class TrackerWorker(BaseWorker):
         final = os.path.join(out, "0")
         shutil.copytree(best, final)
         self._run(["model_converter", "--input_path", final, "--output_path", final, "--output_type", "TXT"])
+        if self.params.get("environment_mesh", True) and not self.is_cancelled:
+            # A rough surface from the point cloud (for shadows, collisions, placing CG).
+            mesh = os.path.join(out, "environment_mesh.ply")
+            self.log_message.emit(self.node_id, "Meshing the point cloud...")
+            # COLMAP's mesher can hang on some point clouds (seen on a real 1080 solve); a
+            # sparse cloud meshes in a second or two, so it gets 90 s and is then stopped.
+            if not self._run(["delaunay_mesher", "--input_path", final, "--input_type", "sparse",
+                              "--output_path", mesh], check=False, timeout=MESH_TIMEOUT) or not os.path.isfile(mesh):
+                if os.path.isfile(mesh):
+                    os.remove(mesh)
+                self.log_message.emit(self.node_id, "The point cloud could not be meshed (the mesher failed or took "
+                                                    "too long); no environment mesh. The camera is not affected.")
         plate = prep["plate"]
         solve = {
             "version": 1,
             "features": feature_name, "solver": solver, "camera_model": camera_model,
+            "frame_step": max(1, int(self.params.get("frame_step", 1) or 1)), "single_camera": single,
             "frames": prep["names"], "registered": numbers, "missing": missing,
             "image_width": prep["size"][0], "image_height": prep["size"][1],
             "plate_width": plate.m["width"] if plate else None, "plate_height": plate.m["height"] if plate else None,

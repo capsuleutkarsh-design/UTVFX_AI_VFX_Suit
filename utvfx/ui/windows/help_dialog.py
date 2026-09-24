@@ -138,7 +138,16 @@ NODE_HELP_DATA = {
     "sfm_tracker": {
         "description": "The <b>3D Camera Tracker</b> solves the camera move and a point cloud with COLMAP 4.2, using the same pipeline as the Automated Tracker. Wire a matte of moving objects (people, cars) into Moving Objects Matte so they don't steer the camera. Frames keep their plate numbers; squeezed plates are de-squeezed first.",
         "params": {
-            "solver": "Global (GLOMAP) is fast and handles long shots; Incremental is slower but can solve harder shots. Either way, the incremental mapper tries again with looser settings if under 90% of frames solve.",
+            "preset": "A starting point for a type of camera move, taken from the Automated Tracker: Handheld/Walking, Long shot, Drone/Orbit, Slow motion, Fast action, Action cam/Fisheye, 360 VR. It sets the solver, lens model and the thresholds below; change any of them and the preset shows Custom.",
+            "solver": "Incremental adds frames one by one: the most reliable (the Automated Tracker's default). Global (GLOMAP) solves all frames at once: fast. Hierarchical splits a long shot into clusters and merges them. Whichever you pick, the incremental mapper tries again with looser settings if under 90% of frames solve.",
+            "tri_angle": "Parallax the first pair of frames must show before the solve starts. Lower for walking and dolly shots, higher for orbits.",
+            "inliers": "How many checked matches the first pair of frames needs. Higher is stricter.",
+            "forward_motion": "How much a starting pair may move straight forward. 1.0 allows walk-forward shots, which COLMAP otherwise rejects.",
+            "frame_step": "1 solves every frame. 2 solves every second frame, which widens the baseline on slow moves; the camera is keyed on the solved frames.",
+            "single_camera": "One lens for the whole shot. Turn off for zooms: each frame then gets its own focal length (the exported camera uses the first frame's lens).",
+            "gpu_features": "Find and match features on the GPU (much faster). Turn off only if the GPU runs out of memory.",
+            "gpu_ba": "Run bundle adjustment on the GPU. Turn off to solve on the CPU.",
+            "environment_mesh": "Also mesh the point cloud into a rough surface (environment_mesh.ply) for shadows, collisions or placing CG. It goes into the camera export.",
             "features": "SIFT is fastest. LightGlue matches more reliably. ALIKED + LightGlue (AI) copes better with blur, low texture and lighting changes. LoMa is the strongest and slowest.",
             "max_features": "Most points found per frame. More gives a denser cloud and a sturdier solve, but takes longer.",
             "max_image_size": "Frames larger than this are scaled down for finding features.",

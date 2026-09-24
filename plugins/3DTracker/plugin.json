@@ -13,44 +13,128 @@
     ],
     "parameters": [
         {
+            "id": "preset",
+            "name": "Shot Preset",
+            "tab": "Solve",
+            "type": "select",
+            "value": "Handheld / Walking (Recommended)",
+            "options": [
+                "Handheld / Walking (Recommended)",
+                "Long Shot (hierarchical)",
+                "Drone / Aerial Orbit",
+                "Slow / Subtle Motion",
+                "Fast Action / Quick Turns",
+                "Action Cam / GoPro / Fisheye",
+                "360 VR (raw fisheye lenses)",
+                "Fast Global Solve (GLOMAP)",
+                "Standard COLMAP defaults",
+                "Custom"
+            ],
+            "presets": {
+                "Handheld / Walking (Recommended)": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 2.5,
+                    "forward_motion": 1.0,
+                    "overlap": 35,
+                    "inliers": 40,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Long Shot (hierarchical)": {
+                    "solver": "Hierarchical (long shots)",
+                    "tri_angle": 2.5,
+                    "forward_motion": 1.0,
+                    "overlap": 35,
+                    "inliers": 40,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Drone / Aerial Orbit": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 12.0,
+                    "forward_motion": 0.95,
+                    "overlap": 20,
+                    "inliers": 100,
+                    "camera_model": "OPENCV",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Slow / Subtle Motion": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 3.0,
+                    "forward_motion": 1.0,
+                    "overlap": 15,
+                    "inliers": 40,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 2
+                },
+                "Fast Action / Quick Turns": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 8.0,
+                    "forward_motion": 1.0,
+                    "overlap": 30,
+                    "inliers": 50,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Action Cam / GoPro / Fisheye": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 6.0,
+                    "forward_motion": 1.0,
+                    "overlap": 20,
+                    "inliers": 60,
+                    "camera_model": "OPENCV_FISHEYE",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "360 VR (raw fisheye lenses)": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 3.0,
+                    "forward_motion": 1.0,
+                    "overlap": 25,
+                    "inliers": 50,
+                    "camera_model": "OPENCV_FISHEYE",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Fast Global Solve (GLOMAP)": {
+                    "solver": "Global (GLOMAP, fast)",
+                    "tri_angle": 2.5,
+                    "forward_motion": 1.0,
+                    "overlap": 35,
+                    "inliers": 40,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 1
+                },
+                "Standard COLMAP defaults": {
+                    "solver": "Incremental (robust)",
+                    "tri_angle": 16.0,
+                    "forward_motion": 1.0,
+                    "overlap": 15,
+                    "inliers": 100,
+                    "camera_model": "SIMPLE_RADIAL",
+                    "single_camera": true,
+                    "frame_step": 1
+                }
+            },
+            "tooltip": "Starting point for a type of camera move, from the Automated Tracker. It sets the solver, lens model and solve thresholds below; every value stays editable (the preset then shows Custom)."
+        },
+        {
             "id": "solver",
             "name": "Solver",
-            "type": "radio",
-            "value": "Global (GLOMAP, fast)",
+            "type": "select",
+            "value": "Incremental (robust)",
             "options": [
                 "Global (GLOMAP, fast)",
-                "Incremental (robust)"
-            ]
-        },
-        {
-            "id": "features",
-            "name": "Features",
-            "type": "select",
-            "value": "SIFT (classic, fastest)",
-            "options": [
-                "SIFT (classic, fastest)",
-                "SIFT + LightGlue",
-                "ALIKED + LightGlue (AI)",
-                "LoMa (AI, strongest, slow)"
-            ]
-        },
-        {
-            "id": "max_features",
-            "name": "Max Features per Frame",
-            "type": "slider",
-            "value": 8192,
-            "min": 1024,
-            "max": 32768,
-            "step": 1024
-        },
-        {
-            "id": "max_image_size",
-            "name": "Max Image Size (px)",
-            "type": "slider",
-            "value": 3200,
-            "min": 1024,
-            "max": 8192,
-            "step": 256
+                "Incremental (robust)",
+                "Hierarchical (long shots)"
+            ],
+            "tab": "Solve"
         },
         {
             "id": "camera_model",
@@ -62,32 +146,40 @@
                 "RADIAL",
                 "OPENCV",
                 "OPENCV_FISHEYE",
+                "FULL_OPENCV",
                 "PINHOLE"
-            ]
+            ],
+            "tab": "Solve"
         },
         {
-            "id": "focal_mm",
-            "name": "Known Focal Length (mm, 0 = unknown)",
+            "id": "tri_angle",
+            "name": "Min Triangulation (deg)",
+            "tab": "Solve",
             "type": "slider",
-            "value": 0,
-            "min": 0,
-            "max": 300,
+            "value": 2.5,
+            "min": 0.5,
+            "max": 30.0,
             "step": 0.5
         },
         {
-            "id": "sensor_width_mm",
-            "name": "Sensor Width (mm)",
+            "id": "inliers",
+            "name": "Min Initial Inliers",
+            "tab": "Solve",
             "type": "slider",
-            "value": 24.89,
-            "min": 4,
-            "max": 70,
-            "step": 0.01
+            "value": 40,
+            "min": 15,
+            "max": 500,
+            "step": 5
         },
         {
-            "id": "refine_lens",
-            "name": "Refine Focal Length and Distortion",
-            "type": "checkbox",
-            "value": true
+            "id": "forward_motion",
+            "name": "Forward Motion Allowance",
+            "tab": "Solve",
+            "type": "slider",
+            "value": 1.0,
+            "min": 0.5,
+            "max": 1.0,
+            "step": 0.05
         },
         {
             "id": "overlap",
@@ -96,11 +188,104 @@
             "value": 35,
             "min": 5,
             "max": 100,
+            "step": 1,
+            "tab": "Solve"
+        },
+        {
+            "id": "frame_step",
+            "name": "Frame Step",
+            "tab": "Solve",
+            "type": "slider",
+            "value": 1,
+            "min": 1,
+            "max": 10,
             "step": 1
+        },
+        {
+            "id": "single_camera",
+            "name": "Single Camera (off for zooms)",
+            "tab": "Solve",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "refine_lens",
+            "name": "Refine Focal Length and Distortion",
+            "type": "checkbox",
+            "value": true,
+            "tab": "Solve"
+        },
+        {
+            "id": "focal_mm",
+            "name": "Known Focal Length (mm, 0 = unknown)",
+            "type": "slider",
+            "value": 0,
+            "min": 0,
+            "max": 300,
+            "step": 0.5,
+            "tab": "Lens"
+        },
+        {
+            "id": "sensor_width_mm",
+            "name": "Sensor Width (mm)",
+            "type": "slider",
+            "value": 24.89,
+            "min": 4,
+            "max": 70,
+            "step": 0.01,
+            "tab": "Lens"
+        },
+        {
+            "id": "features",
+            "name": "Features",
+            "type": "select",
+            "value": "SIFT (classic, fastest)",
+            "options": [
+                "SIFT (classic, fastest)",
+                "SIFT + LightGlue",
+                "ALIKED + LightGlue (AI)",
+                "LoMa (AI, strongest, slow)"
+            ],
+            "tab": "Features"
+        },
+        {
+            "id": "max_features",
+            "name": "Max Features per Frame",
+            "type": "slider",
+            "value": 8192,
+            "min": 1024,
+            "max": 32768,
+            "step": 1024,
+            "tab": "Features"
+        },
+        {
+            "id": "max_image_size",
+            "name": "Max Image Size (px)",
+            "type": "slider",
+            "value": 4096,
+            "min": 1024,
+            "max": 8192,
+            "step": 256,
+            "tab": "Features"
         },
         {
             "id": "loop_detection",
             "name": "Loop Detection (SIFT)",
+            "type": "checkbox",
+            "value": true,
+            "tab": "Features"
+        },
+        {
+            "id": "gpu_features",
+            "name": "GPU Features and Matching",
+            "tab": "Features",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "gpu_ba",
+            "name": "GPU Bundle Adjustment",
+            "tab": "Features",
             "type": "checkbox",
             "value": true
         },
@@ -111,7 +296,8 @@
             "value": 8,
             "min": 0,
             "max": 50,
-            "step": 1
+            "step": 1,
+            "tab": "Features"
         },
         {
             "id": "min_coverage",
@@ -120,7 +306,15 @@
             "value": 0.5,
             "min": 0.1,
             "max": 1.0,
-            "step": 0.05
+            "step": 0.05,
+            "tab": "Output"
+        },
+        {
+            "id": "environment_mesh",
+            "name": "Environment Mesh",
+            "tab": "Output",
+            "type": "checkbox",
+            "value": true
         }
     ],
     "worker_module": "plugins.3DTracker.backend",

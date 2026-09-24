@@ -58,8 +58,10 @@ class FakeColmap:
         self.registered_all = registered_all
         self.calls = []
 
-    def __call__(self, worker, args, check=True):
+    def __call__(self, worker, args, check=True, timeout=None):
         self.calls.append(list(args))
+        self.timeouts = getattr(self, 'timeouts', {})
+        self.timeouts[args[0]] = timeout
         command = args[0]
         if command == "feature_extractor":
             assert not os.path.exists(args[args.index("--database_path") + 1])  # fresh database
@@ -75,12 +77,14 @@ class FakeColmap:
 
 
 def run(tmp_path, monkeypatch, fake, plate_folder, matte=None, frame_range=None, **params):
-    monkeypatch.setattr(tracker.TrackerWorker, "_run", lambda self, args, check=True: fake(self, args, check))
+    monkeypatch.setattr(tracker.TrackerWorker, "_run",
+                        lambda self, args, check=True, timeout=None: fake(self, args, check, timeout))
     monkeypatch.setattr(tracker, "model_error", lambda model, exe: 0.6)
     monkeypatch.setattr(tracker, "local_model", lambda name: os.path.join("models", "COLMAP", name))
     inputs = {"Video Plate": plate_folder}
     if matte:
         inputs["Moving Objects Matte"] = str(matte)
+    params = dict({"solver": "Global (GLOMAP, fast)"}, **params)
     w = tracker.TrackerWorker("t", params, inputs, str(tmp_path / "trk"), str(tmp_path))
     w.frame_range = frame_range
     logs = []
@@ -127,13 +131,13 @@ def test_no_ladder_when_the_global_mapper_solves_everything(tmp_path, monkeypatc
 
 def test_too_few_frames_is_an_error_with_the_missing_ranges(tmp_path, monkeypatch, plate_folder):
     class Nothing(FakeColmap):
-        def __call__(self, worker, args, check=True):
+        def __call__(self, worker, args, check=True, timeout=None):
             if args[0] == "mapper":
                 write_model(os.path.join(args[args.index("--output_path") + 1], "0"), NUMBERS[:3])
                 return True
             if args[0] == "image_registrator":
                 return False
-            return super().__call__(worker, args, check)
+            return super().__call__(worker, args, check, timeout)
     with pytest.raises(RuntimeError, match="1004-1010"):
         run(tmp_path, monkeypatch, Nothing(None), plate_folder)
 
@@ -166,13 +170,77 @@ def test_known_lens_sets_starting_intrinsics(tmp_path, monkeypatch, plate_folder
 
 def test_a_collapsed_solve_is_not_accepted(tmp_path, monkeypatch, plate_folder):
     class Collapsed(FakeColmap):
-        def __call__(self, worker, args, check=True):
+        def __call__(self, worker, args, check=True, timeout=None):
             if args[0] == "global_mapper":
                 write_model(os.path.join(args[args.index("--output_path") + 1], "0"), NUMBERS, points=3)
                 return True
-            return super().__call__(worker, args, check)
+            return super().__call__(worker, args, check, timeout)
     fake = Collapsed(None)
     out, logs = run(tmp_path, monkeypatch, fake, plate_folder)
     assert "mapper" in [c[0] for c in fake.calls]  # the ladder ran instead of trusting 3 points
     assert json.load(open(out / "sparse" / "solve.json"))["points"] >= 30
     assert any("degenerate" in l for l in logs)
+
+
+def arg(call, option):
+    return call[call.index(option) + 1]
+
+
+def test_automated_tracker_controls_reach_colmap(tmp_path, monkeypatch, plate_folder):
+    fake = FakeColmap(None)
+    run(tmp_path, monkeypatch, fake, plate_folder, solver="Incremental (robust)", tri_angle=12.0, inliers=100,
+        forward_motion=0.95, single_camera=False, gpu_features=False, gpu_ba=False, frame_step=2)
+    extract = next(c for c in fake.calls if c[0] == "feature_extractor")
+    match = next(c for c in fake.calls if c[0] == "sequential_matcher")
+    mapper = next(c for c in fake.calls if c[0] == "mapper")
+    assert arg(extract, "--ImageReader.single_camera") == "0" and arg(extract, "--FeatureExtraction.use_gpu") == "0"
+    assert arg(match, "--FeatureMatching.use_gpu") == "0"
+    assert (arg(mapper, "--Mapper.init_min_tri_angle"), arg(mapper, "--Mapper.init_min_num_inliers"),
+            arg(mapper, "--Mapper.init_max_forward_motion"), arg(mapper, "--Mapper.ba_use_gpu")) == ("12.0", "100", "0.95", "0")
+    assert "global_mapper" not in [c[0] for c in fake.calls]
+    # Frame step 2: every second frame of the plate.
+    assert sorted(os.listdir(tmp_path / "trk" / "work" / "images")) == [f"frame_{n:06d}.jpg" for n in NUMBERS[::2]]
+
+
+def test_hierarchical_solver_and_environment_mesh(tmp_path, monkeypatch, plate_folder):
+    class Meshing(FakeColmap):
+        def __call__(self, worker, args, check=True, timeout=None):
+            if args[0] == "hierarchical_mapper":
+                self.calls.append(list(args))
+                write_model(os.path.join(args[args.index("--output_path") + 1], "0"), NUMBERS, points=80)
+                return True
+            if args[0] == "delaunay_mesher":
+                self.calls.append(list(args))
+                open(args[args.index("--output_path") + 1], "w").close()
+                return True
+            return super().__call__(worker, args, check, timeout)
+    fake = Meshing(None)
+    out, _ = run(tmp_path, monkeypatch, fake, plate_folder, solver="Hierarchical (long shots)")
+    commands = [c[0] for c in fake.calls]
+    assert "hierarchical_mapper" in commands and "mapper" not in commands  # it solved every frame
+    assert (out / "sparse" / "environment_mesh.ply").exists()
+
+
+def test_presets_set_their_values_and_editing_one_makes_it_custom():
+    import json as _json
+    from utvfx.ui.panels.param_widgets import push_with_presets
+    definition = _json.load(open(os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                                              "plugins", "3DTracker", "plugin.json"), encoding="utf-8"))
+    panel = type("Panel", (), {"node_def": definition})()
+    node = type("Node", (), {"params": {}, "node_id": "t", "scene": lambda self: None})()
+    preset = next(p for p in definition["parameters"] if p["id"] == "preset")
+    tri = next(p for p in definition["parameters"] if p["id"] == "tri_angle")
+    push_with_presets(panel, node, preset, preset["value"], "Drone / Aerial Orbit", "preset")
+    assert (node.params["preset"], node.params["tri_angle"], node.params["camera_model"]) ==         ("Drone / Aerial Orbit", 12.0, "OPENCV")
+    push_with_presets(panel, node, tri, 12.0, 4.0, "tri")
+    assert node.params["tri_angle"] == 4.0 and node.params["preset"] == "Custom"
+
+
+def test_a_hung_mesher_cannot_block_the_solve(tmp_path, monkeypatch, plate_folder):
+    """COLMAP's delaunay_mesher can hang: it runs with a time limit, and a failed mesh only logs."""
+    fake = FakeColmap(NUMBERS)
+    out, logs = run(tmp_path, monkeypatch, fake, plate_folder)
+    assert fake.timeouts["delaunay_mesher"] == tracker.MESH_TIMEOUT
+    assert not (out / "sparse" / "environment_mesh.ply").exists()  # the fake mesher wrote nothing
+    assert any("no environment mesh" in l for l in logs)
+    assert (out / "sparse" / "solve.json").exists()
