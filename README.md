@@ -38,6 +38,7 @@ There is one supported way to install: `first_setup.py`. `install.bat` is a thin
    git clone --recurse-submodules --shallow-submodules https://github.com/capsuleutkarsh-design/UTVFX_AI_VFX_Suit.git
    cd UTVFX_AI_VFX_Suit
    ```
+   Clone into a short folder such as `C:\Contour` or your Documents folder. Windows limits paths to 260 characters, and a very deep folder makes the CorridorKey submodule fail with "Filename too long" (or run `git config --global core.longpaths true` first).
 2. Run the installer:
    ```bat
    install.bat

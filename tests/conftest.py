@@ -107,3 +107,14 @@ def node_scene(qapp):
     scene.connections.clear()
     scene.deleteLater()
     qapp.processEvents()
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tests marked `models` need the downloaded weights; on a fresh clone they are skipped, not failed."""
+    weights = os.path.join(ROOT, "models", "ViTMatte", "model.safetensors")
+    if os.path.isfile(weights):
+        return
+    skip = pytest.mark.skip(reason="model weights not installed (run first_setup.py)")
+    for item in items:
+        if "models" in item.keywords:
+            item.add_marker(skip)

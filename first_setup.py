@@ -329,8 +329,7 @@ def setup_git_submodules():
         return
     try:
         subprocess.check_call(["git", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # Only the pinned commit of each submodule is needed. CorridorKey's full history is so
-        # large that a normal clone of it fails ("invalid index-pack output").
+        # Only the pinned commit of each submodule is needed, so fetch just that (much faster).
         try:
             subprocess.check_call(["git", "submodule", "update", "--init", "--recursive", "--depth", "1"], cwd=ROOT)
         except subprocess.CalledProcessError:
