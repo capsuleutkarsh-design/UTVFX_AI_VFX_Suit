@@ -1,18 +1,63 @@
+Contour VFX Share-Back Licence, version 1.0
+
 Copyright (c) 2026 Utkarsh Tripathi / CapsuleUtkarsh Design
-All Rights Reserved.
+https://github.com/capsuleutkarsh-design/UTVFX_AI_VFX_Suit
+Contact: capsuleutkarsh@gmail.com
 
-NOTICE: All information contained herein is, and remains the property of the copyright owner. 
-The intellectual and technical concepts contained herein are proprietary to the copyright owner 
-and may be covered by copyright and trade secret laws.
+In short: use it freely, for personal or professional work. If you change it, send your
+changes back so everyone can benefit.
 
-This software is for internal use only. Dissemination of this information, reproduction 
-of this material, or unauthorized distribution of this software is strictly forbidden 
-unless prior written permission is obtained from the copyright owner.
 
-THIRD-PARTY LICENSES:
-This software utilizes third-party open-source libraries and models, including but not limited to:
-- PySide6 (LGPLv3)
-- FFmpeg (GPLv3 - external binary)
-- Meta Segment Anything 1 & 2 (Apache 2.0)
-- GroundingDINO, BiRefNet, Depth-Anything
-The respective rights and licenses of these third-party works remain with their original authors.
+1. PERMISSION
+
+   Anyone who obtains a copy of this software and its source code (the "Software") may,
+   free of charge:
+   a. use it for any purpose, including paid and commercial work;
+   b. copy it and share it with others;
+   c. study it and modify it;
+   d. use the images, mattes, depth maps, cameras, roto shapes and other results it
+      produces in any way they like, without restriction.
+
+2. SHARE-BACK: CHANGES MUST BE SENT BACK
+
+   If you modify the Software (change, add to or remove any part of its code, scripts,
+   interface or configuration), you must make your changes available to the copyright
+   holder, within 30 days of first using or sharing the modified version, in either of
+   these ways:
+   a. open a pull request or an issue with the changes at the repository above; or
+   b. email the changed source code, or a patch, to the contact address above.
+
+   By sending changes, you allow the copyright holder to include them in the Software and
+   release them under this licence, with credit to you if you ask for it.
+
+   Private experiments that are never used for real work or shared with anyone do not have
+   to be sent.
+
+3. CONDITIONS WHEN SHARING
+
+   Anyone who shares the Software, changed or not, must:
+   a. keep this licence and the copyright notice with it;
+   b. keep THIRD_PARTY_NOTICES.md with it;
+   c. say clearly if it has been changed, and point to the original repository.
+
+4. THIRD-PARTY PARTS ARE NOT COVERED
+
+   This licence covers only the code written for Contour VFX. The Software uses
+   third-party code, programs and AI models, listed in THIRD_PARTY_NOTICES.md, that
+   remain under their own licences. Some of them allow non-commercial use only
+   (including CorridorKey, GVM, VideoMaMa and Depth Anything V2 Base/Large); those
+   limits still apply, and it is your responsibility to follow them.
+
+5. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+   PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+   HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+   CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE
+   OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+6. ENDING
+
+   If you break the terms of this licence, your permission to use the Software ends.
+   It starts again if you put things right within 30 days of being told.

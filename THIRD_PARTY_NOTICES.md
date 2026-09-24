@@ -1,15 +1,15 @@
 # Third-party notices
 
-Contour VFX is proprietary software (see [LICENSE](LICENSE)). It uses the third-party code, programs and AI models below, each under its own licence. Those rights stay with their authors.
+Contour VFX is free to use under the Contour VFX Share-Back Licence (see [LICENSE](LICENSE)); changes must be sent back to the author. It uses the third-party code, programs and AI models below, each under its own licence. Those rights stay with their authors.
 
 Licences were checked in September 2026 against each project's repository, Hugging Face model card, or the licence file shipped with it. The revision each model is downloaded at is pinned in `first_setup.py`.
 
 ## What this means in practice
 
-- **Personal and in-house use** (how the app is used today) is fine for everything listed here.
-- **Giving the app to other people, even free, or selling it** is *not* possible as it stands. These parts would have to be removed, replaced, or licensed first:
+- **Personal and in-house use** is fine for everything listed here.
+- **Commercial use, or selling or bundling the app,** is limited by these parts, whose licences still apply whatever the app's own licence says:
 
-| Part | Licence | Why it blocks distribution |
+| Part | Licence | Limit |
 |---|---|---|
 | CorridorKey (keyer code and both weights) | Corridor Key Licence: CC BY-NC-SA 4.0 plus extra terms | Non-commercial. Its extra terms also forbid redistributing it inside another product without a written agreement from Corridor Digital (contact@corridordigital.com). |
 | GVM (`plugins/CorridorKey/System/gvm_core`) | CC BY-NC-SA 4.0 | Non-commercial. |

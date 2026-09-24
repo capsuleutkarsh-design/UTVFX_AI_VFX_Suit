@@ -91,6 +91,9 @@ The project is configured for automated distribution packaging via **PyInstaller
 Designed and authored by [capsuleutkarsh-design](https://github.com/capsuleutkarsh-design).
 
 ## License
-This project is proprietary. All rights reserved.
+Free to use, for personal or professional work, under the [Contour VFX Share-Back Licence](LICENSE). One condition: **if you change the app, send your changes back**, as a pull request or issue here, or by email to capsuleutkarsh@gmail.com. The images, mattes, cameras and roto you make with it are yours to use as you like.
 
-Third-party code, programs and AI models keep their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Several of the models (CorridorKey, GVM, VideoMaMa, Depth Anything V2 Base/Large) are licensed for non-commercial use only, so the app cannot be distributed or sold as it stands.
+Third-party code, programs and AI models keep their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Some models (CorridorKey, GVM, VideoMaMa, Depth Anything V2 Base/Large) allow non-commercial use only, and those limits still apply.
+
+## Contributing
+Changes are welcome, and under the licence they have to come back here. Open a pull request (run `python_base\python.exe -m pytest -q` first) or an issue with a patch, or email the changes. Please do not attach footage: describe problems with frame numbers, sizes and log output instead.
