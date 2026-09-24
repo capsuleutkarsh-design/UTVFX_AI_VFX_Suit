@@ -50,7 +50,7 @@ The app is not frozen into one exe. It loads its nodes as plugins and runs the A
 
 - installs per user in `%LOCALAPPDATA%\Programs\Contour VFX`, with no admin rights needed, and writes its settings, caches and models next to itself;
 - offers, on the last page, to **download the AI models** (about 27 GB, pinned and SHA-256 checked, resumable). Start menu > Contour VFX > Download AI models does the same later;
-- can install the models from an **offline models ZIP** instead (`scripts\build_models_zip.py`) on the wizard's "Offline models" page;
+- can install the models from an **offline model pack** instead, on the wizard's "Offline models" page (see below);
 - asks, when uninstalled, whether to delete the downloaded models and the projects/renders too.
 
 The models are not inside the installer: they would add about 27 GB of `.bin` slices, and some model licences do not allow redistributing them (see THIRD_PARTY_NOTICES.md).
