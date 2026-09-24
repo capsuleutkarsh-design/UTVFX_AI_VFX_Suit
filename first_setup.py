@@ -1,7 +1,11 @@
 """Contour VFX installer: the one supported way to set up a checkout.
 
-    install.bat                       (finds Python 3.10/3.11 and runs this file)
+    FIRST_SETUP.bat                   (finds Python 3.10/3.11 and runs this file)
     python first_setup.py             (same, if you already have Python 3.10 or 3.11)
+
+Started without options on a console, it shows a menu (full setup, offline PC, offline
+model pack, check, repair). With options it runs straight through, as the installer's
+"Download AI models" shortcut does.
 
 Steps: git submodules -> portable Python 3.10 in python_base/ -> packages from
 requirements-lock.txt -> model weights and binaries (COLMAP, FFmpeg).
@@ -28,12 +32,18 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from utvfx.core import downloads  # noqa: E402  (standard library only)
+from utvfx.core import setup_console as ui  # noqa: E402  (standard library only)
+
+print = ui.echo  # noqa: A001  every [OK] / [ERROR] ... tag below is coloured on a console
+STEPS = ui.Steps()
+UNVERIFIED = []  # present, but not confirmed as the pinned version (a check found no marker)
 
 SUPPORTED_PYTHONS = ((3, 10), (3, 11))
 
@@ -252,42 +262,22 @@ MANUAL_FILES = [
 # ------------------------------------------------------------------ helpers
 
 def print_header(title):
-    print("\n" + "=" * 60)
-    print(f" {title}")
-    print("=" * 60)
+    STEPS.start(title)
 
 
 def _abs(rel):
     return os.path.join(ROOT, *rel.replace("\\", "/").split("/"))
 
 
-def format_size(n):
-    for unit in ["B", "KB", "MB", "GB", "TB"]:
-        if n < 1024.0:
-            return f"{n:.2f} {unit}"
-        n /= 1024.0
-    return f"{n:.2f} PB"
-
-
-def _progress_printer(label):
-    state = {"last": -1}
-
-    def show(done, total):
-        if total > 0:
-            pct = int(50 * done / total)
-            if pct != state["last"]:
-                state["last"] = pct
-                sys.stdout.write(f"\r[{'=' * pct}{' ' * (50 - pct)}] {format_size(done)} / {format_size(total)}")
-                sys.stdout.flush()
-    return show
+format_size = ui.format_size
 
 
 def fetch(url, dest, sha256=None, size=None):
     """Download through a .part file; True on success."""
-    print(f"[DOWNLOAD] {os.path.basename(dest)}  ({url})")
+    print(f"[DOWNLOAD] {os.path.basename(dest)}  " + ui.paint(f"({url})", ui.DIM))
     try:
         downloads.download_file(url, dest, sha256=sha256, size=size,
-                                progress=_progress_printer(os.path.basename(dest)))
+                                progress=ui.progress_bar(os.path.basename(dest)))
         print(f"\n[OK] Saved to {os.path.relpath(dest, ROOT)}")
         return True
     except downloads.DownloadError as e:
@@ -315,7 +305,7 @@ def check_host_python():
 # ------------------------------------------------------------------ steps
 
 def setup_git_submodules():
-    print_header("Step 0: Git submodules (plugins and extras)")
+    print_header("Git submodules (plugins and extras)")
     if not os.path.isdir(os.path.join(ROOT, ".git")):
         print("[SKIP] Not a git checkout.")
         return
@@ -341,7 +331,7 @@ def find_python_base():
 
 
 def setup_python_base(check_only=False):
-    print_header("Step 1: Portable Python (python_base)")
+    print_header("Portable Python (python_base)")
     base_dir = os.path.join(ROOT, "python_base")
     existing = find_python_base()
     if existing:
@@ -407,7 +397,7 @@ def installed_packages(python_exe):
 
 
 def install_requirements(python_exe):
-    print_header("Step 2: Python packages (requirements-lock.txt)")
+    print_header("Python packages (requirements-lock.txt)")
     lock = os.path.join(ROOT, LOCK_FILE)
     if not os.path.exists(lock):
         print(f"[ERROR] {LOCK_FILE} not found.")
@@ -523,18 +513,22 @@ def download_huggingface_repo(task, python_exe):
 
 
 def download_models(python_exe, check_only=False, verify=False):
-    print_header("Step 3: AI models and binaries")
+    print_header("AI models and tools")
     failed = []
-    for task in MODELS:
+    for number, task in enumerate(MODELS, 1):
+        count = ui.paint(f"{number:>2}/{len(MODELS)}", ui.DIM)
         status = item_status(task, verify=verify)
         if status == "ok":
-            print(f"[OK] {task['name']}")
+            print(f"[OK] {count}  {task['name']}")
             continue
         if check_only:
-            print(f"[{status.upper()}] {task['name']}")
+            print(f"[{status.upper()}] {count}  {task['name']}")
             if status != "unverified":
                 failed.append(task["name"])
+            else:
+                UNVERIFIED.append(task["name"])
             continue
+        print(f"[DOWNLOAD] {count}  " + ui.paint(task["name"], ui.BOLD))
         if status == "bad":
             path = _abs(task["path"])
             print(f"[BAD] {task['name']}: size or hash does not match, downloading again.")
@@ -566,7 +560,72 @@ def download_models(python_exe, check_only=False, verify=False):
     return failed
 
 
+MENU = [
+    ("1", "Full setup", "Python, packages and every AI model (about 27.5 GB to download)"),
+    ("2", "Offline PC", "Python and packages; the models then come from an offline pack"),
+    ("3", "Offline model pack", "install the models from ContourVFX_Models_*.zip.001"),
+    ("4", "Check", "show what is installed; change nothing"),
+    ("5", "Repair", "re-check every model file (slow) and download what is damaged"),
+    ("0", "Exit", ""),
+]
+MENU_ARGS = {"1": [], "2": ["--skip-models"], "4": ["--check"], "5": ["--verify"]}
+
+
+def show_system():
+    """What the setup is about to work with: folder, free disk, graphics card."""
+    ui.info_line("Folder", ROOT)
+    free = shutil.disk_usage(ROOT).free
+    ui.info_line("Free space", format_size(free), (ui.YELLOW,) if free < 40 * 1024 ** 3 else (ui.GREEN,))
+    try:
+        gpu = subprocess.check_output(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                                      text=True, timeout=15, stderr=subprocess.DEVNULL).strip().splitlines()[0]
+        ui.info_line("GPU", gpu.replace(", ", "  driver "), (ui.GREEN,))
+    except Exception:
+        ui.info_line("GPU", "no NVIDIA GPU found: the AI nodes need one (CUDA)", (ui.YELLOW,))
+
+
+def install_offline_pack(path=None):
+    """Menu option 3: the models from an offline pack (stdlib only, no python_base needed)."""
+    from utvfx.core.model_pack import PackError, install_pack
+    STEPS.total = 1
+    path = path or ui.ask("Drag the .001 file here (or type its path) and press Enter: ")
+    if not path:
+        print("[SKIP] No pack chosen.")
+        return False
+    print_header("Offline model pack")
+    try:
+        count = install_pack(path, ROOT, log=lambda m: print(f"  {m}", flush=True))
+    except (PackError, OSError) as e:
+        print(f"[ERROR] {e}")
+        return False
+    print(f"[OK] {count} files installed and checked.")
+    return True
+
+
 def main(argv=None):
+    from utvfx.version import VERSION
+    started = time.time()
+    interactive = argv is None and len(sys.argv) == 1 and sys.stdin.isatty()
+    ui.banner(VERSION)
+    show_system()
+    check_host_python()
+    os.chdir(ROOT)
+
+    offline_pack = False
+    if interactive:
+        choice = ui.menu("What would you like to do?", MENU)
+        if choice == "0":
+            return
+        if choice == "3":
+            ok = install_offline_pack()
+            ui.summary(ok, ["[OK] The models are installed. Start the app with run.bat" if ok else
+                            "[ERROR] The models were not installed. See the message above."], time.time() - started)
+            if not ok:
+                sys.exit(1)
+            return
+        argv = MENU_ARGS[choice]
+        offline_pack = choice == "2"
+
     parser = argparse.ArgumentParser(description="Install Contour VFX")
     parser.add_argument("--check", action="store_true", help="report what is installed; change nothing")
     parser.add_argument("--verify", action="store_true", help="hash every file already present")
@@ -574,12 +633,8 @@ def main(argv=None):
     parser.add_argument("--skip-models", action="store_true", help="do not download models or binaries")
     args = parser.parse_args(argv)
 
-    print("=" * 60)
-    print(" Contour VFX - setup")
-    print("=" * 60)
-    check_host_python()
-    os.chdir(ROOT)
-
+    STEPS.total = ((0 if args.check else 1) + 1 + (0 if args.check or args.skip_deps else 1)
+                   + (0 if args.skip_models else 1))
     if not args.check:
         setup_git_submodules()
     python_exe = setup_python_base(check_only=args.check)
@@ -588,23 +643,41 @@ def main(argv=None):
     failed = []
     if not args.skip_models:
         failed = download_models(python_exe, check_only=args.check, verify=args.verify)
-
-    print_header("Check complete" if args.check else "Setup complete")
-    if failed:
-        print("[ERROR] Missing or incomplete:" if args.check else
-              "[ERROR] These items did not download. Run this script again, or see MODEL_DOWNLOADS.md:")
-        for f in failed:
-            print(f"   - {f}")
-        sys.exit(1)
     if os.path.isdir(DOWNLOAD_TMP) and not os.listdir(DOWNLOAD_TMP):
         os.rmdir(DOWNLOAD_TMP)
-    if args.skip_models:
-        print("[OK] Python and packages are installed. Models were skipped (--skip-models); "
-              "run this script again without it to download them.")
+
+    if failed:
+        lines = ["[ERROR] Missing or incomplete:" if args.check else
+                 "[ERROR] These did not download. Run the setup again, or see MODEL_DOWNLOADS.md:"]
+        lines += [f"   - {f}" for f in failed]
+        ui.summary(False, lines, time.time() - started)
+        sys.exit(1)
+    if offline_pack:
+        print()
+        print("[INFO] Python and the packages are ready. The models come from the offline pack.")
+        if install_offline_pack():
+            ui.summary(True, ["[OK] Everything is installed.", "[RUN] Start the app with run.bat"],
+                       time.time() - started)
+            return
+        ui.summary(False, ["[OK] Python and the packages are installed.",
+                           "[MISSING] The models: run FIRST_SETUP.bat again and choose option 3."],
+                   time.time() - started)
+        return
+    if args.check:
+        lines = ["[OK] Everything is installed."]
+        if UNVERIFIED:
+            lines = ["[OK] Everything is present.",
+                     f"[UNVERIFIED] {len(UNVERIFIED)} models were downloaded before the setup recorded their "
+                     "version, so they cannot be confirmed as the tested one. They work as they are; Repair "
+                     "(option 5) checks them online and fetches only what differs."]
+        ui.summary(True, lines, time.time() - started)
+    elif args.skip_models:
+        ui.summary(True, ["[OK] Python and the packages are installed.",
+                          "[SKIP] The models (--skip-models): run the setup again without it, or use an offline pack."],
+                   time.time() - started)
     else:
-        print("[SUCCESS] Everything is installed." if not args.check else "[OK] Everything is installed.")
-    if not args.check:
-        print("[RUN] Start the app with run.bat")
+        ui.summary(True, ["[SUCCESS] Everything is installed.", "[RUN] Start the app with run.bat"],
+                   time.time() - started)
 
 
 if __name__ == "__main__":

@@ -40,7 +40,7 @@ def render():
         "",
         "*Generated from `first_setup.py` by `scripts/make_model_list.py`; do not edit by hand.*",
         "",
-        "`first_setup.py` (or `install.bat`) downloads everything below. Each file is pinned to a fixed",
+        "`first_setup.py` (or `FIRST_SETUP.bat`) downloads everything below. Each file is pinned to a fixed",
         "Hugging Face commit or release URL and checked against its SHA-256 before it is used, and the app",
         "never downloads models while it runs. To fetch only missing models later:",
         "`python_base\\python.exe scripts\\download_models.py`. Licences: [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).",

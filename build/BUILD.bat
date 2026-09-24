@@ -46,7 +46,7 @@ echo ================================================================
 echo.
 
 if not exist "%PY%" (
-    echo [build] ERROR: python_base\python.exe not found. Run install.bat first.
+    echo [build] ERROR: python_base\python.exe not found. Run FIRST_SETUP.bat first.
     goto :failed
 )
 

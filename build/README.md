@@ -25,7 +25,7 @@ BUILD.bat ... noverify skip starting the staged app (any mode)
 
 | | |
 |---|---|
-| This checkout, set up | `install.bat` done, so `python_base\` exists with every package |
+| This checkout, set up | `FIRST_SETUP.bat` done, so `python_base\` exists with every package |
 | Git | on PATH, with the submodules checked out |
 | Inno Setup 6 | https://jrsoftware.org/isdl.php |
 | Disk | about 20 GB free while building |
@@ -77,7 +77,7 @@ The version lives in one place, `VERSION` in `utvfx/version.py`. `build_app.py` 
 
 ## Troubleshooting
 
-- **"python_base lacks packages"**: run `install.bat` in the checkout first.
+- **"python_base lacks packages"**: run `FIRST_SETUP.bat` in the checkout first.
 - **"some git submodules are not checked out"**: `git submodule update --init --depth 1`.
 - **Running the installer says a `.bin` file is missing**: the exe and its `.bin` files were separated; keep them in one folder.
 - **The installed app does not start**: look at `%LOCALAPPDATA%\Programs\Contour VFX\workspace\logs\`.

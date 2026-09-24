@@ -23,14 +23,14 @@ Wire nodes together, render, and take the results into Nuke or Blender. Everythi
 **Conventions**
 - **Colour:** the ACES studio OpenColorIO config. The working space is ACEScg and the viewer uses the ACES SDR view. Highlights above 1.0 are kept.
 - **Frame numbers:** every file keeps the plate's own frame numbers (1001 stays 1001). The timeline's In/Out limits every render.
-- **Rendering:** renders are cached per node and redone only when something upstream changes. Stop, Freeze and Bypass work as in Nuke. Renders can also run without the window; see [Rendering without the window](#rendering-without-the-window).
+- **Rendering:** renders are cached per node and redone only when something upstream changes. Stop, Freeze and Bypass work as in Nuke.
 
 Model weights (about 27 GB) and the COLMAP/FFmpeg binaries are not in the repository; `first_setup.py` downloads them (see below and [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md)).
 
 ## Requirements and installation
 Windows 10/11 x64 and an NVIDIA GPU with a CUDA 12.1-capable driver. About 30 GB of disk for the models.
 
-There is one supported way to install: `first_setup.py`. `install.bat` is a thin wrapper that finds a suitable Python and runs it.
+There is one supported way to install: `first_setup.py`. `FIRST_SETUP.bat` is a thin wrapper that finds a suitable Python and runs it.
 
 1. Clone the repository with its submodules:
    ```bat
@@ -38,10 +38,18 @@ There is one supported way to install: `first_setup.py`. `install.bat` is a thin
    cd UTVFX_AI_VFX_Suit
    ```
    Clone into a short folder such as `C:\Contour` or your Documents folder. Windows limits paths to 260 characters, and a very deep folder makes the CorridorKey submodule fail with "Filename too long" (or run `git config --global core.longpaths true` first).
-2. Run the installer:
-   ```bat
-   install.bat
-   ```
+2. Double-click **`FIRST_SETUP.bat`** (or run it from a command prompt). It shows a menu:
+
+   | Option | What it does |
+   |---|---|
+   | 1 Full setup | Python, packages and every AI model (about 27.5 GB to download) |
+   | 2 Offline PC | Python and packages, then the models from an offline model pack |
+   | 3 Offline model pack | Only the models, from `ContourVFX_Models_*.zip.001` |
+   | 4 Check | Shows what is installed; changes nothing |
+   | 5 Repair | Re-checks every model file (slow) and downloads what is damaged |
+
+   Each step is numbered, downloads show speed and time left, and a summary at the end says what to do next. Options skip the menu: `FIRST_SETUP.bat --check`.
+
    It looks for Python **3.10 or 3.11**, in this order: an existing `python_base\python.exe`, the `py` launcher (`py -3.11`, `py -3.10`), [uv](https://docs.astral.sh/uv/) (`%USERPROFILE%\.local\bin\uv.exe`, which fetches Python 3.10 by itself), then `python` on `PATH`. Python 3.12 and newer are refused: `torch 2.5.1+cu121` and `mediapipe<0.10.10` have no wheels for them. With Python 3.10/3.11 already installed you can run `python first_setup.py` directly instead.
 
    `first_setup.py` then:
@@ -56,21 +64,10 @@ There is one supported way to install: `first_setup.py`. `install.bat` is a thin
    run.bat
    ```
 
-### Rendering without the window
-`render.bat` renders a saved project from the command line, for batches or a render machine. The results and caches are the same as in the app, and nothing is uploaded.
-
-```bat
-render.bat shot.contour
-render.bat shot.contour --node Depth1 --frames 1001-1050
-render.bat shot.contour --list
-```
-
-With no `--node`, every Unified Output node is rendered, together with everything it needs. `--frames` takes plate frame numbers (like the timeline's In/Out), `--relink FOLDER` finds plates that have moved, and `--quiet` prints only progress and errors. Progress shows the time left. Exit codes: 0 all done, 1 a render failed or was stopped (Ctrl+C stops cleanly), 2 bad arguments or project.
-
 `requirements.txt` is the loose list of top-level packages with their tested version ranges. To change a dependency, edit it, install into `python_base`, run the tests (`python_base\python.exe -m pytest -q`), then regenerate the lock with `python_base\python.exe -m pip freeze` (keep only `opencv-contrib-python`, never `opencv-python` as well).
 
 ### Offline installs
-Missing models can also be installed from a ZIP (`scripts\build_models_zip.py` builds one) with **AI models > Install from offline ZIP** in the app. Only data files under `models/` are taken from the ZIP; code files, `plugins/` and paths outside `models/` are skipped and listed.
+For computers without internet, `build\BUILD.bat models` writes an offline model pack (`ContourVFX_Models_*.zip.001`, `.002`, ...; see [build/README.md](build/README.md)). Install it with option 3 of `FIRST_SETUP.bat`, the installer's Offline models page, or **AI models > Install from offline pack** in the app. Every file is checked against its SHA-256.
 
 ### Troubleshooting: manual FFmpeg installation
 If FFmpeg does not download (for example an SSL error such as `[SSL: WRONG_VERSION_NUMBER]`):

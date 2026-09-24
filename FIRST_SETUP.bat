@@ -1,13 +1,12 @@
 @echo off
 setlocal EnableExtensions
-:: Contour VFX installer. All the work happens in first_setup.py; this file only finds
+:: Contour VFX first setup. Double-click it for the menu (full setup, offline PC, offline
+:: model pack, check, repair). All the work happens in first_setup.py; this file only finds
 :: a Python 3.10 or 3.11 to run it with. first_setup.py then builds its own portable
 :: Python 3.10 in python_base\ and installs requirements-lock.txt into it.
-:: Extra arguments are passed on, for example:  install.bat --check
+:: Options skip the menu, for example:  FIRST_SETUP.bat --check
 cd /d "%~dp0"
-echo ==============================================
-echo  Contour VFX setup
-echo ==============================================
+title Contour VFX - First Setup
 
 set "VERSION_CHECK=import sys; sys.exit(0 if sys.version_info[:2] in ((3,10),(3,11)) else 1)"
 
@@ -41,24 +40,28 @@ where python >nul 2>&1 && (
 )
 
 echo.
-echo [ERROR] No Python 3.10 or 3.11 found.
-if defined FOUND_VER echo         The python on PATH is %FOUND_VER%, which is not supported.
-echo         torch 2.5.1+cu121 and mediapipe^<0.10.10 have no wheels for Python 3.12 or newer.
-echo         Install Python 3.11 from https://www.python.org/downloads/windows/
-echo         (or install uv: https://docs.astral.sh/uv/) and run install.bat again.
+echo  ==============================================================
+echo   Contour VFX - First Setup
+echo  ==============================================================
+echo.
+echo  [ERROR] No Python 3.10 or 3.11 found on this PC.
+if defined FOUND_VER echo          The python on PATH is %FOUND_VER%, which is not supported.
+echo          torch 2.5.1+cu121 and mediapipe^<0.10.10 have no wheels for Python 3.12 or newer.
+echo.
+echo          Install Python 3.11 from https://www.python.org/downloads/windows/
+echo          (or install uv: https://docs.astral.sh/uv/), then run FIRST_SETUP.bat again.
+echo.
 pause
 exit /b 1
 
 :run
-echo [INFO] Running first_setup.py with: %PY_CMD%
 %PY_CMD% first_setup.py %*
-if errorlevel 1 (
-    echo.
-    echo [ERROR] Setup did not finish. Read the messages above, fix the problem and run install.bat again.
-    pause
-    exit /b 1
-)
+set "CODE=%ERRORLEVEL%"
 echo.
-echo [SUCCESS] Installation complete. Start the app with run.bat
-pause
-exit /b 0
+if not "%CODE%"=="0" (
+    echo  Setup did not finish. Read the messages above, fix the problem and run FIRST_SETUP.bat again.
+) else (
+    echo  Press any key to close this window.
+)
+pause >nul
+exit /b %CODE%

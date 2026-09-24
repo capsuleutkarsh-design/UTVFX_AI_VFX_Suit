@@ -9,7 +9,7 @@ if not exist "%PYTHON_EXE%" (
 
 if not exist "%PYTHON_EXE%" (
     echo [ERROR] Python environment not found!
-    echo Please run install.bat first to set up the environment.
+    echo Please run FIRST_SETUP.bat first to set up the environment.
     pause
     exit /b 1
 )

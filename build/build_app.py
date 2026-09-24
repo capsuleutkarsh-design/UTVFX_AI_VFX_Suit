@@ -30,7 +30,7 @@ PYINSTALLER = "pyinstaller==6.16.0"
 # Tracked files that the installed app does not need (development files, and the demo
 # media and notebooks that come with the upstream submodules).
 SKIP = [
-    "tests/*", "audit_reports/*", "build/*", ".git*", "ISSUES.md", "ROADMAP.md", "install.bat", "run.bat",
+    "tests/*", "audit_reports/*", "build/*", ".git*", "ISSUES.md", "ROADMAP.md", "FIRST_SETUP.bat", "run.bat",
     "pytest.ini", "pyrightconfig.json",
     "plugins/Depth-Anything-V2/assets/*", "plugins/Depth-Anything-V2/metric_depth/assets/*",
     "plugins/Depth-Anything-V2/metric_depth/dataset/*", "models/SAMURAI/assets/*",
@@ -74,7 +74,7 @@ def run(cmd, **kw):
 def check():
     problems = []
     if not os.path.isfile(PYTHON):
-        problems.append(f"python_base is missing ({PYTHON}). Run install.bat first.")
+        problems.append(f"python_base is missing ({PYTHON}). Run FIRST_SETUP.bat first.")
     else:
         probe = subprocess.run([PYTHON, "-c", "import importlib,sys\n"
                                 "missing=[m for m in sys.argv[1:] if importlib.util.find_spec(m) is None]\n"
@@ -82,7 +82,7 @@ def check():
                                capture_output=True, text=True)
         missing = probe.stdout.strip()
         if probe.returncode or missing:
-            problems.append(f"python_base lacks packages: {missing or probe.stderr.strip()}. Run install.bat.")
+            problems.append(f"python_base lacks packages: {missing or probe.stderr.strip()}. Run FIRST_SETUP.bat.")
     if shutil.which("git") is None:
         problems.append("git is not on PATH (needed to list the files to package).")
     else:
