@@ -22,6 +22,8 @@ DiskSliceSize=2000000000
 [Files]
 Source: "extract_models.ps1"; Flags: dontcopy
 Source: "..\dist\ContourVFX\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\Contour VFX"; Filename: "{app}\ContourVFX.exe"; IconFilename: "{app}\ContourVFX.exe"

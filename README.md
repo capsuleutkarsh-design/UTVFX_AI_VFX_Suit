@@ -76,3 +76,5 @@ Designed and authored by [capsuleutkarsh-design](https://github.com/capsuleutkar
 
 ## License
 This project is proprietary. All rights reserved.
+
+Third-party code, programs and AI models keep their own licences; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Several of the models (CorridorKey, GVM, VideoMaMa, Depth Anything V2 Base/Large) are licensed for non-commercial use only, so the app cannot be distributed or sold as it stands.

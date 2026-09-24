@@ -43,6 +43,8 @@ a = Analysis(
         ('branding', 'branding/'),
         ('first_setup.py', '.'),
         ('requirements-lock.txt', '.'),
+        ('LICENSE', '.'),
+        ('THIRD_PARTY_NOTICES.md', '.'),
         ('assets', 'assets/'),
         ('utvfx', 'utvfx/'),
     ],

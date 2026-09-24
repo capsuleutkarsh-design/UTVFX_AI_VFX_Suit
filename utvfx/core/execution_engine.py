@@ -75,13 +75,6 @@ class InteractionWorker(QThread):
             if self.plugin_type == "super_matte":
                 from plugins.SuperMatte.backend import run_fast_preview
                 mask_qimage = run_fast_preview(self.node_params, self.frame_idx, self.points, temp_frame_path)
-            elif self.plugin_type == "matte_anyone":
-                try:
-                    from plugins.MatAnyone2.backend import run_fast_preview
-                    mask_qimage = run_fast_preview(self.node_params, self.frame_idx, self.points, temp_frame_path)
-                except ImportError:
-                    self.error.emit(self.node_id, "MatAnyone2 backend not found for interactive preview.")
-                    return
                 
             if mask_qimage is not None:
                 self.mask_ready.emit(self.node_id, self.layer_id, self.frame_idx, mask_qimage)

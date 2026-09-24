@@ -437,7 +437,7 @@ class Viewport(QWidget):
             return
 
         self.lbl_title.setText(node.name)
-        self.img_display.enable_interaction(node.plugin_type in ["sam3_rotoscope", "matte_anyone", "super_matte"])
+        self.img_display.enable_interaction(node.plugin_type == "super_matte")
 
         # Restore the mask keyframes from the new node
         if self.img_display.is_interactive and hasattr(node, "params"):
@@ -463,7 +463,7 @@ class Viewport(QWidget):
         if node.plugin_type == "sfm_tracker":
             self._load_track_points(node)
 
-        if node.plugin_type in ["sam3_rotoscope", "matte_anyone", "super_matte"]:
+        if node.plugin_type == "super_matte":
             self.btn_clear_pts.show()
         else:
             self.btn_clear_pts.hide()
