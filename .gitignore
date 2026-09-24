@@ -4,10 +4,13 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-# PyInstaller / Inno Setup output. build/installer.iss, build/*.bat and ContourVFX.spec stay tracked.
+# Build output (build/BUILD.bat). The build scripts in build/ stay tracked.
 dist/
 build/Output/
 build/ContourVFX/
+build/stage/
+build/_tools/
+build/version.iss
 build/UTVFX_AI_VFX_Tool/
 *.spec
 !ContourVFX.spec

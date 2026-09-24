@@ -79,14 +79,7 @@ If FFmpeg does not download (for example an SSL error such as `[SSL: WRONG_VERSI
 2. Copy `bin\ffmpeg.exe` from the ZIP to `plugins\3DTracker\bin\ffmpeg.exe`.
 
 ## Building the installer
-The project is configured for automated distribution packaging via **PyInstaller** and **Inno Setup**.
-
-1. Ensure [Inno Setup 6](https://jrsoftware.org/isinfo.php) is installed.
-2. Run the build script to compile the executable and generate the setup wizard:
-   ```bash
-   build\build_installer.bat
-   ```
-3. The final installer will be available in the `build/Output/` directory. During setup, users can optionally inject the required heavy ML models via a `.zip` archive.
+Double-click `build\BUILD.bat` (needs a set-up checkout and [Inno Setup 6](https://jrsoftware.org/isdl.php)). It writes `build\Output\ContourVFX_Setup_<version>.exe` plus `.bin` slices; ship them together. The installer includes the app and its Python environment, and offers to download the models on its last page. Details in [build/README.md](build/README.md).
 
 ## Author
 Designed and authored by [capsuleutkarsh-design](https://github.com/capsuleutkarsh-design).
