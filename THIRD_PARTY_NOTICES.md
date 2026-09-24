@@ -41,7 +41,7 @@ Licences were checked in September 2026 against each project's repository, Huggi
 | Depth Anything V2 Small | Depth | Apache-2.0 | `depth-anything/Depth-Anything-V2-Small` |
 | Depth Anything V2 Base, Large | Depth | CC BY-NC 4.0 | `depth-anything/Depth-Anything-V2-Base`, `-Large` |
 | Depth Anything V2 Metric (Hypersim, Virtual KITTI; Small, Base, Large) | Depth | Apache-2.0 | `depth-anything/Depth-Anything-V2-Metric-*` |
-| MediaPipe Pose | AI Roto | Apache-2.0 | Google, `google/mediapipe` |
+| MediaPipe Pose | Matte to Shape (body parts) | Apache-2.0 | Google, `google/mediapipe` |
 | ALIKED | 3D Tracker | BSD-3-Clause | `Shiaoming/ALIKED`; ONNX export from the COLMAP 3.13.0 release |
 | LightGlue (SIFT and ALIKED matchers) | 3D Tracker | Apache-2.0 | `cvg/LightGlue`; ONNX export from the COLMAP 3.13.0 release |
 | LoMa (detector, DeDoDe-G descriptor, matcher) | 3D Tracker | MIT (code); matcher Apache-2.0 (from LightGlue). The weights' licence is not stated by the authors. | `davnords/LoMa` |

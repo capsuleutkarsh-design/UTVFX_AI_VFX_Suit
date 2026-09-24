@@ -1,4 +1,4 @@
-"""Nuke Roto export for Roto to Shape and AI Roto (shapes.json).
+"""Nuke Roto export for Matte to Shape, outline or body parts (shapes.json).
 
 The result is a .nk to paste (Ctrl+V) into Nuke: a Roto node whose onCreate script builds
 the animated shapes. The shape data is embedded in the script as base64, so the .nk works

@@ -74,13 +74,19 @@ NODE_HELP_DATA = {
             "write_undistort": "Writes STMaps (undistort and redistort) and an undistorted plate for the solved lens.",
             "overscan": "Extra border around the undistorted plate so the barrel's corners are not cut (0.1 = 10%).",
             "blender_exe": "Path to blender.exe. When set, the camera is also baked to Alembic (.abc) and a .blend.",
-            "export_roto_nuke": "Writes shot_roto.nk: paste it into Nuke (Ctrl+V) and a Roto node builds the animated shapes from Roto to Shape or AI Roto, one Nuke layer per matte layer, each shape visible only on the frames it was found.",
+            "export_roto_nuke": "Writes shot_roto.nk: paste it into Nuke (Ctrl+V) and a Roto node builds the animated shapes from Matte to Shape (outline or body parts), one Nuke layer per matte layer, each shape visible only on the frames it was found.",
             "roto_interpolation": "How the roto shapes move between keyframes in Nuke."
         }
     },
     "roto_to_shape": {
-        "description": "The <b>Roto to Shape</b> node traces mattes (such as SuperMatte's, one set of shapes per layer) into Nuke roto shapes. A shape keeps its name and point count from frame to frame, so Nuke can animate it.",
+        "description": "The <b>Matte to Shape</b> node turns mattes (such as SuperMatte's, one set of shapes per layer) into Nuke roto shapes. <b>Outline</b> traces whatever the matte shows. <b>Body parts</b> cuts a person into head, torso and limb shapes from their skeleton; with a depth map wired, a limb well behind the body fades out and comes back when it is in front again. Each point follows the object from frame to frame (it does not crawl along the edge), and a shape keeps its name and point count, so Nuke can animate it.",
         "params": {
+            "mode": "Outline: one shape around each object in the matte (people, cars, props). Body parts: one person split into head, torso, upper and lower arms and legs.",
+            "points_limb": "Body parts: points in each limb shape (the same on every frame).",
+            "points_torso": "Body parts: points in the torso shape.",
+            "points_head": "Body parts: points in the head shape.",
+            "hide_behind": "Body parts with a depth map: a limb fades out when it is more than this far behind the torso (0.08 = 8% of the torso's distance from camera).",
+            "show_again": "Body parts with a depth map: a hidden limb shows again when it is less than this far behind the torso.",
             "point_mode": "Auto spaces points along the outline (more on curves); Fixed gives every shape the same number of points.",
             "auto_point_spacing": "Auto mode: roughly how many pixels apart points are. Lower gives more points.",
             "target_points": "Fixed mode: the number of points in each shape.",
@@ -117,22 +123,6 @@ NODE_HELP_DATA = {
             "input_linear": "Keys the scene-linear plate (EXR or log sources) instead of the display copy.",
             "custom_bg": "An image to put behind the preview comp. The EXRs are not affected.",
             "proc_res": "The size the network works at. 2048 is a good balance; 4096 needs much more VRAM."
-        }
-    },
-    "ai_roto": {
-        "description": "The <b>AI Roto</b> node finds the person's skeleton (MediaPipe Pose) and cuts their matte into Nuke-ready shapes per body part: head, torso, upper and lower arms and legs. With a depth map wired, a limb that passes behind the torso fades out and comes back when it is in front again.",
-        "params": {
-            "target_points_limb": "Points in each limb shape (the same on every frame, so Nuke can animate them).",
-            "target_points_torso": "Points in the torso shape.",
-            "target_points_head": "Points in the head shape.",
-            "corner_threshold": "Turns sharper than this become cusps; gentler ones stay smooth.",
-            "edge_snap_radius": "How far points may move to sit exactly on the matte edge.",
-            "temporal_smoothing": "Averages each shape with the frames either side to calm jitter.",
-            "hysteresis_high": "A limb fades out when it is more than this far behind the torso (0.08 = 8% of the torso's distance from camera).",
-            "hysteresis_low": "A hidden limb shows again when it is less than this far behind the torso.",
-            "flow_decay": "When the skeleton is lost, how quickly shapes stop following the image motion and hold the last pose.",
-            "first_frame": "First plate frame to process (0 = start).",
-            "last_frame": "Last plate frame to process (0 = end)."
         }
     },
     "sfm_tracker": {

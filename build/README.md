@@ -17,6 +17,7 @@ BUILD.bat clean        same, but reinstall the build tools first
 BUILD.bat stage        only step 1: build\stage\ContourVFX, ready to run
 BUILD.bat installer    only step 2: re-pack the last stage
 BUILD.bat check        check that everything needed is there; build nothing
+BUILD.bat models       the offline model pack (see below)
 BUILD.bat ... noverify skip starting the staged app (any mode)
 ```
 
@@ -53,6 +54,22 @@ The app is not frozen into one exe. It loads its nodes as plugins and runs the A
 - asks, when uninstalled, whether to delete the downloaded models and the projects/renders too.
 
 The models are not inside the installer: they would add about 27 GB of `.bin` slices, and some model licences do not allow redistributing them (see THIRD_PARTY_NOTICES.md).
+
+## Offline model pack (computers without internet)
+
+`BUILD.bat models`, on a computer where `first_setup.py` has downloaded the models (and with internet), writes
+
+```
+build\Output\models\ContourVFX_Models_<version>.zip.001
+                    ContourVFX_Models_<version>.zip.002
+                    ... (about 15 parts of 1.95 GB, 27.6 GB in all)
+```
+
+- **What's in it:** exactly what `first_setup.py` installs: every model the app uses, plus COLMAP and FFmpeg for the 3D Tracker. It is one uncompressed ZIP cut into parts, because single model files are up to 6 GB. 7-Zip opens the `.001` as a normal archive.
+- **Checks while packing:** every Hugging Face file is compared with its pinned version's published checksum. SAM 3's repo hides checksums, so it is checked by size.
+- **Speed:** an unchanged pack is not rebuilt.
+- **Installing:** copy the installer and all the parts to the offline computer. On the installer's **Offline models** page, pick the `.001` file; all parts must be in the same folder. Every file is installed and checked against its SHA-256, and the online download is skipped. Later, the app's **AI models > Install from offline pack** does the same, as does `python_base\python.exe scripts\install_models.py <.001 file>` in the install folder.
+- **Licences:** some model licences do not allow sharing the models publicly (see THIRD_PARTY_NOTICES.md). Use the pack on your own computers; do not upload it.
 
 ## Version
 

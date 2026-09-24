@@ -73,7 +73,6 @@ OUTPUT_FOLDERS = {
     "grade": {"Image": ["Video Plate", "."]},
     "ocio_colorspace": {"Image": ["Video Plate", "."]},
     "roto_to_shape": {"Shape Data": ["roto_shapes"]},
-    "ai_roto": {"Shape Data": ["roto_shapes"]},
 }
 
 # When a matte input is wired to a node whose output is an image, take that node's matte instead.
@@ -252,7 +251,7 @@ def resolve_shape_input(node, visited=None, is_start_node=True, cache_dir=None):
     visited.add(node)
 
     if not is_start_node and not getattr(node, "is_disabled", False):
-        if getattr(node, "plugin_type", "") in ["roto_to_shape", "ai_roto"]:
+        if getattr(node, "plugin_type", "") in ["roto_to_shape"]:
             cache_path = get_node_cache(node, cache_dir)
             shape_dir = os.path.join(cache_path, "roto_shapes")
             if os.path.exists(shape_dir):

@@ -73,7 +73,7 @@ def test_bypassed_node_passes_its_input_through(graph):
 
 def test_unwired_depth_input_stays_empty(graph):
     add, wire, rendered, plate, plate_file, cache = graph
-    roto = add("ai_roto")
+    roto = add("roto_to_shape")
     wire(plate, "Video Plate", roto, "Video Plate")
     assert resolve_input(roto, "Depth Map", cache) is None
     assert resolve_input(roto, "Video Plate", cache) == plate_file

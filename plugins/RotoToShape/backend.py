@@ -42,6 +42,7 @@ class RotoToShapeWorker(BaseWorker):
         super().__init__(node_id, params, inputs, cache_dir, output_dir, parent)
         self.mask_path = inputs.get("Alpha Matte")
         self.media_path = inputs.get("Video Plate") or inputs.get("Media Plate")
+        self.depth_path = inputs.get("Depth Map")
 
 
     @staticmethod
@@ -231,40 +232,134 @@ class RotoToShapeWorker(BaseWorker):
             
         return snapped
 
+    # ---- keeping points on the same part of the object from frame to frame -----------
+    # Each point follows the image motion measured just inside the object, then is placed on
+    # the new outline at the nearest spot, in order. Re-spacing the points evenly on every
+    # frame (what this used to do) made them crawl along the edge whenever the outline
+    # changed shape, so nothing in Nuke stayed on the same part of the actor.
+    RELAX = 0.05  # pull towards even spacing per frame: stops bunching, keeps correspondence
+
+    @staticmethod
+    def dense_flow(prev_gray, curr_gray, width=960):
+        """Optical flow (x, y per pixel) at full size, computed at up to `width` for speed."""
+        h, w = prev_gray.shape
+        scale = min(1.0, width / w)
+        a = cv2.resize(prev_gray, (int(w * scale), int(h * scale))) if scale < 1 else prev_gray
+        b = cv2.resize(curr_gray, (int(w * scale), int(h * scale))) if scale < 1 else curr_gray
+        flow = cv2.calcOpticalFlowFarneback(a, b, None, 0.5, 4, 21, 3, 5, 1.2, 0)
+        if scale < 1:
+            flow = cv2.resize(flow, (w, h)) / scale
+        return flow
+
+    @staticmethod
+    def track_points(pts, flow, matte, inset=8.0):
+        """Move points with the motion measured `inset` px inside the object (its edge mixes in background)."""
+        h, w = matte.shape
+        tangent = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
+        tangent /= np.maximum(np.linalg.norm(tangent, axis=1, keepdims=True), 1e-6)
+        normal = np.stack([-tangent[:, 1], tangent[:, 0]], axis=1)
+
+        def sample(img, q):
+            x = np.clip(np.round(q[:, 0]).astype(int), 0, w - 1)
+            y = np.clip(np.round(q[:, 1]).astype(int), 0, h - 1)
+            return img[y, x]
+
+        inside = np.where((sample(matte, pts + normal * inset) >= sample(matte, pts - normal * inset))[:, None],
+                          normal, -normal)
+        return pts + sample(flow, pts + inside * inset)
+
+    @staticmethod
+    def _dense_outline(cnt, spacing=1.0):
+        """The outline as closely spaced points plus their arc position."""
+        c = cnt.reshape(-1, 2).astype(np.float32)
+        closed = np.vstack([c, c[:1]])
+        seg = np.linalg.norm(np.diff(closed, axis=0), axis=1)
+        cum = np.concatenate([[0], np.cumsum(seg)])
+        total = float(cum[-1])
+        if total <= 0:
+            return c[:1], np.zeros(1), 0.0
+        s_new = np.arange(0, total, spacing)
+        x = np.interp(s_new, cum, closed[:, 0])
+        y = np.interp(s_new, cum, closed[:, 1])
+        return np.stack([x, y], axis=1), s_new, total
+
     def _conform_to_contour(self, tracked_pts, prev_pts, status, cnt, img_w, img_h):
-        """
-        Conforms optical flow tracked points to the actual matched contour boundary,
-        resampling the contour cleanly and finding the optimal cyclic alignment to preserve
-        vertex order and prevent self-intersecting lines or out-of-bounds errors.
-        """
-        num_points = len(tracked_pts)
-        if num_points == 0 or len(cnt) < 2:
+        """Put the tracked points on the new outline: nearest spot, same order, gently re-spaced."""
+        n = len(tracked_pts)
+        if n < 3 or len(cnt) < 3:
             return tracked_pts
-            
-        resampled = self._resample_polygon(cnt, num_points, curvature_weight=5.0, frame_size=(img_w, img_h))
-        
-        status_flat = status.reshape(-1) if status is not None else np.ones(num_points, dtype=int)
-        valid_mask = (status_flat == 1) & ~np.isnan(tracked_pts[:, 0]) & ~np.isnan(tracked_pts[:, 1]) & (tracked_pts[:, 0] >= 0) & (tracked_pts[:, 0] < img_w) & (tracked_pts[:, 1] >= 0) & (tracked_pts[:, 1] < img_h)
-        ref_pts = np.where(valid_mask[:, None], tracked_pts, prev_pts)
-        
-        ref_centroid = np.mean(ref_pts, axis=0)
-        res_centroid = np.mean(resampled, axis=0)
-        ref_pts_centered = ref_pts - ref_centroid + res_centroid
-        
-        best_k = 0
-        best_dist = float('inf')
-        for k in range(num_points):
-            shifted = np.roll(resampled, -k, axis=0)
-            dist = np.mean(np.linalg.norm(shifted - ref_pts_centered, axis=1))
-            if dist < best_dist:
-                best_dist = dist
-                best_k = k
-                
-        return np.roll(resampled, -best_k, axis=0)
+        outline, arc, total = self._dense_outline(cnt)
+        if total <= 0:
+            return tracked_pts
+        # Walk the outline the same way round as the points.
+        area_pts = cv2.contourArea(prev_pts.astype(np.float32).reshape(-1, 1, 2), oriented=True)
+        area_out = cv2.contourArea(outline.astype(np.float32).reshape(-1, 1, 2), oriented=True)
+        if np.sign(area_pts) != np.sign(area_out) and area_pts != 0:
+            outline, arc = outline[::-1].copy(), total - arc[::-1]
+
+        # Nearest outline position for every point (in blocks, the outline can be long).
+        s = np.empty(n, np.float64)
+        for i in range(0, n, 64):
+            d = np.linalg.norm(tracked_pts[i:i + 64, None, :] - outline[None, :, :], axis=2)
+            s[i:i + 64] = arc[np.argmin(d, axis=1)]
+
+        # Same order as before: positions relative to point 0, never going backwards.
+        rel = np.mod(s - s[0], total)
+        min_gap = 0.25 * total / n
+        for i in range(1, n):
+            rel[i] = max(rel[i], rel[i - 1] + min_gap)
+        if rel[-1] > total - min_gap:  # squeezed past the start: spread the overflow back evenly
+            rel = rel * ((total - min_gap) / rel[-1])
+
+        # A gentle pull towards the curvature-weighted spacing the shape was created with.
+        target = self._resample_polygon(cnt, n, curvature_weight=5.0, frame_size=(img_w, img_h))
+        t_s = np.array([arc[np.argmin(np.linalg.norm(outline - q, axis=1))] for q in target])
+        t_rel = np.sort(np.mod(t_s - s[0], total))  # the i-th target spacing pairs with the i-th point
+        blended = (1 - self.RELAX) * rel + self.RELAX * (t_rel - t_rel[0])
+        pos = np.mod(s[0] + blended, total)
+        x = np.interp(pos, arc, outline[:, 0], period=total)
+        y = np.interp(pos, arc, outline[:, 1], period=total)
+        placed = np.stack([x, y], axis=1).astype(np.float32)
+        if self._covers(placed, cnt) >= self.MIN_COVER:
+            return placed
+        # The outline changed too much for the points to follow (a body part whose region
+        # jumped): spread them evenly again, lined up with the previous frame. One small jump
+        # is better than a shape that no longer covers its part.
+        return self._evenly_aligned(target, tracked_pts)
+
+    MIN_COVER = 0.92
+
+    @staticmethod
+    def _covers(pts, cnt):
+        """IoU of the polygon through `pts` with the filled contour, at up to 256 px (fast)."""
+        c = cnt.reshape(-1, 2).astype(np.float32)
+        x0, y0 = np.minimum(c.min(axis=0), pts.min(axis=0))
+        x1, y1 = np.maximum(c.max(axis=0), pts.max(axis=0))
+        scale = 256.0 / max(x1 - x0, y1 - y0, 1.0)
+        size = (int((y1 - y0) * scale) + 3, int((x1 - x0) * scale) + 3)
+        a, b = np.zeros(size, np.uint8), np.zeros(size, np.uint8)
+        cv2.fillPoly(a, [np.round((pts - [x0, y0]) * scale + 1).astype(np.int32)], 1)
+        cv2.fillPoly(b, [np.round((c - [x0, y0]) * scale + 1).astype(np.int32)], 1)
+        union = (a | b).sum()
+        return float((a & b).sum() / union) if union else 1.0
+
+    @staticmethod
+    def _evenly_aligned(resampled, reference):
+        """`resampled` rotated (cyclically) to line up best with `reference`."""
+        n = len(resampled)
+        centred = reference - reference.mean(axis=0) + resampled.mean(axis=0)
+        costs = [np.mean(np.linalg.norm(np.roll(resampled, -k, axis=0) - centred, axis=1)) for k in range(n)]
+        return np.roll(resampled, -int(np.argmin(costs)), axis=0).astype(np.float32)
 
 
     def run_task(self):
         self.log_message.emit(self.node_id, "Initializing Roto to Shape processing...")
+        from plugins.RotoToShape import body_parts as bp
+        body = str(self.params.get("mode", "Outline (any object)")).startswith("Body")
+        part_points = {"Torso": int(self.params.get("points_torso", 60)),
+                       "Head": int(self.params.get("points_head", 30))}
+        limb_points = int(self.params.get("points_limb", 30))
+        depth_map, convention = bp.depth_frames(getattr(self, "depth_path", None)) if body else ({}, None)
         
         point_mode = self.params.get("point_mode", "Auto (Adaptive)")
         auto_point_spacing = float(self.params.get("auto_point_spacing", 30))
@@ -331,6 +426,24 @@ class RotoToShapeWorker(BaseWorker):
                 plate_frames = dict(find_sequence(self.media_path))
             
             prev_gray = None
+            prev_matte = None
+            skeletons, layer_body = {}, body
+            if body:
+                from utvfx.core.image_utils import load_frame
+                numbers = [n for n, _ in sequence]
+                self.log_message.emit(self.node_id, f"Finding the skeleton of {layer_name} on {len(numbers)} frames...")
+                found = bp.detect_skeletons([(n, plate_frames[n]) for n in numbers if n in plate_frames],
+                                            lambda path: load_frame(path), cancelled=lambda: self.is_cancelled)
+                if not found:
+                    self.log_message.emit(self.node_id, f"No person found in {layer_name}; using outline mode for it.")
+                    layer_body = False
+                else:
+                    skeletons = bp.fill_and_smooth(found, numbers)
+                    self.log_message.emit(self.node_id, f"Skeleton found on {len(found)} of {len(numbers)} frames.")
+                    if not depth_map:
+                        self.log_message.emit(self.node_id, "No depth map wired: every part stays visible.")
+                occlusion = bp.Occlusion(float(self.params.get("hide_behind", 0.08)),
+                                         float(self.params.get("show_again", 0.04)))
             
             for i, f_name in enumerate(frames):
                 if self.is_cancelled:
@@ -401,9 +514,48 @@ class RotoToShapeWorker(BaseWorker):
                 if curr_gray is None:
                     curr_gray = cv2.GaussianBlur(img, (15, 15), 0)
                     
-                lk_params = dict(winSize=(21, 21), maxLevel=3, criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 30, 0.01))
+                frame_flow = None  # computed once per frame, when a shape needs it
+
+                if layer_body:
+                    img_h, img_w = img.shape
+                    matte = thresh > 0
+                    skeleton = skeletons.get(f_idx)
+                    parts = bp.split(matte, skeleton, min_area) if skeleton else {}
+                    depths = {}
+                    if f_idx in depth_map:
+                        depth = bp.read_depth(depth_map[f_idx], convention)
+                        if depth is not None:
+                            if depth.shape != matte.shape:
+                                depth = cv2.resize(depth, (img_w, img_h), interpolation=cv2.INTER_NEAREST)
+                            depths = bp.part_depths(parts, depth, matte)
+                    for name, cnt in parts.items():
+                        sid = f"{layer_name}/{name}"
+                        if sid in active_shapes and prev_gray is not None:
+                            if frame_flow is None:
+                                frame_flow = self.dense_flow(prev_gray, curr_gray)
+                            prev_np = np.array(active_shapes[sid], np.float32)[:, :2]
+                            tracked = self.track_points(prev_np.copy(), frame_flow, prev_matte)
+                            pts = self._conform_to_contour(tracked, prev_np, None, cnt, img_w, img_h)
+                        else:
+                            pts = self._resample_polygon(cnt, part_points.get(name, limb_points), curvature_weight,
+                                                         (img_w, img_h))
+                        pts = self._snap_to_gradient(pts, grad_mag, edge_snap_radius, img=img,
+                                                     core_threshold=(240 if generate_feather else 0))
+                        behind = None
+                        if name != "Torso" and name in depths and "Torso" in depths:
+                            behind = bp.behind_amount(depths[name], depths["Torso"], convention)
+                        entry = {"points": (np.hstack([pts, self._calculate_feather(pts, img, threshold=5, max_dist=100)])
+                                            if generate_feather else pts).tolist(),
+                                 "opacity": occlusion.update(name, behind)}
+                        if name in depths:
+                            entry["average_depth"] = depths[name]
+                        current_frame_shapes[sid] = entry
+                    # A part not found on this frame keeps its keys, invisible, so Nuke's shape holds.
+                    for sid, prev_pts in active_shapes.items():
+                        if sid not in current_frame_shapes:
+                            current_frame_shapes[sid] = {"points": prev_pts, "opacity": 0.0}
                 
-                for shape_id, prev_pts in active_shapes.items():
+                for shape_id, prev_pts in ([] if layer_body else active_shapes.items()):
                     prev_pts_np = np.array(prev_pts, dtype=np.float32)
                     main_pts_np = np.ascontiguousarray(prev_pts_np[:, :2]).reshape(-1, 1, 2)
                     
@@ -411,9 +563,11 @@ class RotoToShapeWorker(BaseWorker):
                     best_score = -1.0
                     
                     if prev_gray is not None:
-                        next_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, main_pts_np, None, **lk_params)
-                        next_pts = next_pts.reshape(-1, 2)
-                        status_flat = status.reshape(-1) if status is not None else np.ones(len(next_pts), dtype=int)
+                        if frame_flow is None:
+                            frame_flow = self.dense_flow(prev_gray, curr_gray)
+                        next_pts = self.track_points(prev_pts_np[:, :2].copy(), frame_flow, prev_matte)
+                        status = np.ones((len(next_pts), 1), np.uint8)
+                        status_flat = status.reshape(-1)
                         valid_idx = (status_flat == 1) & ~np.isnan(next_pts[:, 0]) & ~np.isnan(next_pts[:, 1]) & (next_pts[:, 0] >= 0) & (next_pts[:, 0] < grad_mag.shape[1]) & (next_pts[:, 1] >= 0) & (next_pts[:, 1] < grad_mag.shape[0])
                         valid_next = next_pts[valid_idx] if np.sum(valid_idx) >= 4 else next_pts
                         
@@ -474,7 +628,7 @@ class RotoToShapeWorker(BaseWorker):
                     else:
                         pass
                             
-                for c_idx, cnt in enumerate(valid_contours):
+                for c_idx, cnt in enumerate([] if layer_body else valid_contours):
                     if c_idx not in used_contours:
                         if epsilon > 0:
                             cnt = cv2.approxPolyDP(cnt, epsilon, True)
@@ -527,6 +681,7 @@ class RotoToShapeWorker(BaseWorker):
                 active_shapes = {sid: val["points"] for sid, val in current_frame_shapes.items()}
                 all_shapes[f_idx_str].update(current_frame_shapes)
                 prev_gray = curr_gray
+                prev_matte = img
                 
                 self.progress_update.emit(self.node_id, i + 1, max(1, total_frames))
                 
@@ -563,7 +718,8 @@ class RotoToShapeWorker(BaseWorker):
                                 if dist_prev < 20 and dist_next < 20:
                                     smoothed_pts = (pts_prev + pts_np + pts_next) / 3.0
                     
-                    smoothed_shapes[f_str][sid] = {"points": smoothed_pts.tolist(), "opacity": opacity}
+                    smoothed_shapes[f_str][sid] = dict(val, points=smoothed_pts.tolist(), opacity=opacity) \
+                        if isinstance(val, dict) else {"points": smoothed_pts.tolist(), "opacity": opacity}
             
             all_shapes = smoothed_shapes
             
@@ -610,7 +766,8 @@ class RotoToShapeWorker(BaseWorker):
                     else:
                         pts_with_type.append([x, y_flipped, curve_type])
                     
-                all_shapes[f_str][sid] = {"points": pts_with_type, "opacity": opacity}
+                all_shapes[f_str][sid] = dict(val, points=pts_with_type, opacity=opacity) \
+                    if isinstance(val, dict) else {"points": pts_with_type, "opacity": opacity}
 
         # --- Preview Generation ---
         if os.path.exists(self.mask_path):

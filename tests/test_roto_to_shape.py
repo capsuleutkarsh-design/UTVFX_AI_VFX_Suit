@@ -86,3 +86,30 @@ def test_points_are_pixel_centres_in_nuke_space(tmp_path):
     # The box spans x 50..101 and, flipped, y 120-61=59 .. 120-20=100 in Nuke; centres sit half a pixel in.
     assert pts[:, 0].min() == pytest.approx(50.5, abs=1.0) and pts[:, 0].max() == pytest.approx(100.5, abs=1.0)
     assert pts[:, 1].min() == pytest.approx(59.5, abs=1.0) and pts[:, 1].max() == pytest.approx(99.5, abs=1.0)
+
+
+def test_points_stay_on_the_object_when_only_part_of_it_moves(tmp_path):
+    """A bump grows on one side; the points on the other side must not crawl along the edge
+    (they used to be re-spaced evenly every frame, so every point moved)."""
+    rng = np.random.default_rng(0)
+    texture = (rng.random((200, 300, 3)) * 255).astype(np.uint8)
+    plate, matte = tmp_path / "plate", tmp_path / "sm" / "Matte"
+    plate.mkdir(parents=True)
+    matte.mkdir(parents=True)
+    for i, n in enumerate(range(1001, 1009)):
+        cv2.imwrite(str(plate / f"frame_{n:06d}.png"), texture)  # a still plate: nothing slides for real
+        m = np.zeros((200, 300), np.uint16)
+        cv2.rectangle(m, (60, 40), (160, 160), 65535, -1)
+        cv2.circle(m, (160, 100), 10 + 6 * i, 65535, -1)  # grows to the right
+        cv2.imwrite(str(matte / f"matte_{n:06d}.png"), m)
+    params = {"temporal_smoothing": False, "generate_feather": False, "point_mode": "Fixed", "target_points": 40}
+    w = RotoToShapeWorker("r", params, {"Alpha Matte": str(matte), "Video Plate": str(plate)},
+                          str(tmp_path / "roto"), str(tmp_path))
+    w.run_task()
+    data = json.load(open(tmp_path / "roto" / "roto_shapes" / "shapes.json"))
+    sid = next(iter(data["1001"]))
+    first = np.array([p[:2] for p in data["1001"][sid]["points"]])
+    last = np.array([p[:2] for p in data["1008"][sid]["points"]])
+    left = first[:, 0] < 100  # points on the side that does not change
+    assert left.sum() >= 5
+    assert np.abs(last[left] - first[left]).max() < 3.0

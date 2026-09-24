@@ -49,7 +49,28 @@ def load(path):
             raise ProjectError("The project contains a node this version cannot read.")
     data.setdefault("connections", [])
     data.setdefault("backdrops", [])
+    for node in data["nodes"]:
+        upgrade_node(node)
     return data
+
+
+# AI Roto became Matte to Shape's body-parts mode: {old parameter: new parameter}.
+_AI_ROTO_PARAMS = {"target_points_limb": "points_limb", "target_points_torso": "points_torso",
+                   "target_points_head": "points_head", "hysteresis_high": "hide_behind",
+                   "hysteresis_low": "show_again", "corner_threshold": "corner_threshold",
+                   "edge_snap_radius": "edge_snap_radius", "temporal_smoothing": "temporal_smoothing",
+                   "first_frame": "first_frame", "last_frame": "last_frame"}
+
+
+def upgrade_node(node):
+    """Bring a node saved by an older version up to date (in place)."""
+    if node.get("plugin_type") == "ai_roto":
+        old = node.get("params") or {}
+        node["plugin_type"] = "roto_to_shape"
+        node["params"] = {new: old[key] for key, new in _AI_ROTO_PARAMS.items() if key in old}
+        node["params"]["mode"] = "Body parts (people)"
+        if node.get("name", "").startswith("AI Roto"):
+            node["name"] = node["name"].replace("AI Roto", "Matte to Shape", 1)
 
 
 def missing_media(data):

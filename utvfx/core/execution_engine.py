@@ -98,7 +98,7 @@ class InteractionWorker(QThread):
 # Nodes that talk to the separate SAM engine process.
 BRIDGE_USERS = {"super_matte"}
 # Nodes that load large models inside the app process.
-GPU_HEAVY_IN_PROCESS = {"super_matte", "corridor_keyer", "ai_depth_estimator", "ai_roto", "sfm_tracker"}
+GPU_HEAVY_IN_PROCESS = {"super_matte", "corridor_keyer", "ai_depth_estimator", "roto_to_shape", "sfm_tracker"}
 
 
 class ExecutionEngine(QObject):

@@ -13,8 +13,7 @@ Wire nodes together, render, and take the results into Nuke or Blender. Everythi
 |---|---|
 | **Media Plate** | EXR/DPX/TIFF/PNG sequences or video. Keeps the original for delivery and makes a 16-bit display copy for the AI nodes; ACES, log and video colour spaces; optional half-size working copy for 4K. |
 | **SuperMatte** | Click, box or text prompts; SAM 1, SAM 2 (SAMURAI tracking) or SAM 3, refined with ViTMatte, MEMatte or VideoMaMa into soft 16-bit mattes, one per layer. |
-| **Roto to Shape** | Mattes traced into Nuke roto shapes that keep their name and point count from frame to frame, with feather. |
-| **AI Roto** | A person's matte cut into head, torso and limb shapes from their skeleton; limbs behind the body fade out using the depth map. |
+| **Matte to Shape** | Mattes turned into Nuke roto shapes whose points stay on the object, with feather. Outline mode for any object; body-parts mode cuts a person into head, torso and limbs from their skeleton, and limbs behind the body fade out using the depth map. |
 | **Corridor Keyer** | Green/blue screen keying with CorridorKey: straight or premultiplied linear EXR, despill, matte clean-up, anti-flicker. |
 | **Depth** | Depth Anything V2: stable relative depth (0-1 over the shot) or metric depth in metres, as float EXR. |
 | **Grade**, **OCIO ColorSpace** | Nuke-style grade and OpenColorIO conversions in scene-linear, on the full-quality frames. |

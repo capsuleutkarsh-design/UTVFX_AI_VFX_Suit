@@ -68,7 +68,6 @@ NODE_CATEGORY = {
     "media_plate": "media",
     "super_matte": "matte",
     "roto_to_shape": "matte",
-    "ai_roto": "matte",
     "sfm_tracker": "tracking",
     "corridor_keyer": "keying",
     "ai_depth_estimator": "depth",
