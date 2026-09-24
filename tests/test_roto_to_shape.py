@@ -113,3 +113,70 @@ def test_points_stay_on_the_object_when_only_part_of_it_moves(tmp_path):
     left = first[:, 0] < 100  # points on the side that does not change
     assert left.sum() >= 5
     assert np.abs(last[left] - first[left]).max() < 3.0
+
+
+def polygon_iou(points, matte, height):
+    drawn = np.zeros(matte.shape, np.uint8)
+    pts = np.array([[p[0] - 0.5, height - p[1] - 0.5] for p in points])
+    cv2.fillPoly(drawn, [np.round(pts * 16).astype(np.int32)], 1, shift=4)
+    truth = matte > 0
+    return (drawn.astype(bool) & truth).sum() / (drawn.astype(bool) | truth).sum()
+
+
+def test_an_object_that_grows_gets_a_shape_with_enough_points(tmp_path):
+    """A shape keeps its point count (Nuke keys every point), so one made for a small blob
+    could not outline the large object it grew into: it hands over to a new shape."""
+    cache = tmp_path / "sm"
+    folder = cache / "alpha" / "Grow"
+    folder.mkdir(parents=True)
+    (cache / "Matte").mkdir()
+    mattes = {}
+    for i, n in enumerate(range(1001, 1007)):
+        m = np.zeros((300, 400), np.uint16)
+        cv2.ellipse(m, (200, 150), (8 + 30 * i, 6 + 22 * i), 0, 0, 360, 65535, -1)
+        cv2.imwrite(str(folder / f"alpha_{n:06d}.png"), m)
+        mattes[n] = m
+    data = run(cache, tmp_path, max_missing_frames=0, auto_point_spacing=10)
+    for n, m in mattes.items():
+        visible = [v for v in data[str(n)].values() if v["opacity"] > 0]
+        assert len(visible) == 1
+        assert polygon_iou(visible[0]["points"], m, 300) > (0.85 if n == 1001 else 0.95), n  # 1001: 16 x 12 px
+    assert len(shape_ids(data)) >= 2  # the handover
+
+
+def test_a_soft_edge_puts_the_shape_on_the_core_and_the_feather_outside(tmp_path):
+    """Nuke fades from 100% at the shape to 0 at the feather: the shape belongs where the matte
+    is solid and the feather where it has faded, or every soft edge ends up outside the object."""
+    cache = tmp_path / "sm"
+    folder = cache / "alpha" / "Soft"
+    folder.mkdir(parents=True)
+    (cache / "Matte").mkdir()
+    yy, xx = np.mgrid[0:200, 0:200]
+    r = np.hypot(xx - 100, yy - 100)
+    m = np.clip((70 - r) / 20 + 0.5, 0, 1)  # 50% at r=70, solid inside 60, gone beyond 80
+    for n in (1001, 1002):
+        cv2.imwrite(str(folder / f"alpha_{n:06d}.png"), (m * 65535).astype(np.uint16))
+    data = run(cache, tmp_path, generate_feather=True, edge_snap_radius=0)
+    pts = np.array([[p[0], p[1], p[3], p[4]] for p in next(iter(data["1001"].values()))["points"]])
+    inner = np.hypot(pts[:, 0] - 100, pts[:, 1] - 100)
+    outer = np.hypot(pts[:, 2] - 100, pts[:, 3] - 100)
+    assert np.median(inner) == pytest.approx(61, abs=2.5)
+    assert np.median(outer) == pytest.approx(79, abs=2.5)
+
+
+def test_only_real_corners_are_cusps(tmp_path):
+    """Corners come from the matte's outline: a circle has none, a square has four. (Judged from
+    a shape's own points, most points of a shape with few points became cusps.)"""
+    cache = tmp_path / "sm"
+    (cache / "Matte").mkdir(parents=True)
+    for name, draw in (("Circle", lambda m: cv2.circle(m, (100, 100), 40, 65535, -1)),
+                       ("Square", lambda m: cv2.rectangle(m, (60, 60), (140, 140), 65535, -1))):
+        folder = cache / "alpha" / name
+        folder.mkdir(parents=True)
+        m = np.zeros((200, 200), np.uint16)
+        draw(m)
+        cv2.imwrite(str(folder / "alpha_001001.png"), m)
+    data = run(cache, tmp_path, point_mode="Fixed", target_points=8, edge_snap_radius=0)
+    kinds = {sid.split("/")[0]: [p[2] for p in v["points"]] for sid, v in data["1001"].items()}
+    assert kinds["Circle"].count("cusp") == 0
+    assert kinds["Square"].count("cusp") >= 4

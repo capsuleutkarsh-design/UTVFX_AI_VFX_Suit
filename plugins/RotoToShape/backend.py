@@ -129,59 +129,60 @@ class RotoToShapeWorker(BaseWorker):
             
         return resampled
 
-    def _calculate_feather(self, pts, img, threshold=5, max_dist=100):
+    def _feathered(self, pts, img, low=13, high=242, max_out=100, max_in=50):
+        """The shape and feather points for Nuke: each point moved in along its normal to where
+        the matte is solid (`high`, 95%) and its feather out to where it has faded (`low`, 5%),
+        the widths smoothed along the shape. Returns (points, feather points).
+
+        Nuke fades a shape from 100% at its outline to 0 at its feather, so this reproduces the
+        matte's soft edge. (The feather used to start on the 50% line: every soft edge ended up
+        outside the object, too big and hard inside. And faint haze carried single feather points
+        up to 100 px out, which made the edge worse than no feather at all.)"""
         h, w = img.shape
-        feather_pts = []
-        
-        pts_rolled_fwd = np.roll(pts, -1, axis=0)
-        pts_rolled_bck = np.roll(pts, 1, axis=0)
-        tangent = pts_rolled_fwd - pts_rolled_bck
-        
+        pts = np.asarray(pts, np.float32)
+        tangent = np.roll(pts, -1, axis=0) - np.roll(pts, 1, axis=0)
         norms = np.linalg.norm(tangent, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         tangent = tangent / norms
         normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
-        
-        for i in range(len(pts)):
-            pt = pts[i]
-            n = normal[i]
-            
-            # Find which direction points outward (towards lower alpha)
-            p1 = pt + n * 2
-            p2 = pt - n * 2
-            
-            val1 = img[min(h-1, max(0, int(p1[1]))), min(w-1, max(0, int(p1[0])))]
-            val2 = img[min(h-1, max(0, int(p2[1]))), min(w-1, max(0, int(p2[0])))]
-            
-            out_dir = n if val1 < val2 else -n
-            
-            f_pt = pt.copy()
-            prev_val = int(img[min(h-1, max(0, int(pt[1]))), min(w-1, max(0, int(pt[0])))])
-            min_val = prev_val
-            min_pt = pt.copy()
-            
-            for step in range(1, max_dist):
-                test_pt = pt + out_dir * step
-                tx, ty = int(test_pt[0]), int(test_pt[1])
-                if tx < 0 or tx >= w or ty < 0 or ty >= h:
-                    f_pt = [min(w - 1, max(0, tx)), min(h - 1, max(0, ty))]
-                    break
-                curr_val = int(img[ty, tx])
-                if curr_val <= threshold:
-                    f_pt = test_pt
-                    break
-                if curr_val < min_val:
-                    min_val = curr_val
-                    min_pt = test_pt.copy()
-                # Monotonicity check: if alpha intensity increases significantly (hitting another matte or noise), stop at local alpha minimum
-                if curr_val > min_val + 15:
-                    f_pt = min_pt
-                    break
-            else:
-                f_pt = min_pt
-            feather_pts.append(f_pt)
-            
-        return np.array(feather_pts)
+
+        def value(q):
+            return int(img[min(h - 1, max(0, int(q[1]))), min(w - 1, max(0, int(q[0])))])
+
+        def walk(pt, direction, done, limit, sign):
+            """Steps until done(v); stops at the best value so far if the matte turns back."""
+            best, best_at = value(pt), 0
+            for step in range(1, limit):
+                q = pt + direction * step
+                if not (0 <= q[0] < w and 0 <= q[1] < h):
+                    return step - 1
+                v = value(q)
+                if done(v):
+                    return step
+                if sign * v > sign * best:
+                    best, best_at = v, step
+                if sign * (best - v) < -15:  # turning back: another object, a hole or noise
+                    return best_at
+            return best_at
+
+        outward, widths_out, widths_in = [], [], []
+        for pt, n in zip(pts, normal):
+            out_dir = n if value(pt + n * 2) < value(pt - n * 2) else -n  # towards lower alpha
+            outward.append(out_dir)
+            widths_out.append(walk(pt, out_dir, lambda v: v <= low, max_out, -1))
+            widths_in.append(0 if value(pt) >= high else walk(pt, -out_dir, lambda v: v >= high, max_in, 1))
+        outward = np.array(outward, np.float32)
+        widths_out, widths_in = np.array(widths_out, np.float32), np.array(widths_in, np.float32)
+        if len(pts) >= 5:  # one point's odd width is noise: median of it and its neighbours
+            window = (-2, -1, 0, 1, 2)
+            widths_out = np.median(np.stack([np.roll(widths_out, k) for k in window]), axis=0)
+            widths_in = np.median(np.stack([np.roll(widths_in, k) for k in window]), axis=0)
+        return pts - outward * widths_in[:, None], pts + outward * widths_out[:, None]
+
+    def _with_feather(self, pts, img):
+        """[x, y, feather x, feather y] rows."""
+        inner, outer = self._feathered(pts, img)
+        return np.hstack([inner, outer])
 
     def _snap_to_gradient(self, pts, grad_mag, snap_radius=2, img=None, core_threshold=0):
         h, w = grad_mag.shape
@@ -328,6 +329,27 @@ class RotoToShapeWorker(BaseWorker):
         return self._evenly_aligned(target, tracked_pts)
 
     MIN_COVER = 0.92
+    GROWTH = 1.5  # a shape needing this many times its points to describe its object is handed over
+
+    @staticmethod
+    def _corners(pts, cnt, threshold_rad, reach=6.0):
+        """Which points sit on a real corner of the matte: the outline itself turns sharply within
+        `reach` px of the point. (The angle between a shape's own neighbouring points says little:
+        on a shape with few points every point turns sharply, and all of them became cusps.)"""
+        outline, arc, total = RotoToShapeWorker._dense_outline(cnt)
+        if total <= 4 * reach or len(pts) < 3:
+            return [False] * len(pts)
+        corners = []
+        for q in np.asarray(pts, np.float32)[:, :2]:
+            s0 = arc[int(np.argmin(np.linalg.norm(outline - q, axis=1)))]
+            here = np.array([np.interp(s0, arc, outline[:, k], period=total) for k in (0, 1)])
+            back = np.array([np.interp((s0 - reach) % total, arc, outline[:, k], period=total) for k in (0, 1)])
+            ahead = np.array([np.interp((s0 + reach) % total, arc, outline[:, k], period=total) for k in (0, 1)])
+            v1, v2 = here - back, ahead - here
+            n = np.linalg.norm(v1) * np.linalg.norm(v2)
+            turn = np.arccos(np.clip(np.dot(v1, v2) / n, -1, 1)) if n > 0 else 0.0
+            corners.append(bool(turn > threshold_rad))
+        return corners
 
     @staticmethod
     def _covers(pts, cnt):
@@ -352,6 +374,14 @@ class RotoToShapeWorker(BaseWorker):
         return np.roll(resampled, -int(np.argmin(costs)), axis=0).astype(np.float32)
 
 
+    def _point_count(self, cnt):
+        p = self._count_params
+        if p["epsilon"] > 0:
+            cnt = cv2.approxPolyDP(cnt, p["epsilon"], True)
+        if p["mode"] != "Auto (Adaptive)":
+            return p["target"]
+        return min(max(8, int(cv2.arcLength(cnt, True) / p["spacing"])), 80)
+
     def run_task(self):
         self.log_message.emit(self.node_id, "Initializing Roto to Shape processing...")
         from plugins.RotoToShape import body_parts as bp
@@ -373,6 +403,9 @@ class RotoToShapeWorker(BaseWorker):
         max_missing_frames = int(self.params.get("max_missing_frames", 5))
         temporal_smoothing = self._parse_bool(self.params.get("temporal_smoothing", True))
         first_frame = int(self.params.get("first_frame", 0))
+        self._count_params = {"mode": point_mode, "spacing": auto_point_spacing, "target": target_points,
+                              "epsilon": epsilon}
+        corner_rad = np.radians(float(self.params.get("corner_threshold", 45)))
         last_frame = int(self.params.get("last_frame", 0))
         
         if not os.path.exists(self.mask_path):
@@ -418,6 +451,7 @@ class RotoToShapeWorker(BaseWorker):
                 continue
                 
             active_shapes = {}
+            retired = set()  # shapes handed over to a new shape: never matched or reused again
             lost_shapes_count = {}
             next_shape_id = 0
             all_known_shapes_pool = {}
@@ -544,9 +578,10 @@ class RotoToShapeWorker(BaseWorker):
                         behind = None
                         if name != "Torso" and name in depths and "Torso" in depths:
                             behind = bp.behind_amount(depths[name], depths["Torso"], convention)
-                        entry = {"points": (np.hstack([pts, self._calculate_feather(pts, img, threshold=5, max_dist=100)])
+                        entry = {"points": (self._with_feather(pts, img)
                                             if generate_feather else pts).tolist(),
-                                 "opacity": occlusion.update(name, behind)}
+                                 "opacity": occlusion.update(name, behind),
+                                 "corners": self._corners(pts, cnt, corner_rad)}
                         if name in depths:
                             entry["average_depth"] = depths[name]
                         current_frame_shapes[sid] = entry
@@ -555,87 +590,78 @@ class RotoToShapeWorker(BaseWorker):
                         if sid not in current_frame_shapes:
                             current_frame_shapes[sid] = {"points": prev_pts, "opacity": 0.0}
                 
+                # Every shape is moved by the image motion, then shapes and outlines are paired
+                # best score first, so when pieces merge the shape that fits best takes the result.
+                tracked = {}
                 for shape_id, prev_pts in ([] if layer_body else active_shapes.items()):
+                    if shape_id in retired or prev_gray is None:
+                        continue
                     prev_pts_np = np.array(prev_pts, dtype=np.float32)
-                    main_pts_np = np.ascontiguousarray(prev_pts_np[:, :2]).reshape(-1, 1, 2)
-                    
-                    best_cnt_idx = -1
-                    best_score = -1.0
-                    
-                    if prev_gray is not None:
-                        if frame_flow is None:
-                            frame_flow = self.dense_flow(prev_gray, curr_gray)
-                        next_pts = self.track_points(prev_pts_np[:, :2].copy(), frame_flow, prev_matte)
-                        status = np.ones((len(next_pts), 1), np.uint8)
-                        status_flat = status.reshape(-1)
-                        valid_idx = (status_flat == 1) & ~np.isnan(next_pts[:, 0]) & ~np.isnan(next_pts[:, 1]) & (next_pts[:, 0] >= 0) & (next_pts[:, 0] < grad_mag.shape[1]) & (next_pts[:, 1] >= 0) & (next_pts[:, 1] < grad_mag.shape[0])
-                        valid_next = next_pts[valid_idx] if np.sum(valid_idx) >= 4 else next_pts
-                        
-                        x_min, y_min = np.min(valid_next, axis=0)
-                        x_max, y_max = np.max(valid_next, axis=0)
-                        tracked_bbox = (x_min, y_min, x_max - x_min, y_max - y_min)
-                        
-                        prev_main = prev_pts_np[:, :2]
-                        px_min, py_min = np.min(prev_main, axis=0)
-                        px_max, py_max = np.max(prev_main, axis=0)
-                        prev_bbox = (px_min, py_min, px_max - px_min, py_max - py_min)
-                        
-                        for c_idx, cnt in enumerate(valid_contours):
-                            if c_idx in used_contours: continue
-                            iou_trk = bbox_iou(tracked_bbox, valid_bboxes[c_idx])
-                            iou_prv = bbox_iou(prev_bbox, valid_bboxes[c_idx])
-                            iou = max(iou_trk, iou_prv)
-                            
-                            dist_trk = bbox_center_dist(tracked_bbox, valid_bboxes[c_idx])
-                            dist_prv = bbox_center_dist(prev_bbox, valid_bboxes[c_idx])
-                            dist = min(dist_trk, dist_prv)
-                            
-                            max_dim = max(tracked_bbox[2], tracked_bbox[3], prev_bbox[2], prev_bbox[3], valid_bboxes[c_idx][2], valid_bboxes[c_idx][3])
-                            dist_score = max(0, 1.0 - dist / (max_dim + 1e-5))
-                            score = max(iou, dist_score)
-                            
-                            if score > best_score:
-                                best_score = score
-                                best_cnt_idx = c_idx
-                                
-                        if best_cnt_idx != -1 and best_score >= iou_threshold:
-                            used_contours.add(best_cnt_idx)
-                            
-                            matched_cnt = valid_contours[best_cnt_idx]
-                            img_h, img_w = grad_mag.shape
-                            conformed_pts = self._conform_to_contour(next_pts, prev_pts_np[:, :2], status, matched_cnt, img_w, img_h)
-                            snapped_pts = self._snap_to_gradient(conformed_pts, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
-                            
-                            if generate_feather:
-                                feather_pts = self._calculate_feather(snapped_pts, img, threshold=5, max_dist=100)
-                                combined = np.hstack([snapped_pts, feather_pts])
-                                current_frame_shapes[shape_id] = {"points": combined.tolist(), "opacity": 1.0}
-                            else:
-                                current_frame_shapes[shape_id] = {"points": snapped_pts.tolist(), "opacity": 1.0}
-                                
-                            lost_shapes_count[shape_id] = 0
-                        else:
-                            lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
-                            if lost_shapes_count[shape_id] <= max_missing_frames:
-                                next_pts[:, 0] = np.clip(next_pts[:, 0], 0, grad_mag.shape[1] - 1)
-                                next_pts[:, 1] = np.clip(next_pts[:, 1], 0, grad_mag.shape[0] - 1)
-                                if generate_feather:
-                                    dummy_feather = np.copy(next_pts)
-                                    combined_lost = np.hstack([next_pts, dummy_feather])
-                                    current_frame_shapes[shape_id] = {"points": combined_lost.tolist(), "opacity": 0.0}
-                                else:
-                                    current_frame_shapes[shape_id] = {"points": next_pts.tolist(), "opacity": 0.0}
+                    if frame_flow is None:
+                        frame_flow = self.dense_flow(prev_gray, curr_gray)
+                    next_pts = self.track_points(prev_pts_np[:, :2].copy(), frame_flow, prev_matte)
+                    inside = (~np.isnan(next_pts).any(axis=1) & (next_pts[:, 0] >= 0) & (next_pts[:, 0] < grad_mag.shape[1])
+                              & (next_pts[:, 1] >= 0) & (next_pts[:, 1] < grad_mag.shape[0]))
+                    valid_next = next_pts[inside] if inside.sum() >= 4 else next_pts
+                    x_min, y_min = np.min(valid_next, axis=0)
+                    x_max, y_max = np.max(valid_next, axis=0)
+                    px_min, py_min = np.min(prev_pts_np[:, :2], axis=0)
+                    px_max, py_max = np.max(prev_pts_np[:, :2], axis=0)
+                    tracked[shape_id] = (prev_pts_np, next_pts, (x_min, y_min, x_max - x_min, y_max - y_min),
+                                         (px_min, py_min, px_max - px_min, py_max - py_min))
+
+                pairs = []
+                for shape_id, (_, _, tracked_bbox, prev_bbox) in tracked.items():
+                    for c_idx in range(len(valid_contours)):
+                        box = valid_bboxes[c_idx]
+                        iou = max(bbox_iou(tracked_bbox, box), bbox_iou(prev_bbox, box))
+                        dist = min(bbox_center_dist(tracked_bbox, box), bbox_center_dist(prev_bbox, box))
+                        max_dim = max(tracked_bbox[2], tracked_bbox[3], prev_bbox[2], prev_bbox[3], box[2], box[3])
+                        score = max(iou, max(0, 1.0 - dist / (max_dim + 1e-5)))
+                        if score >= iou_threshold:
+                            pairs.append((score, shape_id, c_idx))
+                matched = {}
+                for score, shape_id, c_idx in sorted(pairs, key=lambda x: -x[0]):
+                    if shape_id not in matched and c_idx not in used_contours:
+                        matched[shape_id] = c_idx
+                        used_contours.add(c_idx)
+
+                img_h, img_w = grad_mag.shape
+                for shape_id, (prev_pts_np, next_pts, _, _) in tracked.items():
+                    if shape_id in matched:
+                        matched_cnt = valid_contours[matched[shape_id]]
+                        n = len(prev_pts_np)
+                        conformed_pts = self._conform_to_contour(next_pts, prev_pts_np[:, :2], None, matched_cnt, img_w, img_h)
+                        if (self._point_count(matched_cnt) > self.GROWTH * n
+                                or self._covers(conformed_pts, matched_cnt) < self.MIN_COVER):
+                            # Too few points for what the object has become (it grew, or pieces
+                            # merged into it): hand over to a new shape with enough points. It
+                            # is hidden from this frame on, and the outline starts a new shape.
+                            used_contours.discard(matched[shape_id])
+                            retired.add(shape_id)
+                            all_known_shapes_pool.pop(shape_id, None)
+                            current_frame_shapes[shape_id] = {"points": prev_pts_np.tolist(), "opacity": 0.0}
+                            continue
+                        snapped_pts = self._snap_to_gradient(conformed_pts, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
+                        entry = {"points": (self._with_feather(snapped_pts, img)
+                                            if generate_feather else snapped_pts).tolist(),
+                                 "opacity": 1.0, "corners": self._corners(snapped_pts, matched_cnt, corner_rad)}
+                        current_frame_shapes[shape_id] = entry
+                        lost_shapes_count[shape_id] = 0
                     else:
-                        pass
-                            
+                        lost_shapes_count[shape_id] = lost_shapes_count.get(shape_id, 0) + 1
+                        if lost_shapes_count[shape_id] <= max_missing_frames:
+                            next_pts[:, 0] = np.clip(next_pts[:, 0], 0, grad_mag.shape[1] - 1)
+                            next_pts[:, 1] = np.clip(next_pts[:, 1], 0, grad_mag.shape[0] - 1)
+                            held = np.hstack([next_pts, next_pts]) if generate_feather else next_pts
+                            current_frame_shapes[shape_id] = {"points": held.tolist(), "opacity": 0.0}
+
                 for c_idx, cnt in enumerate([] if layer_body else valid_contours):
                     if c_idx not in used_contours:
+                        raw_cnt = cnt
+                        num_points = self._point_count(cnt)
                         if epsilon > 0:
                             cnt = cv2.approxPolyDP(cnt, epsilon, True)
-                        perimeter = cv2.arcLength(cnt, True)
-                        num_points = max(8, int(perimeter / auto_point_spacing)) if point_mode == "Auto (Adaptive)" else target_points
-                        if point_mode == "Auto (Adaptive)":
-                            num_points = min(num_points, 80)
                         frame_size = (all_shapes["format_width"], all_shapes["format_height"])
                         resampled = self._resample_polygon(cnt, num_points, curvature_weight, frame_size)
                         resampled = self._snap_to_gradient(resampled, grad_mag, edge_snap_radius, img=img, core_threshold=(240 if generate_feather else 0))
@@ -646,7 +672,8 @@ class RotoToShapeWorker(BaseWorker):
                         cnt_centroid = np.mean(resampled, axis=0)
                         cnt_size = float(np.max(np.ptp(resampled, axis=0)))
                         for pool_sid, pool_pts in all_known_shapes_pool.items():
-                            if pool_sid not in current_frame_shapes and f"/{prefix}_" in pool_sid:
+                            if (pool_sid not in current_frame_shapes and f"/{prefix}_" in pool_sid
+                                    and num_points <= self.GROWTH * len(pool_pts)):
                                 dist = np.linalg.norm(cnt_centroid - np.mean(pool_pts, axis=0))
                                 # Only the same object coming back: close to where it was lost.
                                 reach = max(cnt_size, float(np.max(np.ptp(pool_pts, axis=0))))
@@ -665,12 +692,10 @@ class RotoToShapeWorker(BaseWorker):
                             shape_id = f"{layer_name}/{prefix}_{next_shape_id}"
                             next_shape_id += 1
                         
-                        if generate_feather:
-                            feather_pts = self._calculate_feather(resampled, img, threshold=5, max_dist=100)
-                            combined = np.hstack([resampled, feather_pts])
-                            current_frame_shapes[shape_id] = {"points": combined.tolist(), "opacity": 1.0}
-                        else:
-                            current_frame_shapes[shape_id] = {"points": resampled.tolist(), "opacity": 1.0}
+                        points = (self._with_feather(resampled, img)
+                                  if generate_feather else resampled)
+                        current_frame_shapes[shape_id] = {"points": points.tolist(), "opacity": 1.0,
+                                                          "corners": self._corners(resampled, raw_cnt, corner_rad)}
                             
                         lost_shapes_count[shape_id] = 0
                         
@@ -726,9 +751,6 @@ class RotoToShapeWorker(BaseWorker):
         # --- Format Y-flip and Cusp Detection ---
         format_h = all_shapes.get("format_height", 1080)
         
-        corner_threshold = float(self.params.get("corner_threshold", 45))
-        corner_rad = np.radians(corner_threshold)
-        
         frames_present = sorted([int(k) for k in all_shapes.keys() if str(k).isdigit()])
         for f_idx in frames_present:
             f_str = str(f_idx)
@@ -738,27 +760,14 @@ class RotoToShapeWorker(BaseWorker):
                 pts_np = np.array(pts, dtype=np.float32)
                 has_feather = pts_np.shape[1] == 4
                 main_pts = pts_np[:, :2]
-                
+                corners = val.get("corners") if isinstance(val, dict) else None
+                if not corners or len(corners) != len(main_pts):
+                    corners = [False] * len(main_pts)
                 pts_with_type = []
-                if len(main_pts) > 2:
-                    pts_rolled_fwd = np.roll(main_pts, -1, axis=0)
-                    pts_rolled_bck = np.roll(main_pts, 1, axis=0)
-                    v1 = main_pts - pts_rolled_bck
-                    v2 = pts_rolled_fwd - main_pts
-                    n1 = np.linalg.norm(v1, axis=1, keepdims=True)
-                    n2 = np.linalg.norm(v2, axis=1, keepdims=True)
-                    n1[n1 == 0] = 1.0
-                    n2[n2 == 0] = 1.0
-                    dot = np.sum((v1 / n1) * (v2 / n2), axis=1)
-                    dot = np.clip(dot, -1.0, 1.0)
-                    angle = np.arccos(dot)
-                else:
-                    angle = np.zeros(len(main_pts))
-                    
                 # Image pixel (x, y) covers [x, x+1) from the top; in Nuke its centre is
                 # (x + 0.5, height - y - 0.5) with the origin at the bottom left.
                 for j, pt in enumerate(main_pts):
-                    curve_type = "cusp" if angle[j] > corner_rad else "smooth"
+                    curve_type = "cusp" if corners[j] else "smooth"
                     x, y_flipped = float(pt[0]) + 0.5, float(format_h - pt[1]) - 0.5
                     if has_feather:
                         fx, fy_flipped = float(pts_np[j, 2]) + 0.5, float(format_h - pts_np[j, 3]) - 0.5
@@ -766,8 +775,10 @@ class RotoToShapeWorker(BaseWorker):
                     else:
                         pts_with_type.append([x, y_flipped, curve_type])
                     
-                all_shapes[f_str][sid] = dict(val, points=pts_with_type, opacity=opacity) \
-                    if isinstance(val, dict) else {"points": pts_with_type, "opacity": opacity}
+                entry = dict(val, points=pts_with_type, opacity=opacity) if isinstance(val, dict) \
+                    else {"points": pts_with_type, "opacity": opacity}
+                entry.pop("corners", None)  # now in each point's type
+                all_shapes[f_str][sid] = entry
 
         # --- Preview Generation ---
         if os.path.exists(self.mask_path):

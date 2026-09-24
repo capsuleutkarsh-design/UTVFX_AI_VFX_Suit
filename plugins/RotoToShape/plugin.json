@@ -70,7 +70,7 @@
             "min": 10,
             "max": 90,
             "step": 5,
-            "tooltip": "Angles sharper than this will be exported as hard corners (Bezier Cusp)"
+            "tooltip": "Where the matte's outline turns sharper than this, the point is a hard corner (cusp)"
         },
         {
             "id": "simplify_epsilon",
@@ -109,14 +109,14 @@
             "min": 0,
             "max": 100,
             "step": 5,
-            "tooltip": "0 = Stick to soft outer edge, 100 = Stick to hard inner core"
+            "tooltip": "Where the matte is cut into objects, and where the outline sits when Generate Feather is off: 0 = soft outer edge, 100 = hard inner core"
         },
         {
             "id": "generate_feather",
             "name": "Generate Feather",
             "type": "checkbox",
             "value": true,
-            "tooltip": "Automatically trace and export soft edges as native Nuke Feather curves"
+            "tooltip": "Point on the solid core, feather where the matte has faded: Nuke's feather reproduces the soft edge"
         },
         {
             "id": "iou_threshold",

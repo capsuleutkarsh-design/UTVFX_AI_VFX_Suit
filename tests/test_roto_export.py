@@ -1,111 +1,85 @@
-"""Roto export (M10): the generated Nuke script runs (against a stand-in nuke module), uses Nuke's
-lifetime attributes, keys plate frames, carries its data inline and refuses files that are not shapes."""
+"""Roto export: the generated Nuke script runs against a strict stand-in for nuke.rotopaint (only
+Foundry's documented calls), and the shapes it builds match shapes.json on every frame (points,
+feather, visibility) whether or not Nuke honours the interpolation the script asks for."""
 import json
-import sys
-import types
 
 import pytest
 
+import nuke_standin as ns
 from plugins.CompositeOutput.roto_exporter import build_script, export_roto_to_nuke, validate
+
+FRAMES = range(1001, 1011)
 
 
 def shapes_data():
     data = {"format_width": 200, "format_height": 100}
-    for f in range(1001, 1011):
-        data[str(f)] = {"Person/L_Forearm": {"points": [[10 + f - 1001, 10, "smooth"], [40, 10, "cusp"], [40, 40, "smooth"]],
+    for f in FRAMES:
+        k = f - 1001
+        data[str(f)] = {"Person/L_Forearm": {"points": [[10 + k * k * 0.5, 10, "smooth", 5 + k * k * 0.5, 5],
+                                                        [40, 10 + k, "cusp", 45, 5 + k],
+                                                        [40, 40, "smooth", 44, 44]],
                                              "opacity": 1.0 if f < 1006 else 0.0, "average_depth": 0.4}}
-        if f >= 1004:
-            data[str(f)]["Prop/Shape_1"] = {"points": [[100, 50, "smooth"], [120, 50, "smooth"], [110, 70, "smooth"]],
+        if f >= 1004 and f not in (1007, 1008):   # appears late, and has a gap
+            data[str(f)]["Prop/Shape_1"] = {"points": [[100, 50, "smooth"], [120, 50, "smooth"], [110, 70 + k, "smooth"]],
                                             "opacity": 1.0, "average_depth": 0.2}
     return data
 
 
-class Curve:
-    def __init__(self):
-        self.frames = []
-
-    def addKey(self, frame, value):
-        self.frames.append((frame, value))
-
-    def keys(self):
-        return [types.SimpleNamespace(interpolationType=None) for _ in self.frames] or [types.SimpleNamespace()]
-
-
-class Element:
-    def __init__(self):
-        self.curves = [Curve(), Curve()]
-
-    def getPositionAnimCurve(self, i):
-        return self.curves[i]
-
-
-class Point:
-    def __init__(self, x, y):
-        for name in ("center", "leftTangent", "rightTangent", "featherCenter", "featherLeftTangent", "featherRightTangent"):
-            setattr(self, name, Element())
-
-
-class Attributes(dict):
-    def __init__(self):
-        super().__init__()
-        self.anim = {}
-
-    def set(self, key, value):
-        self[key] = value
-
-    def getAnimCurve(self, key):
-        return self.anim.setdefault(key, Curve())
-
-
-class Shape(list):
-    def __init__(self, curves):
-        super().__init__()
-        self.attrs, self.name = Attributes(), ""
-
-    def getAttributes(self):
-        return self.attrs
-
-
-class Layer(list):
-    def __init__(self, curves):
-        super().__init__()
-        self.name = ""
-
-
-@pytest.fixture
-def fake_nuke(monkeypatch):
-    root = Layer(None)
-    curves = types.SimpleNamespace(rootLayer=root, changed=lambda: None)
-    knobs = {"curves": curves, "onCreate": types.SimpleNamespace(setValue=lambda v: None)}
-    node = types.SimpleNamespace(__getitem__=None, knob=lambda k: knobs[k])
-    node_obj = type("Node", (), {"__getitem__": lambda self, k: knobs[k], "knob": lambda self, k: knobs[k]})()
-    nuke = types.ModuleType("nuke")
-    nuke.thisNode = lambda: node_obj
-    rp = types.ModuleType("nuke.rotopaint")
-    rp.Layer, rp.Shape, rp.ShapeControlPoint = Layer, Shape, Point
-    rp.AnimCurve = types.SimpleNamespace(InterpolationType=types.SimpleNamespace(LINEAR="linear", SMOOTH="smooth"))
-    nuke.rotopaint = rp
-    monkeypatch.setitem(sys.modules, "nuke", nuke)
-    monkeypatch.setitem(sys.modules, "nuke.rotopaint", rp)
-    return root
-
-
-def run_script(data):
+def build(monkeypatch, data, linear_sticks=True):
+    node, messages = ns.install(monkeypatch, linear_sticks)
     exec(compile(build_script(data), "roto", "exec"), {"__name__": "nuke_roto"})
+    return node, messages
 
 
-def test_script_builds_named_layers_with_lifetimes_and_plate_frames(fake_nuke):
-    run_script(shapes_data())
-    layers = {l.name: l for l in fake_nuke}
-    assert set(layers) == {"Person", "Prop"}
-    forearm, prop = layers["Person"][0], layers["Prop"][0]
-    assert forearm.name == "L_Forearm" and prop.name == "Shape_1"
-    assert forearm.attrs["ltt"] == 0                       # present on every frame
-    assert (prop.attrs["ltt"], prop.attrs["ltn"], prop.attrs["ltm"]) == (4, 1004.0, 1010.0)
-    keyed = [f for f, _ in forearm[0].center.curves[0].frames]
-    assert keyed[0] == 1001 and keyed[-1] == 1010         # keys on plate frames
-    opacity = dict(forearm.attrs.anim["opc"].frames)
-    assert opacity[1006] == 0.0 and opacity[1005] == 1.0  # the fade is keyed even between shape keys
+@pytest.mark.parametrize("linear_sticks", [True, False])
+def test_shapes_match_the_data_on_every_frame(monkeypatch, linear_sticks):
+    """With linear_sticks=False Nuke ignores the requested interpolation (the stand-in then
+    interpolates smoothly): the script must key whatever frames that gets wrong."""
+    data = shapes_data()
+    node, messages = build(monkeypatch, data, linear_sticks)
+    assert messages == []
+    shapes = ns.shapes_of(node)
+    assert set(shapes) == {"Person/L_Forearm", "Prop/Shape_1"}
+    for sid, shape in shapes.items():
+        for f in FRAMES:
+            entry = data[str(f)].get(sid)
+            visible = shape.getAttributes().getValue(f, "opc")
+            assert visible == pytest.approx(entry["opacity"] if entry else 0.0), (sid, f)
+            if not entry:
+                continue
+            for cv, p in zip(ns.outline_at(shape, f), entry["points"]):
+                assert cv[0] == pytest.approx(tuple(p[:2]), abs=1.0), (sid, f)
+                if len(p) >= 5:
+                    assert cv[3] == pytest.approx(tuple(p[3:5]), abs=1.0), (sid, f)
+
+
+def test_feather_and_tangents_are_offsets_and_cusps_have_none(monkeypatch):
+    node, _ = build(monkeypatch, shapes_data())
+    forearm = ns.shapes_of(node)["Person/L_Forearm"]
+    assert forearm[0].featherCenter.at(1001) == pytest.approx((-5, -5))   # relative to the point
+    assert forearm[1].leftTangent.at(1001) == (0, 0) and forearm[1].rightTangent.at(1001) == (0, 0)
+    assert forearm[0].rightTangent.at(1001) != (0, 0)
+
+
+def test_linear_keys_are_thinned(monkeypatch):
+    data = shapes_data()
+    node, _ = build(monkeypatch, data)
+    prop = ns.shapes_of(node)["Prop/Shape_1"]
+    # The prop moves linearly: its first and last frames are enough.
+    assert prop[2].center.getPositionAnimCurve(1).getNumberOfKeys() == 2
+
+
+def test_layers_are_named_and_the_node_is_left_clean(monkeypatch):
+    node, _ = build(monkeypatch, shapes_data())
+    assert [layer.name for layer in node["curves"].rootLayer] == ["Prop", "Person"]  # nearest first
+    assert node["onCreate"].value == "" and node["curves"].changes == 1
+
+
+def test_rebuilding_a_built_node_adds_nothing(monkeypatch):
+    node, messages = build(monkeypatch, shapes_data())
+    exec(compile(build_script(shapes_data()), "roto", "exec"), {"__name__": "nuke_roto"})
+    assert sum(len(layer) for layer in node["curves"].rootLayer) == 2
+    assert messages and "already has shapes" in messages[0]
 
 
 def test_nk_embeds_its_data_and_has_balanced_braces(tmp_path):

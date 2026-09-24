@@ -8,13 +8,17 @@ shapes.json: {"format_width": W, "format_height": H,
               "<frame>": {"<Layer>/<Shape>": {"points": [[x, y, "smooth"|"cusp"(, fx, fy)], ...],
                                               "opacity": 0-1, "average_depth": ...}}}
 Points are in Nuke coordinates (origin bottom-left); frames are plate frame numbers.
+
+The script uses only nuke.rotopaint calls documented by Foundry and seen in working scripts:
+AnimControlPoint.addPositionKey(t, (x, y)) and getPositionAnimCurve(i), AnimCurve.evaluate /
+getNumberOfKeys / getKey, AnimCurveKey.interpolationType, rp.InterpolationType,
+AnimAttributes.set(t, "opc", v) / set("ltt", 0) / getCurve("opc"). Tangents and feather are offsets from
+the point (feather tangents from the feather point), as Nuke stores them. The old script
+called AnimCurve.keys() and rp.AnimCurve.InterpolationType, which Nuke does not have: it
+stopped before the first key, leaving a still, unfeathered shape.
 """
 import base64
 import json
-
-# Nuke RotoPaint shape attributes (AnimAttributes keys).
-LIFETIME_TYPE, LIFETIME_START, LIFETIME_END = "ltt", "ltn", "ltm"
-LIFETIME_ALL, LIFETIME_RANGE = 0, 4
 
 SCRIPT = r'''
 import base64, json, math, random
@@ -22,7 +26,8 @@ import nuke
 import nuke.rotopaint as rp
 
 DATA = json.loads(base64.b64decode("__DATA__").decode("utf-8"))
-INTERP = __INTERP__
+LINEAR = __LINEAR__
+TOLERANCE = 1.0  # px: a frame is keyed when the curves between its neighbouring keys miss it by more
 
 def tangents(pts):
     left, right = [], []
@@ -41,18 +46,59 @@ def tangents(pts):
         right.append((dx * d_next / total, dy * d_next / total))
     return left, right
 
-def key(curve, frame, value):
-    curve.addKey(frame, value)
-    curve.keys()[-1].interpolationType = INTERP
+def elements(cv):
+    return (cv.center, cv.leftTangent, cv.rightTangent, cv.featherCenter, cv.featherLeftTangent, cv.featherRightTangent)
 
-def key_xy(element, frame, x, y):
-    key(element.getPositionAnimCurve(0), frame, x)
-    key(element.getPositionAnimCurve(1), frame, y)
+def key_frame(shape, sid, f):
+    """Key every point, tangent and feather point of `shape` on frame f."""
+    pts = DATA[str(f)][sid]["points"]
+    left, right = tangents(pts)
+    feather = len(pts[0]) >= 5
+    if feather:
+        f_left, f_right = tangents([[p[3], p[4], p[2]] for p in pts])
+    for i, p in enumerate(pts[:len(shape)]):
+        cv = shape[i]
+        cv.center.addPositionKey(f, (p[0], p[1]))
+        cv.leftTangent.addPositionKey(f, (-left[i][0], -left[i][1]))
+        cv.rightTangent.addPositionKey(f, (right[i][0], right[i][1]))
+        if feather:
+            cv.featherCenter.addPositionKey(f, (p[3] - p[0], p[4] - p[1]))
+            cv.featherLeftTangent.addPositionKey(f, (-f_left[i][0], -f_left[i][1]))
+            cv.featherRightTangent.addPositionKey(f, (f_right[i][0], f_right[i][1]))
 
-def keyframes(frames, sid, tolerance=1.5):
+def set_interpolation(shape):
+    """Linear (or smooth) between keys, if this Nuke lets a script set it."""
+    kind = getattr(getattr(rp, "InterpolationType", None),
+                   "eLinearInterpolationType" if LINEAR else "eCubicInterpolationType", None)
+    if kind is None:
+        return
+    for i in range(len(shape)):
+        for element in elements(shape[i]):
+            for dim in (0, 1):
+                curve = element.getPositionAnimCurve(dim)
+                for k in range(curve.getNumberOfKeys()):
+                    try:
+                        curve.getKey(k).interpolationType = kind
+                    except Exception:
+                        return
+
+def drift(shape, sid, f):
+    """How far Nuke's interpolated points (and feather) are from the traced ones on frame f, px."""
+    worst = 0.0
+    for i, p in enumerate(DATA[str(f)][sid]["points"][:len(shape)]):
+        c = shape[i].center
+        worst = max(worst, abs(c.getPositionAnimCurve(0).evaluate(f) - p[0]),
+                    abs(c.getPositionAnimCurve(1).evaluate(f) - p[1]))
+        if len(p) >= 5:
+            fc = shape[i].featherCenter
+            worst = max(worst, abs(fc.getPositionAnimCurve(0).evaluate(f) - (p[3] - p[0])),
+                        abs(fc.getPositionAnimCurve(1).evaluate(f) - (p[4] - p[1])))
+    return worst
+
+def keyframes(frames, sid):
     """Frames worth keying: first, last, and wherever linear interpolation would drift (RDP)."""
     def vec(f):
-        return [c for p in DATA[str(f)][sid]["points"] for c in p[:2]]
+        return [c for p in DATA[str(f)][sid]["points"] for c in (p[:2] + p[3:5])]
     def worst(a, b):
         va, vb = vec(frames[a]), vec(frames[b])
         best, at = 0.0, None
@@ -60,9 +106,8 @@ def keyframes(frames, sid, tolerance=1.5):
             v = vec(frames[i])
             if len(v) != len(va) or len(v) != len(vb):
                 return float("inf"), i
-            t = (i - a) / float(b - a)
-            d = max(math.hypot(v[k] - (va[k] + t * (vb[k] - va[k])), v[k + 1] - (va[k + 1] + t * (vb[k + 1] - va[k + 1])))
-                    for k in range(0, len(v), 2))
+            t = (frames[i] - frames[a]) / float(frames[b] - frames[a])  # by frame: there can be gaps
+            d = max(abs(v[k] - (va[k] + t * (vb[k] - va[k]))) for k in range(len(v)))
             if d > best:
                 best, at = d, i
         return best, at
@@ -72,100 +117,103 @@ def keyframes(frames, sid, tolerance=1.5):
         if b - a < 2:
             continue
         d, i = worst(a, b)
-        if d > tolerance:
+        if d > TOLERANCE:
             keep.add(i); stack += [(a, i), (i, b)]
     return {frames[i] for i in keep}
 
-frames = sorted(int(k) for k in DATA if str(k).isdigit())
-node = nuke.thisNode()
-curves = node["curves"]
-root = curves.rootLayer
-layers, shapes = {}, {}
-ids = sorted({sid for f in frames for sid in DATA[str(f)]})
-
-def depth(sid):
+def depth(sid, frames):
     values = [DATA[str(f)][sid].get("average_depth") for f in frames if sid in DATA[str(f)]]
     values = [v for v in values if v is not None]
     return sum(values) / len(values) if values else 0.0
 
-for sid in sorted(ids, key=depth):
-    layer_name, _, shape_name = sid.rpartition("/")
-    layer_name = layer_name or "Shapes"
-    if layer_name not in layers:
-        layers[layer_name] = rp.Layer(curves)
-        layers[layer_name].name = layer_name
-        root.append(layers[layer_name])
+def build_shape(curves, layer, sid, frames):
     present = [f for f in frames if sid in DATA[str(f)]]
-    first_pts = DATA[str(present[0])][sid]["points"]
     shape = rp.Shape(curves)
-    shape.name = shape_name or sid
-    for p in first_pts:
+    shape.name = sid.rpartition("/")[2] or sid
+    for p in DATA[str(present[0])][sid]["points"]:
         shape.append(rp.ShapeControlPoint(p[0], p[1]))
     attrs = shape.getAttributes()
     random.seed(sid)
     for channel in ("ro", "go", "bo"):  # overlay colour, so shapes are told apart in the viewer
         attrs.set(channel, random.uniform(0.3, 1.0))
-    # Visible only on the frames it was found on.
-    if present[0] == frames[0] and present[-1] == frames[-1]:
-        attrs.set("__LT_TYPE__", __LT_ALL__)
-    else:
-        attrs.set("__LT_TYPE__", __LT_RANGE__)
-        attrs.set("__LT_START__", float(present[0]))
-        attrs.set("__LT_END__", float(present[-1]))
-    layers[layer_name].append(shape)
-    shapes[sid] = (shape, present)
+    attrs.set("ltt", 0)  # lifetime: all frames; when it shows is keyed on its opacity
+    layer.append(shape)
 
-for sid, (shape, present) in shapes.items():
     keys = keyframes(present, sid)
-    last_opacity, last_frame, keyed_opacity = None, None, set()
-    opc = shape.getAttributes().getAnimCurve("opc")
-    for f in present:
-        value = DATA[str(f)][sid]
-        opacity = float(value.get("opacity", 1.0))
-        if opacity != last_opacity or f in keys:
-            # Every change of visibility is keyed, with the frame before it held, so the
-            # change happens on that frame instead of fading in from the last key.
-            if last_opacity is not None and opacity != last_opacity and last_frame not in keyed_opacity:
-                key(opc, last_frame, last_opacity)
-                keyed_opacity.add(last_frame)
-            key(opc, f, opacity)
-            keyed_opacity.add(f)
-        last_opacity, last_frame = opacity, f
-        if f not in keys:
-            continue
-        pts = value["points"]
-        left, right = tangents(pts)
-        feather = len(pts[0]) >= 5
-        if feather:
-            f_left, f_right = tangents([[p[3], p[4], p[2]] for p in pts])
-        for i, p in enumerate(pts[:len(shape)]):
-            cv = shape[i]
-            key_xy(cv.center, f, p[0], p[1])
-            key_xy(cv.leftTangent, f, -left[i][0], -left[i][1])
-            key_xy(cv.rightTangent, f, right[i][0], right[i][1])
-            if feather:
-                key_xy(cv.featherCenter, f, p[3] - p[0], p[4] - p[1])
-                key_xy(cv.featherLeftTangent, f, -f_left[i][0], -f_left[i][1])
-                key_xy(cv.featherRightTangent, f, f_right[i][0], f_right[i][1])
+    for f in sorted(keys):
+        key_frame(shape, sid, f)
+    set_interpolation(shape)
+    # Whatever interpolation this Nuke uses between keys, also key any frame it misses.
+    for _ in range(4):
+        extra = [f for f in present if f not in keys and drift(shape, sid, f) > TOLERANCE]
+        if not extra:
+            break
+        for f in extra:
+            key_frame(shape, sid, f)
+            keys.add(f)
+        set_interpolation(shape)
 
-curves.changed()
-node.knob("onCreate").setValue("")
-print("Contour VFX: %d roto shapes on frames %d-%d." % (len(shapes), frames[0], frames[-1]) if frames else "No shapes.")
+    # Opacity on every frame of the shot, 0 where the shape is absent (before it appears, after
+    # it goes, and in any gap). Keyed on every change, with the frame before it held, so the
+    # shape shows or hides on exactly that frame instead of fading between keys.
+    opacity = [(f, float(DATA[str(f)][sid].get("opacity", 1.0)) if sid in DATA[str(f)] else 0.0) for f in frames]
+    for n, (f, value) in enumerate(opacity):
+        if n == 0 or value != opacity[n - 1][1]:
+            if n > 0:
+                attrs.set(opacity[n - 1][0], "opc", opacity[n - 1][1])
+            attrs.set(f, "opc", value)
+    curve = attrs.getCurve("opc")
+    step = getattr(getattr(rp, "InterpolationType", None), "eStepInterpolationType", None)
+    # Smooth interpolation would bulge between two equal keys and flash a hidden shape on:
+    # step if this Nuke allows it, and a key on any frame that still comes out wrong.
+    for _ in range(2):
+        if step is not None:
+            try:
+                for k in range(curve.getNumberOfKeys()):
+                    curve.getKey(k).interpolationType = step
+            except Exception:
+                pass
+        wrong = [(f, value) for f, value in opacity if abs(curve.evaluate(f) - value) > 1e-3]
+        if not wrong:
+            break
+        for f, value in wrong:
+            attrs.set(f, "opc", value)
+
+def build():
+    frames = sorted(int(k) for k in DATA if str(k).isdigit())
+    node = nuke.thisNode()
+    curves = node["curves"]
+    root = curves.rootLayer
+    if any(True for _ in root):
+        nuke.message("This Roto node already has shapes. Paste the .nk again for a fresh copy.")
+        return
+    layers, built, failed = {}, 0, []
+    ids = sorted({sid for f in frames for sid in DATA[str(f)]})
+    for sid in sorted(ids, key=lambda s: depth(s, frames)):
+        layer_name = sid.rpartition("/")[0] or "Shapes"
+        try:
+            if layer_name not in layers:
+                layers[layer_name] = rp.Layer(curves)
+                layers[layer_name].name = layer_name
+                root.append(layers[layer_name])
+            build_shape(curves, layers[layer_name], sid, frames)
+            built += 1
+        except Exception as error:
+            failed.append("%s: %s" % (sid, error))
+    curves.changed()
+    node.knob("onCreate").setValue("")
+    if failed:
+        nuke.message("Contour VFX: %d shapes built, %d failed:\n%s" % (built, len(failed), "\n".join(failed[:10])))
+    print("Contour VFX: %d roto shapes on frames %d-%d." % (built, frames[0], frames[-1]) if frames else "No shapes.")
+
+build()
 '''
 
 
 def build_script(shapes, interp_mode="Linear"):
     """The Python that builds the shapes inside Nuke."""
     data = base64.b64encode(json.dumps(shapes).encode("utf-8")).decode("ascii")
-    interp = ("rp.AnimCurve.InterpolationType.LINEAR" if interp_mode == "Linear"
-              else "rp.AnimCurve.InterpolationType.SMOOTH")
-    replacements = {"__DATA__": data, "__INTERP__": interp, "__LT_TYPE__": LIFETIME_TYPE,
-                    "__LT_START__": LIFETIME_START, "__LT_END__": LIFETIME_END,
-                    "__LT_ALL__": str(LIFETIME_ALL), "__LT_RANGE__": str(LIFETIME_RANGE)}
-    script = SCRIPT
-    for token, value in replacements.items():
-        script = script.replace(token, value)
-    return script.strip("\n")
+    return SCRIPT.replace("__DATA__", data).replace("__LINEAR__", str(interp_mode == "Linear")).strip("\n")
 
 
 def validate(shapes):
