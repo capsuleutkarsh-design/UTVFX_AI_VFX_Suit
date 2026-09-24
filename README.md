@@ -26,10 +26,10 @@ Wire nodes together, render, and take the results into Nuke or Blender. Everythi
 - **Frame numbers:** every file keeps the plate's own frame numbers (1001 stays 1001). The timeline's In/Out limits every render.
 - **Rendering:** renders are cached per node and redone only when something upstream changes. Stop, Freeze and Bypass work as in Nuke. Renders can also run without the window; see [Rendering without the window](#rendering-without-the-window).
 
-Model weights (about 70 GB) and the COLMAP/FFmpeg binaries are not in the repository; `first_setup.py` downloads them (see below and [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md)).
+Model weights (about 27 GB) and the COLMAP/FFmpeg binaries are not in the repository; `first_setup.py` downloads them (see below and [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md)).
 
 ## Requirements and installation
-Windows 10/11 x64 and an NVIDIA GPU with a CUDA 12.1-capable driver. About 70 GB of disk for the models.
+Windows 10/11 x64 and an NVIDIA GPU with a CUDA 12.1-capable driver. About 30 GB of disk for the models.
 
 There is one supported way to install: `first_setup.py`. `install.bat` is a thin wrapper that finds a suitable Python and runs it.
 

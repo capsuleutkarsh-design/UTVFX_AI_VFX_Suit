@@ -64,7 +64,6 @@ REV = {
     "depth_metric_vkitti_s": "c725b8589bdf6ab04072cab74c0467830db80d6d",
     "depth_metric_vkitti_b": "e96fd0c8cedf1825a55b9c61309f754982948df0",
     "depth_metric_vkitti_l": "070e97e4b80e317ec1d03c19927304f4091a180b",
-    "sam_hf": "87aecf0df4ce6b30cd7de76e87673c49644bdf67",
     "sam2_hf": "e6a8e8809b8f1bfa2238b6d080f3d05cc76bd251",
     "vitmatte": "6a58ad7646403c1df626fbd746900aec7361ea1d",
     "corridorkey": "f6386ddf042d8e92aeb5fd16cb9b101cff508195",
@@ -126,32 +125,20 @@ MODELS = [
      "path": "models/DepthAnythingV2/depth_anything_v2_metric_vkitti_vitl.pth",
      "sha256": "239b1054a369e66da2576e9a118d6d7c12d90dc8ebe609579a9a09cd8e05fe38", "size": 1341401064},
 
-    # SAM 1 (Meta checkpoint & HF repo)
+    # SAM 1: the app loads only Meta's checkpoint (sam_bridge.py), not the Hugging Face copy.
     {"name": "SAM ViT-H (Meta)", "type": "file",
      "url": "https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth",
      "path": "models/SAM/sam_vit_h_4b8939.pth",
      "sha256": "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e", "size": 2564550879},
-    {"name": "SAM ViT-H (HF)", "type": "hf_repo", "repo_id": "facebook/sam-vit-huge", "revision": REV["sam_hf"],
-     "local_dir": "models/SAM", "check_dir": "models/SAM/model.safetensors",
-     "ignore_patterns": NON_TORCH + ["pytorch_model.bin"]},
 
-    # SAM 2 (Meta checkpoints & HF repo)
-    {"name": "SAM 2 Hiera Large (Meta)", "type": "file",
-     "url": "https://dl.fbaipublicfiles.com/segment_anything_2/072824/sam2_hiera_large.pt",
-     "path": "models/SAM2/sam2_hiera_large.pt",
-     "sha256": "7442e4e9b732a508f80e141e7c2913437a3610ee0c77381a66658c3a445df87b", "size": 897952466},
+    # SAM 2: SAMURAI loads the 2.1 checkpoint; plain SAM 2 loads the Hugging Face model.
     {"name": "SAM 2.1 Hiera Large (SAMURAI)", "type": "file",
      "url": "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt",
      "path": "models/SAM2/sam2.1_hiera_large.pt",
      "sha256": "2647878d5dfa5098f2f8649825738a9345572bae2d4350a2468587ece47dd318", "size": 898083611},
-    # Was raw.githubusercontent.com/.../main/sam2/configs/sam2_hiera_l.yaml, which is now a 404.
-    {"name": "SAM 2 Config", "type": "file",
-     "url": _hf("facebook/sam2-hiera-large", REV["sam2_hf"], "sam2_hiera_l.yaml"),
-     "path": "models/SAM2/sam2_hiera_l.yaml",
-     "sha256": "904187da9c3b648d08229aa8ea13ef85e87b43ceff37695f6c0a46495a35b6cb", "size": 3695},
     {"name": "SAM 2 Hiera Large (HF)", "type": "hf_repo", "repo_id": "facebook/sam2-hiera-large",
      "revision": REV["sam2_hf"], "local_dir": "models/SAM2", "check_dir": "models/SAM2/model.safetensors",
-     "ignore_patterns": NON_TORCH},
+     "ignore_patterns": NON_TORCH + ["*.pt"]},  # the .pt in that repo is a second copy of the weights
 
     # ViTMatte (ONNX artifacts like vitmatte_base.onnx are generated locally by export scripts)
     {"name": "ViTMatte Weights (HF)", "type": "hf_repo", "repo_id": "hustvl/vitmatte-small-composition-1k",
@@ -243,8 +230,13 @@ MODELS = [
      "ignore_patterns": NON_TORCH + ["pytorch_model.bin"]},
 
     # VideoMaMa temporal refiner
+    # VideoMaMa uses only SVD's feature extractor and the fp16 image encoder and VAE (its own UNet
+    # replaces SVD's), so the 9.5 GB single-file checkpoints and the other weights are skipped:
+    # 1.5 GB instead of 32.6 GB.
     {"name": "VideoMaMa Base (SVD-XT)", "type": "hf_repo", "repo_id": "stabilityai/stable-video-diffusion-img2vid-xt",
-     "revision": REV["svd_xt"], "local_dir": "models/VideoMaMa/stable-video-diffusion-img2vid-xt"},
+     "revision": REV["svd_xt"], "local_dir": "models/VideoMaMa/stable-video-diffusion-img2vid-xt",
+     "ignore_patterns": ["svd_xt*.safetensors", "unet/*", "image_encoder/model.safetensors",
+                         "vae/diffusion_pytorch_model.safetensors", "*.gif", "*.png"]},
     {"name": "VideoMaMa Fine-Tuned UNet", "type": "hf_repo", "repo_id": "SammyLim/VideoMaMa",
      "revision": REV["videomama"], "local_dir": "models/VideoMaMa", "check_dir": "models/VideoMaMa/unet"},
 ]
@@ -606,7 +598,11 @@ def main(argv=None):
         sys.exit(1)
     if os.path.isdir(DOWNLOAD_TMP) and not os.listdir(DOWNLOAD_TMP):
         os.rmdir(DOWNLOAD_TMP)
-    print("[SUCCESS] Everything is installed." if not args.check else "[OK] Everything is installed.")
+    if args.skip_models:
+        print("[OK] Python and packages are installed. Models were skipped (--skip-models); "
+              "run this script again without it to download them.")
+    else:
+        print("[SUCCESS] Everything is installed." if not args.check else "[OK] Everything is installed.")
     if not args.check:
         print("[RUN] Start the app with run.bat")
 
