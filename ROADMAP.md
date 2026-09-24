@@ -50,7 +50,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 ## Later
 - [x] Time left on the progress bar and in command-line renders
 - [x] Command-line rendering (`render.bat`, `utvfx/cli.py`)
-- [ ] README polish
+- [x] README polish; MODEL_DOWNLOADS.md generated from first_setup.py
 
 ## Before any public or commercial release
 - [ ] Licences: remove or get permission for the non-commercial parts, and ship THIRD_PARTY_NOTICES (M11)

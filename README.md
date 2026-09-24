@@ -6,22 +6,27 @@
 
 **AI roto, mattes and camera tracking for compositors.** A node-based Windows desktop app that runs current AI models (SAM, ViTMatte, MEMatte, CorridorKey, Depth Anything, COLMAP) on your plates and hands the results to Nuke.
 
-> **First-time setup:** model weights (tens of GB) and some binaries are not in the repository. Run `python first_setup.py` once after cloning; see [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md).
+## What it does
+Wire nodes together, render, and take the results into Nuke or Blender. Everything runs on your machine: after setup the app never downloads anything and never uploads a frame.
 
-## Overview
-Contour VFX is a high-performance desktop application built to bridge the gap between complex AI-driven computer vision models and professional visual effects workflows. Featuring a node-based architecture, the software allows artists to process image sequences through advanced AI algorithms and automatically export the results to industry-standard software like The Foundry's Nuke.
+| Node | What it gives you |
+|---|---|
+| **Media Plate** | EXR/DPX/TIFF/PNG sequences or video. Keeps the original for delivery and makes a 16-bit display copy for the AI nodes; ACES, log and video colour spaces; optional half-size working copy for 4K. |
+| **SuperMatte** | Click, box or text prompts; SAM 1, SAM 2 (SAMURAI tracking) or SAM 3, refined with ViTMatte, MEMatte or VideoMaMa into soft 16-bit mattes, one per layer. |
+| **Roto to Shape** | Mattes traced into Nuke roto shapes that keep their name and point count from frame to frame, with feather. |
+| **AI Roto** | A person's matte cut into head, torso and limb shapes from their skeleton; limbs behind the body fade out using the depth map. |
+| **Corridor Keyer** | Green/blue screen keying with CorridorKey: straight or premultiplied linear EXR, despill, matte clean-up, anti-flicker. |
+| **Depth** | Depth Anything V2: stable relative depth (0-1 over the shot) or metric depth in metres, as float EXR. |
+| **Grade**, **OCIO ColorSpace** | Nuke-style grade and OpenColorIO conversions in scene-linear, on the full-quality frames. |
+| **3D Camera Tracker** | COLMAP 4.2 solve (global or incremental) with SIFT, LightGlue, ALIKED or LoMa features; ignores moving objects given a matte. |
+| **Unified Output** | Delivers everything: EXR layers (colour in ACEScg or another linear space, mattes in A, depth in Z), camera for Nuke/Blender/USD, roto shapes, a Nuke script with a Read per layer. |
 
-## Features
-*   **Modular Node-Based UI:** An intuitive, visually connecting workspace to stack multiple VFX and AI tasks.
-*   **AI matting and roto:** SAM 1, SAM 2 (SAMURAI) and SAM 3 segmentation, refined with ViTMatte, MEMatte or VideoMaMa.
-*   **Matte to Shape Conversion:** Translates raw pixel alpha masks into animated vector splines (Nuke Roto Shapes) that preserve point-counts across frames for flawless manual refinement.
-*   **Advanced Keying:** `Corridor Keyer` algorithm optimized for high-end despill and despeckle operations.
-*   **AI Depth Estimation:** Integration with `Depth Anything V2` to generate dense disparity maps from raw 2D plates.
-*   **Nuke Script Exporting:** Generates `.nk` and `.py` scripts natively, instantly bringing AI data (like Rotoscope shapes and 3D Camera tracking) into your compositing software.
+**Conventions**
+- **Colour:** the ACES studio OpenColorIO config. The working space is ACEScg and the viewer uses the ACES SDR view. Highlights above 1.0 are kept.
+- **Frame numbers:** every file keeps the plate's own frame numbers (1001 stays 1001). The timeline's In/Out limits every render.
+- **Rendering:** renders are cached per node and redone only when something upstream changes. Stop, Freeze and Bypass work as in Nuke. Renders can also run without the window; see [Rendering without the window](#rendering-without-the-window).
 
-## AI model weights
-Since the deep learning model weights exceed 20 GB, they are not included in this code repository. 
-Please refer to the [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md) guide for the official download links and instructions on exactly where to place each model before running the application.
+Model weights (about 70 GB) and the COLMAP/FFmpeg binaries are not in the repository; `first_setup.py` downloads them (see below and [MODEL_DOWNLOADS.md](MODEL_DOWNLOADS.md)).
 
 ## Requirements and installation
 Windows 10/11 x64 and an NVIDIA GPU with a CUDA 12.1-capable driver. About 70 GB of disk for the models.
