@@ -51,6 +51,17 @@ There is one supported way to install: `first_setup.py`. `install.bat` is a thin
    run.bat
    ```
 
+### Rendering without the window
+`render.bat` renders a saved project from the command line, for batches or a render machine. The results and caches are the same as in the app, and nothing is uploaded.
+
+```bat
+render.bat shot.contour
+render.bat shot.contour --node Depth1 --frames 1001-1050
+render.bat shot.contour --list
+```
+
+With no `--node`, every Unified Output node is rendered, together with everything it needs. `--frames` takes plate frame numbers (like the timeline's In/Out), `--relink FOLDER` finds plates that have moved, and `--quiet` prints only progress and errors. Progress shows the time left. Exit codes: 0 all done, 1 a render failed or was stopped (Ctrl+C stops cleanly), 2 bad arguments or project.
+
 `requirements.txt` is the loose list of top-level packages with their tested version ranges. To change a dependency, edit it, install into `python_base`, run the tests (`python_base\python.exe -m pytest -q`), then regenerate the lock with `python_base\python.exe -m pip freeze` (keep only `opencv-contrib-python`, never `opencv-python` as well).
 
 ### Offline installs

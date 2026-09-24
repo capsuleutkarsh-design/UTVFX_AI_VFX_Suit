@@ -24,6 +24,9 @@ class PropertiesPanel(QWidget):
         self.console_widget = None
         self.node_logs = {} # node_id -> list of log messages
         self.node_progress = {} # node_id -> int
+        from utvfx.core.eta import Eta
+        self.eta = Eta()
+        self.node_progress_text = {}  # node_id -> "42%  ·  1:23 left"
         self._param_rows = {}  # param id -> row widget with sync()/flush()
         self._built_for = None  # (id(node), plugin_type) the rows were built for
         
@@ -293,6 +296,7 @@ class PropertiesPanel(QWidget):
 
             if self.current_node.node_id in self.node_progress:
                 self.progress_bar.setValue(self.node_progress[self.current_node.node_id])
+                self.progress_bar.setFormat(self.node_progress_text.get(self.current_node.node_id, "%p%"))
                 self.progress_bar.show()
             else:
                 self.progress_bar.setValue(0)
@@ -302,6 +306,7 @@ class PropertiesPanel(QWidget):
         if self.current_node:
             self.node_logs[self.current_node.node_id] = [] # Clear logs on new execution
             self.node_progress[self.current_node.node_id] = 0 # Clear progress
+            self.eta.reset(self.current_node.node_id)
             if hasattr(self, 'console_widget') and self.console_widget:
                 self.console_widget.clear()
             if hasattr(self, 'progress_bar') and self.progress_bar:
@@ -326,10 +331,12 @@ class PropertiesPanel(QWidget):
     @Slot(str, int)
     def update_progress(self, node_id, percentage):
         self.node_progress[node_id] = percentage
+        self.node_progress_text[node_id] = self.eta.text(node_id, percentage)
         if self.current_node and self.current_node.node_id == node_id:
             if hasattr(self, 'progress_bar') and self.progress_bar:
                 self.progress_bar.show()
                 self.progress_bar.setValue(percentage)
+                self.progress_bar.setFormat(self.node_progress_text[node_id])
 
     def _copy_logs(self):
         if self.console_widget:

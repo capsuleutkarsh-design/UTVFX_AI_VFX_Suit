@@ -47,6 +47,11 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] Unified Output: proper RGBA/multi-channel EXR, premult, no gamma on data (H19)
 - [x] Roto export hardening (M10)
 
+## Later
+- [x] Time left on the progress bar and in command-line renders
+- [x] Command-line rendering (`render.bat`, `utvfx/cli.py`)
+- [ ] README polish
+
 ## Before any public or commercial release
 - [ ] Licences: remove or get permission for the non-commercial parts, and ship THIRD_PARTY_NOTICES (M11)
 - [ ] Trademark search for "Contour VFX" (USPTO / IP India)

@@ -18,6 +18,25 @@ FOOTAGE_DIR = os.environ.get(
 
 
 @pytest.fixture(autouse=True, scope="session")
+def private_settings(tmp_path_factory):
+    """Keep tests out of the real settings.json and workspace (projects, caches, outputs).
+
+    Model weights are still read from the real models folder.
+    """
+    from utvfx.core.settings_manager import SettingsManager
+    sm = SettingsManager()
+    saved = (sm.settings_file, dict(sm.settings), sm.current_project_name)
+    root = tmp_path_factory.mktemp("contour_settings")
+    sm.settings_file = str(root / "settings.json")
+    sm.settings["workspace_dir"] = str(root / "workspace")
+    sm.settings.pop("default_output_dir", None)
+    sm.set_project_name("Untitled", carry_cache=False)
+    yield sm
+    sm.settings_file, sm.settings, sm.current_project_name = saved[0], saved[1], saved[2]
+    sm._derive_folders()
+
+
+@pytest.fixture(autouse=True, scope="session")
 def no_modal_dialogs():
     """Answer message boxes automatically for the whole run, so a prompt (even one fired by a
     leftover timer from an earlier test) can never hang it."""
