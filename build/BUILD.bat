@@ -16,6 +16,9 @@ setlocal EnableDelayedExpansion
 ::    BUILD.bat stage        stop after step 1 (no installer)
 ::    BUILD.bat installer    skip step 1, re-run Inno on the last stage
 ::    BUILD.bat check        only check that everything needed is there
+::    BUILD.bat models       the offline model pack: build\Output\models\
+::                           ContourVFX_Models_<ver>.zip.001, .002 ... (parts
+::                           under 2 GB; the installer takes the .001)
 ::    ... noverify           skip starting the staged app (any mode)
 :: ==========================================================================
 
@@ -31,6 +34,7 @@ for %%A in (%*) do (
     if /i "%%~A"=="stage"     set "MODE=stage"
     if /i "%%~A"=="installer" set "MODE=installer"
     if /i "%%~A"=="check"     set "MODE=check"
+    if /i "%%~A"=="models"    set "MODE=models"
     if /i "%%~A"=="noverify"  set "EXTRA=!EXTRA! --no-verify"
 )
 
@@ -65,6 +69,12 @@ if not defined ISCC (
     echo [build] Inno Setup: "!ISCC!"
 )
 
+if /i "%MODE%"=="models" (
+    echo [build] Packing the offline model pack - about 27 GB, skipped if nothing changed...
+    "%PY%" "%ROOT%\scripts\build_models_zip.py" --out "%BUILD_DIR%\Output\models" || goto :failed
+    goto :done
+)
+
 if /i "%MODE%"=="check" (
     "%PY%" "%BUILD_DIR%\build_app.py" --check || goto :failed
     goto :done
@@ -81,12 +91,12 @@ if not exist "%BUILD_DIR%\stage\ContourVFX\ContourVFX.exe" (
     echo [build] ERROR: no staged app. Run BUILD.bat without "installer" first.
     goto :failed
 )
-if exist "%BUILD_DIR%\Output" rmdir /s /q "%BUILD_DIR%\Output"
+if exist "%BUILD_DIR%\Output\ContourVFX_Setup_*" del /q "%BUILD_DIR%\Output\ContourVFX_Setup_*"
 echo [build] Packing the installer (compressing ~6 GB; this takes a while)...
 "%ISCC%" /Q "%BUILD_DIR%\installer.iss" || goto :failed
 echo.
 echo [build] Installer files in %BUILD_DIR%\Output:
-dir /b "%BUILD_DIR%\Output"
+dir /b "%BUILD_DIR%\Output\ContourVFX_Setup_*"
 echo [build] Ship the .exe and every .bin together, in one folder.
 
 :done

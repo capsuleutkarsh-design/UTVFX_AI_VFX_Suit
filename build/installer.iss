@@ -6,9 +6,10 @@
 ; 2,097,152,000-byte limit Inno has for one setup file, so DiskSpanning splits it into .bin
 ; slices. Ship the exe and every .bin together, in one folder.
 ;
-; The AI models (about 27 GB) are not inside: the last page offers to download them with
-; download_models.bat (pinned, hash-checked, resumable), or they can be added later from the
-; Start menu or from an offline models ZIP.
+; The AI models (about 27 GB) are not inside. For offline computers, "BUILD.bat models" makes
+; ContourVFX_Models_<version>.zip.001, .002, ... and the "Offline models" page takes the .001:
+; every file is installed and checked against its SHA-256. Otherwise the last page offers to
+; download them (download_models.bat: pinned, hash-checked, resumable), also in the Start menu.
 
 #include "version.iss"
 
@@ -48,7 +49,6 @@ ExtraDiskSpaceRequired=29000000000
 CloseApplications=yes
 
 [Files]
-Source: "extract_models.ps1"; Flags: dontcopy
 Source: "stage\ContourVFX\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
@@ -65,7 +65,7 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 [Run]
 Filename: "{app}\download_models.bat"; WorkingDir: "{app}"; \
     Description: "Download the AI models now (about 27 GB; you can also do it later from the Start menu)"; \
-    Flags: postinstall shellexec waituntilterminated skipifsilent
+    Flags: postinstall shellexec waituntilterminated skipifsilent; Check: not OfflineModelsChosen
 Filename: "{app}\ContourVFX.exe"; WorkingDir: "{app}"; Description: "Start Contour VFX"; \
     Flags: postinstall nowait skipifsilent
 
@@ -77,6 +77,7 @@ Type: filesandordirs; Name: "{app}\.downloads"
 ; Python writes __pycache__ folders beside the installed code; take the whole trees.
 Type: filesandordirs; Name: "{app}\python_base"
 Type: filesandordirs; Name: "{app}\utvfx"
+Type: filesandordirs; Name: "{app}\__pycache__"
 
 [Code]
 var
@@ -87,33 +88,44 @@ begin
   ModelsPage := CreateInputFilePage(
     wpSelectDir,
     'Offline models (optional)',
-    'Do you have a Contour VFX models ZIP?',
-    'If you made a models ZIP on another computer (scripts\build_models_zip.py), select it to install ' +
-    'the models from it. Only files under models\ are installed. Leave this blank to download the ' +
-    'models instead.');
-  ModelsPage.Add('Models archive (*.zip)', 'ZIP files|*.zip|All files|*.*', '.zip');
+    'Install the AI models from an offline model pack?',
+    'For computers without internet: select the first part of the model pack ' +
+    '(ContourVFX_Models_<version>.zip.001). All the other parts must be in the same folder. ' +
+    'Every file is checked after it is installed.' + #13#10#13#10 +
+    'Leave this blank to download the models from the internet instead.');
+  ModelsPage.Add('First part of the model pack (.001)', 'Model pack|*.001|All files|*.*', '.001');
+end;
+
+function OfflineModelsChosen: Boolean;
+begin
+  Result := (ModelsPage.Values[0] <> '') and FileExists(ModelsPage.Values[0]);
+end;
+
+function NextButtonClick(CurPageID: Integer): Boolean;
+begin
+  Result := True;
+  if (CurPageID = ModelsPage.ID) and (ModelsPage.Values[0] <> '') and not FileExists(ModelsPage.Values[0]) then
+  begin
+    MsgBox('That file does not exist. Select the .001 part of the model pack, or leave the box empty.',
+           mbError, MB_OK);
+    Result := False;
+  end;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ZipPath: string;
   ResultCode: Integer;
 begin
-  if CurStep = ssPostInstall then
+  if (CurStep = ssPostInstall) and OfflineModelsChosen then
   begin
-    ZipPath := ModelsPage.Values[0];
-    if (ZipPath <> '') and FileExists(ZipPath) then
-    begin
-      WizardForm.StatusLabel.Caption := 'Installing models from the ZIP (this can take a while)...';
-      // Only model data under models/ is extracted: no code, no path tricks, size-capped.
-      ExtractTemporaryFile('extract_models.ps1');
-      if not Exec('powershell.exe',
-                  '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{tmp}\extract_models.ps1') +
-                  '" -Zip "' + ZipPath + '" -Dest "' + ExpandConstant('{app}') + '"',
-                  '', SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
-        MsgBox('The models archive could not be installed (code ' + IntToStr(ResultCode) + '). ' +
-               'You can download the models later from the Start menu (Download AI models).', mbError, MB_OK);
-    end;
+    WizardForm.StatusLabel.Caption := 'Installing the AI models from the model pack (about 27 GB, a few minutes)...';
+    // A console window shows the progress; each file is checked against the pack's SHA-256 list.
+    if not Exec(ExpandConstant('{app}\python_base\python.exe'),
+                '-u "' + ExpandConstant('{app}\scripts\install_models.py') + '" "' + ModelsPage.Values[0] + '"',
+                ExpandConstant('{app}'), SW_SHOW, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+      MsgBox('The models could not be installed from the pack (code ' + IntToStr(ResultCode) + '). ' +
+             'Check that every part is in one folder, then run this in the install folder:' + #13#10 +
+             'python_base\python.exe scripts\install_models.py <path to the .001 file>', mbError, MB_OK);
   end;
 end;
 

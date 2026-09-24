@@ -153,6 +153,17 @@ class ExtractWorker(QThread):
     def run(self):
         self.status.emit("Extracting models (this may take a while)...")
         try:
+            if self.zip_path.endswith(".001"):
+                # An offline model pack (BUILD.bat models): every file is checked against its SHA-256.
+                from utvfx.core import model_pack
+                count = model_pack.install_pack(
+                    self.zip_path, self.extract_dir, log=lambda m: None,
+                    progress=lambda i, n: self.progress.emit(*_scaled(i, n)),
+                    is_cancelled=lambda: self.is_cancelled)
+                self.report.emit(count, [])
+                self.status.emit(f"Installed and checked {count} files from the model pack.")
+                self.finished_all.emit()
+                return
             # Only data files under models/ are written: no plugins/, no code, no paths
             # outside the folder, and a size / compression-ratio limit (H10).
             extracted, skipped = downloads.extract_models_zip(
@@ -236,7 +247,7 @@ class ModelDownloaderDialog(QDialog):
 
         btn_layout.addStretch()
 
-        self.btn_extract = QPushButton("Install from offline ZIP...")
+        self.btn_extract = QPushButton("Install from offline pack...")
         self.btn_extract.setIcon(icons.icon("open"))
         self.btn_extract.clicked.connect(self.start_extraction)
         self.btn_extract.setEnabled(False)
@@ -355,7 +366,9 @@ class ModelDownloaderDialog(QDialog):
         self.worker.start()
 
     def start_extraction(self):
-        zip_path, _ = QFileDialog.getOpenFileName(self, "Select models ZIP", "", "ZIP files (*.zip)")
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self, "Select the model pack or models ZIP", "",
+            "Model pack, first part (*.001);;Models ZIP (*.zip)")
         if not zip_path:
             return
 
