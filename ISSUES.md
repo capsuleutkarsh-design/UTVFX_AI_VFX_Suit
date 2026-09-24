@@ -53,7 +53,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | M7 | Undo | Clicks, layers, combos, checkboxes and text fields bypass undo | 1 | ☑ |
 | M8 | MediaPlate | Drop gives one-frame plate. Mixes sequences in a folder. No DPX/TIFF. fps fixed at 24 | 2 | ☑ |
 | M9 | OCIO / Grade | Rec709 fails silently. Grade changes alpha | 2 | ☑ Both work on the full-quality master in ACEScg (not the 8/16-bit display copy), keep alpha and HDR, and publish a tagged plate (master EXRs + display copy); Grade = Nuke maths with clamps and unpremult; OCIO uses real config spaces plus display/view transforms, old names mapped, unknown names are errors; In/Out |
-| M10 | Roto export | Lifetime attribute names unverified in Nuke. Wrong JSON can be loaded. Path quoting unsafe | 3 | ☐ |
+| M10 | Roto export | Lifetime attribute names unverified in Nuke. Wrong JSON can be loaded. Path quoting unsafe | 3 | ☑ Nuke lifetime attributes ltt/ltn/ltm (were lft/lfs/lfe); shape data embedded as base64 (no path quoting, no fallback that could load another shot's shapes.json); input validated; Nuke layers and shape names from the real layer/part names; visibility changes keyed with a hold; .nk named per shot; script executed in tests against a stand-in nuke module and on real AI Roto data. Not yet opened in a real Nuke |
 | M11 | Licensing | CorridorKey, VideoMaMa, GVM, MatAnyone, Depth V2 Base/Large are non-commercial. No THIRD_PARTY_NOTICES | before release | ☐ |
 
 ## Low

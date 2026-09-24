@@ -1,389 +1,210 @@
-import json
-import os
+"""Nuke Roto export for Roto to Shape and AI Roto (shapes.json).
 
-def export_roto_to_nuke(json_path, out_nk_path, interp_mode="Linear"):
-    with open(json_path, "r") as f:
-        shapes = json.load(f)
-        
-    # Determine Nuke interpolation type string
-    nuke_interp = "rp.AnimCurve.InterpolationType.LINEAR" if interp_mode == "Linear" else "rp.AnimCurve.InterpolationType.SMOOTH"
-    json_path_escaped = json_path.replace('\\', '/')
-    embedded_json = json.dumps(shapes)
-    
-    # Create the Python script that Nuke will execute to build the roto node.
-    py_script = f"""import json
-import os
+The result is a .nk to paste (Ctrl+V) into Nuke: a Roto node whose onCreate script builds
+the animated shapes. The shape data is embedded in the script as base64, so the .nk works
+on any machine, never reads a file by path and cannot pick up another shot's shapes.
+
+shapes.json: {"format_width": W, "format_height": H,
+              "<frame>": {"<Layer>/<Shape>": {"points": [[x, y, "smooth"|"cusp"(, fx, fy)], ...],
+                                              "opacity": 0-1, "average_depth": ...}}}
+Points are in Nuke coordinates (origin bottom-left); frames are plate frame numbers.
+"""
+import base64
+import json
+
+# Nuke RotoPaint shape attributes (AnimAttributes keys).
+LIFETIME_TYPE, LIFETIME_START, LIFETIME_END = "ltt", "ltn", "ltm"
+LIFETIME_ALL, LIFETIME_RANGE = 0, 4
+
+SCRIPT = r'''
+import base64, json, math, random
 import nuke
 import nuke.rotopaint as rp
-import random
 
-json_file = r'{json_path_escaped}'
-shapes_data = None
-if os.path.exists(json_file):
-    try:
-        with open(json_file, 'r') as f:
-            shapes_data = json.load(f)
-    except Exception:
-        pass
+DATA = json.loads(base64.b64decode("__DATA__").decode("utf-8"))
+INTERP = __INTERP__
 
-if not shapes_data:
-    try:
-        if '/cache/' in json_file.replace('\\\\', '/'):
-            cache_root = json_file.replace('\\\\', '/').split('/cache/')[0] + '/cache/'
-            if os.path.exists(cache_root):
-                for sub in os.listdir(cache_root):
-                    candidate = os.path.join(cache_root, sub, 'roto_shapes', 'shapes.json')
-                    if os.path.exists(candidate):
-                        with open(candidate, 'r') as f:
-                            shapes_data = json.load(f)
-                        break
-    except Exception:
-        pass
+def tangents(pts):
+    left, right = [], []
+    n = len(pts)
+    for i in range(n):
+        if len(pts[i]) > 2 and pts[i][2] == "cusp":
+            left.append((0.0, 0.0)); right.append((0.0, 0.0)); continue
+        prev, cur, nxt = pts[(i - 1) % n], pts[i], pts[(i + 1) % n]
+        d_prev = math.hypot(cur[0] - prev[0], cur[1] - prev[1])
+        d_next = math.hypot(nxt[0] - cur[0], nxt[1] - cur[1])
+        total = d_prev + d_next
+        if total == 0:
+            left.append((0.0, 0.0)); right.append((0.0, 0.0)); continue
+        dx, dy = (nxt[0] - prev[0]) / 3.0, (nxt[1] - prev[1]) / 3.0
+        left.append((dx * d_prev / total, dy * d_prev / total))
+        right.append((dx * d_next / total, dy * d_next / total))
+    return left, right
 
-if not shapes_data:
-    try:
-        raw_json = '''{embedded_json}'''
-        shapes_data = json.loads(raw_json)
-    except Exception:
-        pass
+def key(curve, frame, value):
+    curve.addKey(frame, value)
+    curve.keys()[-1].interpolationType = INTERP
 
-if not shapes_data:
-    nuke.message('shapes.json not found and embedded data failed to load.')
-    shapes_data = {{}}
+def key_xy(element, frame, x, y):
+    key(element.getPositionAnimCurve(0), frame, x)
+    key(element.getPositionAnimCurve(1), frame, y)
 
-def compute_tangents(pts):
-    N = len(pts)
-    left_tangents = []
-    right_tangents = []
-    import math
-    for i in range(N):
-        pt_type = pts[i][2] if len(pts[i]) > 2 else "smooth"
-        if pt_type == "cusp":
-            left_tangents.append((0.0, 0.0))
-            right_tangents.append((0.0, 0.0))
-        else:
-            p_curr = pts[i]
-            p_prev = pts[(i-1)%N]
-            p_next = pts[(i+1)%N]
-            
-            d_prev = math.hypot(p_curr[0] - p_prev[0], p_curr[1] - p_prev[1])
-            d_next = math.hypot(p_next[0] - p_curr[0], p_next[1] - p_curr[1])
-            d_total = d_prev + d_next
-            
-            if d_total == 0:
-                left_tangents.append((0.0, 0.0))
-                right_tangents.append((0.0, 0.0))
-            else:
-                dir_x = (p_next[0] - p_prev[0]) / 3.0
-                dir_y = (p_next[1] - p_prev[1]) / 3.0
-                
-                scale_left = d_prev / d_total
-                scale_right = d_next / d_total
-                
-                left_tangents.append((dir_x * scale_left, dir_y * scale_left))
-                right_tangents.append((dir_x * scale_right, dir_y * scale_right))
-                
-    return left_tangents, right_tangents
+def keyframes(frames, sid, tolerance=1.5):
+    """Frames worth keying: first, last, and wherever linear interpolation would drift (RDP)."""
+    def vec(f):
+        return [c for p in DATA[str(f)][sid]["points"] for c in p[:2]]
+    def worst(a, b):
+        va, vb = vec(frames[a]), vec(frames[b])
+        best, at = 0.0, None
+        for i in range(a + 1, b):
+            v = vec(frames[i])
+            if len(v) != len(va) or len(v) != len(vb):
+                return float("inf"), i
+            t = (i - a) / float(b - a)
+            d = max(math.hypot(v[k] - (va[k] + t * (vb[k] - va[k])), v[k + 1] - (va[k + 1] + t * (vb[k + 1] - va[k + 1])))
+                    for k in range(0, len(v), 2))
+            if d > best:
+                best, at = d, i
+        return best, at
+    keep, stack = {0, len(frames) - 1}, [(0, len(frames) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        d, i = worst(a, b)
+        if d > tolerance:
+            keep.add(i); stack += [(a, i), (i, b)]
+    return {frames[i] for i in keep}
 
-def generate_color(sid):
-    random.seed(str(sid))
-    r = random.uniform(0.2, 1.0)
-    g = random.uniform(0.2, 1.0)
-    b = random.uniform(0.2, 1.0)
-    return (r, g, b)
+frames = sorted(int(k) for k in DATA if str(k).isdigit())
+node = nuke.thisNode()
+curves = node["curves"]
+root = curves.rootLayer
+layers, shapes = {}, {}
+ids = sorted({sid for f in frames for sid in DATA[str(f)]})
 
-def get_centroid_name(pts, format_width, format_height):
-    if not pts: return "Center"
-    avg_x = sum(pt[0] for pt in pts) / len(pts)
-    avg_y = sum(pt[1] for pt in pts) / len(pts)
-    
-    x_pos = "Center"
-    if avg_x < format_width * 0.33: x_pos = "Left"
-    elif avg_x > format_width * 0.66: x_pos = "Right"
-        
-    y_pos = ""
-    if avg_y < format_height * 0.33: y_pos = "Bottom"
-    elif avg_y > format_height * 0.66: y_pos = "Top"
-        
-    if x_pos == "Center" and y_pos == "": return "Center"
-    if y_pos == "": return x_pos
-    if x_pos == "Center": return y_pos
-    return f"{{y_pos}}{{x_pos}}"
+def depth(sid):
+    values = [DATA[str(f)][sid].get("average_depth") for f in frames if sid in DATA[str(f)]]
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else 0.0
 
-frames = sorted([int(k) for k in shapes_data.keys() if str(k).isdigit()])
-if not frames:
-    print('No shape data found in shapes.json.')
-else:
-    format_w = shapes_data.get("format_width", 1920)
-    format_h = shapes_data.get("format_height", 1080)
+for sid in sorted(ids, key=depth):
+    layer_name, _, shape_name = sid.rpartition("/")
+    layer_name = layer_name or "Shapes"
+    if layer_name not in layers:
+        layers[layer_name] = rp.Layer(curves)
+        layers[layer_name].name = layer_name
+        root.append(layers[layer_name])
+    present = [f for f in frames if sid in DATA[str(f)]]
+    first_pts = DATA[str(present[0])][sid]["points"]
+    shape = rp.Shape(curves)
+    shape.name = shape_name or sid
+    for p in first_pts:
+        shape.append(rp.ShapeControlPoint(p[0], p[1]))
+    attrs = shape.getAttributes()
+    random.seed(sid)
+    for channel in ("ro", "go", "bo"):  # overlay colour, so shapes are told apart in the viewer
+        attrs.set(channel, random.uniform(0.3, 1.0))
+    # Visible only on the frames it was found on.
+    if present[0] == frames[0] and present[-1] == frames[-1]:
+        attrs.set("__LT_TYPE__", __LT_ALL__)
+    else:
+        attrs.set("__LT_TYPE__", __LT_RANGE__)
+        attrs.set("__LT_START__", float(present[0]))
+        attrs.set("__LT_END__", float(present[-1]))
+    layers[layer_name].append(shape)
+    shapes[sid] = (shape, present)
 
-    roto_node = nuke.thisNode()
-    roto_node['name'].setValue('UTVFX_AI_Roto')
-    
-    curves = roto_node['curves']
-    root = curves.rootLayer
-    
-    # Create organizational layers
-    shapes_layer = rp.Layer(curves)
-    shapes_layer.name = 'Shapes'
-    root.append(shapes_layer)
-    
-    holes_layer = rp.Layer(curves)
-    holes_layer.name = 'Holes'
-    root.append(holes_layer)
-    
-    nuke_shapes = {{}}
-    unique_shape_ids = set()
+for sid, (shape, present) in shapes.items():
+    keys = keyframes(present, sid)
+    last_opacity, last_frame, keyed_opacity = None, None, set()
+    opc = shape.getAttributes().getAnimCurve("opc")
+    for f in present:
+        value = DATA[str(f)][sid]
+        opacity = float(value.get("opacity", 1.0))
+        if opacity != last_opacity or f in keys:
+            # Every change of visibility is keyed, with the frame before it held, so the
+            # change happens on that frame instead of fading in from the last key.
+            if last_opacity is not None and opacity != last_opacity and last_frame not in keyed_opacity:
+                key(opc, last_frame, last_opacity)
+                keyed_opacity.add(last_frame)
+            key(opc, f, opacity)
+            keyed_opacity.add(f)
+        last_opacity, last_frame = opacity, f
+        if f not in keys:
+            continue
+        pts = value["points"]
+        left, right = tangents(pts)
+        feather = len(pts[0]) >= 5
+        if feather:
+            f_left, f_right = tangents([[p[3], p[4], p[2]] for p in pts])
+        for i, p in enumerate(pts[:len(shape)]):
+            cv = shape[i]
+            key_xy(cv.center, f, p[0], p[1])
+            key_xy(cv.leftTangent, f, -left[i][0], -left[i][1])
+            key_xy(cv.rightTangent, f, right[i][0], right[i][1])
+            if feather:
+                key_xy(cv.featherCenter, f, p[3] - p[0], p[4] - p[1])
+                key_xy(cv.featherLeftTangent, f, -f_left[i][0], -f_left[i][1])
+                key_xy(cv.featherRightTangent, f, f_right[i][0], f_right[i][1])
+
+curves.changed()
+node.knob("onCreate").setValue("")
+print("Contour VFX: %d roto shapes on frames %d-%d." % (len(shapes), frames[0], frames[-1]) if frames else "No shapes.")
+'''
+
+
+def build_script(shapes, interp_mode="Linear"):
+    """The Python that builds the shapes inside Nuke."""
+    data = base64.b64encode(json.dumps(shapes).encode("utf-8")).decode("ascii")
+    interp = ("rp.AnimCurve.InterpolationType.LINEAR" if interp_mode == "Linear"
+              else "rp.AnimCurve.InterpolationType.SMOOTH")
+    replacements = {"__DATA__": data, "__INTERP__": interp, "__LT_TYPE__": LIFETIME_TYPE,
+                    "__LT_START__": LIFETIME_START, "__LT_END__": LIFETIME_END,
+                    "__LT_ALL__": str(LIFETIME_ALL), "__LT_RANGE__": str(LIFETIME_RANGE)}
+    script = SCRIPT
+    for token, value in replacements.items():
+        script = script.replace(token, value)
+    return script.strip("\n")
+
+
+def validate(shapes):
+    """Reject files that are not shape data (the old exporter would load any shapes.json it found)."""
+    if not isinstance(shapes, dict) or "format_width" not in shapes:
+        raise ValueError("Not a Contour VFX shapes.json (no format_width).")
+    frames = [k for k in shapes if str(k).isdigit()]
+    if not frames:
+        raise ValueError("shapes.json has no frames.")
     for f in frames:
-        for sid in shapes_data[str(f)].keys():
-            unique_shape_ids.add(str(sid))
-            
-    # Calculate depth values for layer sorting
-    shape_depths = {{}}
-    for sid in unique_shape_ids:
-        depth_vals = []
-        for f in frames:
-            if sid in shapes_data[str(f)]:
-                val = shapes_data[str(f)][sid]
-                if isinstance(val, dict) and "average_depth" in val:
-                    depth_vals.append(val["average_depth"])
-        shape_depths[sid] = sum(depth_vals) / len(depth_vals) if depth_vals else 0.5
-        
-    # Sort shapes: closest shapes (lower depth value) last, so they render on top
-    sorted_shapes = sorted(list(unique_shape_ids), key=lambda x: shape_depths[x], reverse=True)
-            
-    # Initialize shapes
-    for sid in sorted_shapes:
-        shape = rp.Shape(curves)
-        
-        first_appearance = None
-        first_frame = frames[0]
-        last_frame = frames[-1]
-        
-        # Calculate true lifetime
-        frames_present = [f for f in frames if sid in shapes_data[str(f)]]
-        if frames_present:
-            first_frame = frames_present[0]
-            last_frame = frames_present[-1]
-            raw_val = shapes_data[str(first_frame)][sid]
-            first_appearance = raw_val["points"] if isinstance(raw_val, dict) else raw_val
-            
-        # Naming based on position
-        if first_appearance:
-            pos_suffix = get_centroid_name(first_appearance, format_w, format_h)
-            prefix = "Hole" if "Hole_" in sid else "Shape"
-            shape.name = f"{{prefix}}_{{pos_suffix}}_{{sid.split('_')[-1]}}"
-        else:
-            shape.name = sid
-            
-        # Set Color
-        r, g, b = generate_color(sid)
-        shape.getAttributes().set('ro', r)
-        shape.getAttributes().set('go', g)
-        shape.getAttributes().set('bo', b)
-        
-        # Set Lifetime attributes (0 = All frames, 2 = Frame range)
-        if first_frame == frames[0] and last_frame == frames[-1]:
-            shape.getAttributes().set('lft', 0.0)
-        else:
-            shape.getAttributes().set('lft', 2.0)
-        shape.getAttributes().set('lfs', float(first_frame))
-        shape.getAttributes().set('lfe', float(last_frame))
-        
-        if first_appearance:
-            for pt in first_appearance:
-                cv = rp.ShapeControlPoint(pt[0], pt[1])
-                shape.append(cv)
-                
-            if "Hole_" in sid:
-                shape.getAttributes().set('bm', 22) # Nuke Minus blend mode
-                holes_layer.append(shape)
-            else:
-                shapes_layer.append(shape)
-                
-            nuke_shapes[sid] = shape
+        for sid, value in shapes[f].items():
+            if not isinstance(value, dict) or not value.get("points"):
+                raise ValueError(f"Shape {sid} on frame {f} has no points.")
 
-    def rdp_shape(shape_frames, sid, dev_thresh=2.0):
-        if len(shape_frames) <= 2:
-            return shape_frames
-            
-        def get_pts_vec(f):
-            val = shapes_data[str(f)][sid]
-            pts = val["points"] if isinstance(val, dict) else val
-            vec = []
-            for p in pts:
-                vec.extend([p[0], p[1]])
-            return vec
-            
-        def point_line_dist(v, v1, v2):
-            import math
-            max_d = 0.0
-            l2 = sum((v2[i] - v1[i])**2 for i in range(len(v1)))
-            if l2 == 0:
-                for i in range(0, len(v), 2):
-                    d = math.sqrt((v[i] - v1[i])**2 + (v[i+1] - v1[i+1])**2)
-                    if d > max_d: max_d = d
-                return max_d
-                
-            t = sum((v[i] - v1[i]) * (v2[i] - v1[i]) for i in range(len(v))) / l2
-            t = max(0.0, min(1.0, t))
-            
-            for i in range(0, len(v), 2):
-                proj_x = v1[i] + t * (v2[i] - v1[i])
-                proj_y = v1[i+1] + t * (v2[i+1] - v1[i+1])
-                d = math.sqrt((v[i] - proj_x)**2 + (v[i+1] - proj_y)**2)
-                if d > max_d: max_d = d
-            return max_d
 
-        def rdp_recursive(start_idx, end_idx):
-            if end_idx <= start_idx + 1:
-                return []
-                
-            max_dist = 0.0
-            max_idx = -1
-            
-            v1 = get_pts_vec(shape_frames[start_idx])
-            v2 = get_pts_vec(shape_frames[end_idx])
-            
-            for i in range(start_idx + 1, end_idx):
-                v = get_pts_vec(shape_frames[i])
-                if len(v) != len(v1) or len(v) != len(v2):
-                    return list(range(start_idx + 1, end_idx))
-                
-                d = point_line_dist(v, v1, v2)
-                if d > max_dist:
-                    max_dist = d
-                    max_idx = i
-                    
-            if max_dist > dev_thresh:
-                left = rdp_recursive(start_idx, max_idx)
-                right = rdp_recursive(max_idx, end_idx)
-                return left + [max_idx] + right
-            else:
-                return []
-                
-        res = set([0, len(shape_frames)-1])
-        for idx in rdp_recursive(0, len(shape_frames)-1):
-            res.add(idx)
-            
-        return sorted([shape_frames[i] for i in res])
-
-    shape_kfs = {{}}
-    for sid_str in nuke_shapes.keys():
-        sframes = [f for f in frames if sid_str in shapes_data[str(f)]]
-        if sframes:
-            shape_kfs[sid_str] = set(rdp_shape(sframes, sid_str, dev_thresh=1.5))
-        else:
-            shape_kfs[sid_str] = set()
-
-    # Animate points and opacity on active frames
-    for f in frames:
-        f_data = shapes_data[str(f)]
-        for sid_str, shape in nuke_shapes.items():
-            if sid_str in f_data:
-                if f not in shape_kfs[sid_str]:
-                    continue
-                val = f_data[sid_str]
-                pts = val["points"] if isinstance(val, dict) else val
-                opacity = val.get("opacity", 1.0) if isinstance(val, dict) else 1.0
-            else:
-                continue
-                
-            # Animate Opacity
-            try:
-                opc_curve = shape.getAttributes().getAnimCurve('opc')
-                opc_curve.addKey(f, float(opacity))
-                opc_curve.keys()[-1].interpolationType = {nuke_interp}
-            except Exception:
-                pass
-                
-            if pts is None:
-                continue
-                
-            left_tangents, right_tangents = compute_tangents(pts)
-            if len(pts[0]) >= 5:
-                f_pts = [[pt[3], pt[4], pt[2] if len(pt) > 2 else "smooth"] for pt in pts]
-                f_left_tangents, f_right_tangents = compute_tangents(f_pts)
-            else:
-                f_left_tangents, f_right_tangents = None, None
-            
-            for i, pt in enumerate(pts):
-                if i >= len(shape):
-                    break
-                cv = shape[i]
-                
-                # Center
-                cv.center.getPositionAnimCurve(0).addKey(f, pt[0])
-                cv.center.getPositionAnimCurve(1).addKey(f, pt[1])
-                cv.center.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                cv.center.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                
-                # Tangents
-                ltx, lty = left_tangents[i]
-                rtx, rty = right_tangents[i]
-                
-                cv.leftTangent.getPositionAnimCurve(0).addKey(f, -ltx)
-                cv.leftTangent.getPositionAnimCurve(1).addKey(f, -lty)
-                cv.leftTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                cv.leftTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                
-                cv.rightTangent.getPositionAnimCurve(0).addKey(f, rtx)
-                cv.rightTangent.getPositionAnimCurve(1).addKey(f, rty)
-                cv.rightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                cv.rightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                
-                # Feather
-                if len(pt) >= 5:
-                    fx, fy = float(pt[3]), float(pt[4])
-                    cv.featherCenter.getPositionAnimCurve(0).addKey(f, fx - pt[0])
-                    cv.featherCenter.getPositionAnimCurve(1).addKey(f, fy - pt[1])
-                    cv.featherCenter.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                    cv.featherCenter.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                    
-                    if f_left_tangents is not None and i < len(f_left_tangents):
-                        fltx, flty = f_left_tangents[i]
-                        frtx, frty = f_right_tangents[i]
-                        try:
-                            cv.featherLeftTangent.getPositionAnimCurve(0).addKey(f, -fltx)
-                            cv.featherLeftTangent.getPositionAnimCurve(1).addKey(f, -flty)
-                            cv.featherLeftTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                            cv.featherLeftTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                            
-                            cv.featherRightTangent.getPositionAnimCurve(0).addKey(f, frtx)
-                            cv.featherRightTangent.getPositionAnimCurve(1).addKey(f, frty)
-                            cv.featherRightTangent.getPositionAnimCurve(0).keys()[-1].interpolationType = {nuke_interp}
-                            cv.featherRightTangent.getPositionAnimCurve(1).keys()[-1].interpolationType = {nuke_interp}
-                        except Exception:
-                            pass
-                else:
-                    cv.featherCenter.getPositionAnimCurve(0).addKey(f, 0.0)
-                    cv.featherCenter.getPositionAnimCurve(1).addKey(f, 0.0)
-
-    # Notify Nuke curves engine that hierarchy and animation curves have changed
-    curves.changed()
-
-    # Clear the onCreate callback so it doesn't run again if the node is copied/pasted
-    roto_node.knob('onCreate').setValue('')
-    print("Roto shapes created successfully!")
-"""
-
-    py_script_clean = py_script.replace('\r\n', '\n').replace('\r', '')
-    
-    nk_content = f"""set cut_paste_input [stack 0]
-version 13.0 v1
-push $cut_paste_input
-Roto {{
- name UTVFX_AI_Roto
- onCreate {{
-{py_script_clean}
- }}
- addUserKnob {{20 User l "UTVFX AI Roto"}}
- addUserKnob {{26 info l "" +STARTLINE T "If roto appears as a single frame after paste,\nclick below to rebuild animated curves:"}}
- addUserKnob {{22 rebuild l "Rebuild Animated Roto" +STARTLINE T {{
-{py_script_clean}
- }}}}
-}}"""
-
-    # Must use newline='\n' to prevent Nuke's TCL interpreter from choking on \r\n
-    with open(out_nk_path, "w", encoding="utf-8", newline='\n') as f:
-        f.write(nk_content)
+def export_roto_to_nuke(json_path, out_nk_path, interp_mode="Linear"):
+    with open(json_path, "r", encoding="utf-8") as f:
+        shapes = json.load(f)
+    validate(shapes)
+    script = build_script(shapes, interp_mode)
+    width, height = int(shapes["format_width"]), int(shapes["format_height"])
+    # Tcl braces hold the script as-is; it contains only balanced braces (base64 has none).
+    nk = "\n".join([
+        "set cut_paste_input [stack 0]",
+        "version 13.0 v1",
+        "push $cut_paste_input",
+        "Roto {",
+        f' format "{width} {height} 0 0 {width} {height} 1 contour_roto"',
+        " onCreate {",
+        script,
+        " }",
+        ' addUserKnob {20 contour l "Contour VFX"}',
+        ' addUserKnob {26 info l "" +STARTLINE T "If the shapes did not build on paste, click Rebuild."}',
+        " addUserKnob {22 rebuild l \"Rebuild Shapes\" +STARTLINE T {",
+        script,
+        " }}",
+        " name Contour_Roto",
+        " selected true",
+        "}",
+    ])
+    with open(out_nk_path, "w", encoding="utf-8", newline="\n") as f:  # Nuke's Tcl dislikes \r\n
+        f.write(nk + "\n")

@@ -109,7 +109,7 @@ class CompositeOutputWorker(BaseWorker):
             if os.path.isfile(shapes_json):
                 roto_dir = os.path.join(self.output_dir, "roto")
                 os.makedirs(roto_dir, exist_ok=True)
-                roto = os.path.join(roto_dir, f"{self.shot}_roto.py")
+                roto = os.path.join(roto_dir, f"{self.shot}_roto.nk")
                 dest_json = os.path.join(roto_dir, f"{self.shot}_shapes.json")
                 shutil.copy2(shapes_json, dest_json)
                 export_roto_to_nuke(dest_json, roto, self.params.get("roto_interpolation", "Linear"))

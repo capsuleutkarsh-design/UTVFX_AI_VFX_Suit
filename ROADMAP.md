@@ -30,7 +30,7 @@ The app is being fixed and rebranded in passes. Each pass ends with a review bef
 - [x] Design system in one place: neutral mid-grey Nuke/Flame-style theme, one accent, Segoe UI (on every Windows machine, so nothing to bundle), SVG line icons (no emoji), colour-coded node types, compact spacing, draggable number fields
 - [x] Main window, graph, viewer, timeline and panels restyled. Window title, installer and README renamed
 
-## Pass 2: Node by node (in data-flow order)
+## Pass 2: Node by node (in data-flow order) ☑
 Each node is done when it works on the test plates at HD, 4K and frame 1001, Cancel works, outputs keep quality and frame numbers, every option in its panel does something, it has a test, and its panel uses the new design.
 
 - [x] MediaPlate (M8)
@@ -42,10 +42,10 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] Grade / OCIO (M9)
 - [x] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)
 
-## Pass 3: Export
+## Pass 3: Export ☑
 - [x] Camera to Nuke/Blender/Alembic/USD, reusing the Automated Tracker's tested writers (C2)
 - [x] Unified Output: proper RGBA/multi-channel EXR, premult, no gamma on data (H19)
-- [ ] Roto export hardening (M10)
+- [x] Roto export hardening (M10)
 
 ## Before any public or commercial release
 - [ ] Licences: remove or get permission for the non-commercial parts, and ship THIRD_PARTY_NOTICES (M11)

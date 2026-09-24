@@ -74,7 +74,7 @@ NODE_HELP_DATA = {
             "write_undistort": "Writes STMaps (undistort and redistort) and an undistorted plate for the solved lens.",
             "overscan": "Extra border around the undistorted plate so the barrel's corners are not cut (0.1 = 10%).",
             "blender_exe": "Path to blender.exe. When set, the camera is also baked to Alembic (.abc) and a .blend.",
-            "export_roto_nuke": "Writes a Python script that builds Nuke Roto shapes from Roto to Shape or AI Roto.",
+            "export_roto_nuke": "Writes shot_roto.nk: paste it into Nuke (Ctrl+V) and a Roto node builds the animated shapes from Roto to Shape or AI Roto, one Nuke layer per matte layer, each shape visible only on the frames it was found.",
             "roto_interpolation": "How the roto shapes move between keyframes in Nuke."
         }
     },

@@ -138,7 +138,7 @@
         },
         {
             "id": "export_roto_nuke",
-            "name": "Export Nuke Roto Script (.py)",
+            "name": "Export Nuke Roto (.nk to paste)",
             "tab": "2D Export",
             "type": "checkbox",
             "value": true
