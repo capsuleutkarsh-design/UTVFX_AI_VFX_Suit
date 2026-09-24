@@ -9,7 +9,7 @@ This list comes from the September 2026 audit (`audit_reports/`). Each issue has
 | ID | Area | Problem | Pass | Test | Status |
 |---|---|---|---|---|---|
 | C1 | Image I/O | EXR/DPX clipped to 1.0 and squeezed to 8-bit sRGB on load. ACES plates treated as sRGB. Every tool then works from 8-bit PNG/JPEG proxies | 1 | `test_exr_highlights_survive_loading` | ☑ |
-| C2 | Camera export | `.nk` / Blender `.py` written with literal `\n`. Exporter reads `sparse/0`, tracker writes `sparse/`. Camera axis flip doesn't match the points. Keys on 1..N, not plate frames | 3 | `test_nuke_camera_export_has_line_breaks` | ☐ |
+| C2 | Camera export | `.nk` / Blender `.py` written with literal `\n`. Exporter reads `sparse/0`, tracker writes `sparse/`. Camera axis flip doesn't match the points. Keys on 1..N, not plate frames | 3 | `test_nuke_camera_export_has_line_breaks` | ☑ Replaced by the Automated Tracker's writers (125 of its tests vendored and passing): Nuke .nk + .chan, Blender script (+ Alembic/.blend with Blender), USD with pxr, PLY, camera_track.json, optional STMaps + undistorted plate; keys on plate frames; Read points at the original sequence (or the video's EXR master); half-size solves exported as full-size cameras; scene scale and ground levelling |
 | C3 | SuperMatte | ViTMatte padding never cropped: 1080-row plates crash, 4K mattes shift ~16 px | 2 | `test_vitmatte_alpha_matches_plate_size` | ☑ |
 | C4 | SuperMatte | SAMURAI crashes on every run: frames named `frame_001001.jpg`, SAM2 expects `00000.jpg` | 2 | | ☑ |
 | C5 | Undo | Redo creates a new node id. Older commands hold dead objects. Undo after delete segfaults | 1 | `test_add_node_keeps_id_through_undo_redo`, `test_undo_after_delete_restores_graph_without_crashing` | ☑ |

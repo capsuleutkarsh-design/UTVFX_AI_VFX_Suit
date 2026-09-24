@@ -5,7 +5,6 @@ import traceback
 from PySide6.QtCore import QThread, Signal
 
 # Import our new exporter
-from plugins.CompositeOutput.colmap_exporter import read_cameras, read_images, read_points3D, export_to_nuke, export_to_blender
 from plugins.CompositeOutput.roto_exporter import export_roto_to_nuke
 
 from utvfx.bridge.base_worker import BaseWorker
@@ -101,37 +100,17 @@ class CompositeOutputWorker(BaseWorker):
         os.makedirs(self.output_dir, exist_ok=True)
         self.log_message.emit(self.node_id, f"Output directory resolved to: {self.output_dir}")
 
-        # 1. Process 3D Tracking Data
-        if self.tracking_path and os.path.exists(self.tracking_path):
-            self.log_message.emit(self.node_id, "Found 3D tracking data. Processing...")
-            tracking_dir = os.path.join(self.output_dir, "tracking")
-            os.makedirs(tracking_dir, exist_ok=True)
-            sparse_dir = os.path.join(self.tracking_path, "sparse", "0")
-            if os.path.exists(sparse_dir):
-                cameras_file = os.path.join(sparse_dir, "cameras.txt")
-                images_file = os.path.join(sparse_dir, "images.txt")
-                points_file = os.path.join(sparse_dir, "points3D.txt")
-                
-                if os.path.exists(cameras_file) and os.path.exists(images_file) and os.path.exists(points_file):
-                    self.log_message.emit(self.node_id, "Reading COLMAP data...")
-                    cameras = read_cameras(cameras_file)
-                    images = read_images(images_file)
-                    points = read_points3D(points_file)
-                    
-                    scale = float(self.params.get("scene_scale", 10.0))
-                    
-                    if self.params.get("export_nuke", True):
-                        nk_path = os.path.join(tracking_dir, "tracked_camera.nk")
-                        export_to_nuke(cameras, images, points, nk_path, scale)
-                        self.log_message.emit(self.node_id, f"Exported Nuke script to {nk_path}")
-                        
-                    if self.params.get("export_blender", True):
-                        py_path = os.path.join(tracking_dir, "blender_import.py")
-                        export_to_blender(cameras, images, points, py_path, scale)
-                        self.log_message.emit(self.node_id, f"Exported Blender script to {py_path}")
-                else:
-                    self.log_message.emit(self.node_id, "Tracking data is incomplete. Did the mapper finish successfully?")
-                    
+        # 1. Camera: the tracker's solve through the Automated Tracker's writers (camera.py).
+        if self.tracking_path and os.path.isdir(self.tracking_path) and self.params.get("export_camera", True):
+            import importlib
+            from plugins.CompositeOutput.camera import export_camera
+            self.log_message.emit(self.node_id, "Exporting the camera...")
+            colmap_exe = importlib.import_module("plugins.3DTracker.backend").COLMAP_EXE
+            result = export_camera(self.tracking_path, self.output_dir, self.params,
+                                   lambda text: self.log_message.emit(self.node_id, text), colmap_exe=colmap_exe)
+            self.log_message.emit(self.node_id, f"Camera: {result['frames_count']} frames, {result['points_count']} "
+                                                f"points -> {len(result['exported_files'])} files in tracking/.")
+
         # 1.5 Process Shape Data (Roto to Shape)
         if self.shape_path and os.path.exists(self.shape_path):
             if self.params.get("export_roto_nuke", True):

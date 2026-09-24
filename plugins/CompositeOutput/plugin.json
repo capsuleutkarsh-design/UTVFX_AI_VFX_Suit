@@ -3,18 +3,114 @@
     "plugin_type": "composite_output",
     "category": "Output",
     "color": "#f43f5e",
-    "inputs": ["Keyed RGBA", "Alpha Matte", "Video Plate", "3D Camera Path", "3D Sparse Points", "Dense Depth Map", "Shape Data"],
-    "outputs": ["Final Presentation", "Export Assets"],
+    "inputs": [
+        "Keyed RGBA",
+        "Alpha Matte",
+        "Video Plate",
+        "3D Camera Path",
+        "3D Sparse Points",
+        "Dense Depth Map",
+        "Shape Data"
+    ],
+    "outputs": [
+        "Final Presentation",
+        "Export Assets"
+    ],
     "parameters": [
-        {"id": "output_dir", "name": "Output Directory", "type": "folder", "value": ""},
-        {"id": "gamma", "name": "Display LUT Gamma", "type": "slider", "value": 2.2, "min": 1.0, "max": 3.2, "step": 0.1},
-        {"id": "bit_depth", "name": "Target Render Bitrate", "type": "select", "value": "16-bit Float EXR", "options": ["8-bit PNG", "16-bit Float EXR", "32-bit Float EXR"]},
-        
-        {"id": "export_nuke", "name": "Export Nuke Script (.nk)", "tab": "3D Export", "type": "checkbox", "value": true},
-        {"id": "export_blender", "name": "Export Blender Script (.py)", "tab": "3D Export", "type": "checkbox", "value": true},
-        {"id": "export_roto_nuke", "name": "Export Nuke Roto Script (.py)", "tab": "2D Export", "type": "checkbox", "value": true},
-        {"id": "roto_interpolation", "name": "Sub-Frame Interpolation", "tab": "2D Export", "type": "select", "value": "Linear", "options": ["Linear", "Smooth"], "tooltip": "Interpolation between roto keyframes"},
-        {"id": "scene_scale", "name": "Scene Scale Multiplier", "tab": "3D Export", "type": "slider", "value": 10.0, "min": 0.1, "max": 100.0, "step": 0.1}
+        {
+            "id": "output_dir",
+            "name": "Output Directory",
+            "type": "folder",
+            "value": ""
+        },
+        {
+            "id": "gamma",
+            "name": "Display LUT Gamma",
+            "type": "slider",
+            "value": 2.2,
+            "min": 1.0,
+            "max": 3.2,
+            "step": 0.1
+        },
+        {
+            "id": "bit_depth",
+            "name": "Target Render Bitrate",
+            "type": "select",
+            "value": "16-bit Float EXR",
+            "options": [
+                "8-bit PNG",
+                "16-bit Float EXR",
+                "32-bit Float EXR"
+            ]
+        },
+        {
+            "id": "export_camera",
+            "name": "Export Camera (Nuke, Blender, .chan, USD, PLY)",
+            "tab": "3D Export",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "scene_scale",
+            "name": "Scene Scale",
+            "tab": "3D Export",
+            "type": "slider",
+            "value": 1.0,
+            "min": 0.01,
+            "max": 100.0,
+            "step": 0.01,
+            "tooltip": "Multiplies the whole scene (camera and points). COLMAP's units are arbitrary."
+        },
+        {
+            "id": "level_ground",
+            "name": "Level the Ground from the Point Cloud",
+            "tab": "3D Export",
+            "type": "checkbox",
+            "value": false
+        },
+        {
+            "id": "write_undistort",
+            "name": "Write STMaps and Undistorted Plate",
+            "tab": "3D Export",
+            "type": "checkbox",
+            "value": false
+        },
+        {
+            "id": "overscan",
+            "name": "Undistort Overscan",
+            "tab": "3D Export",
+            "type": "slider",
+            "value": 0.0,
+            "min": 0.0,
+            "max": 0.5,
+            "step": 0.01
+        },
+        {
+            "id": "blender_exe",
+            "name": "Blender (for Alembic and .blend)",
+            "tab": "3D Export",
+            "type": "file",
+            "value": ""
+        },
+        {
+            "id": "export_roto_nuke",
+            "name": "Export Nuke Roto Script (.py)",
+            "tab": "2D Export",
+            "type": "checkbox",
+            "value": true
+        },
+        {
+            "id": "roto_interpolation",
+            "name": "Sub-Frame Interpolation",
+            "tab": "2D Export",
+            "type": "select",
+            "value": "Linear",
+            "options": [
+                "Linear",
+                "Smooth"
+            ],
+            "tooltip": "Interpolation between roto keyframes"
+        }
     ],
     "worker_module": "plugins.CompositeOutput.backend",
     "worker_class": "CompositeOutputWorker"

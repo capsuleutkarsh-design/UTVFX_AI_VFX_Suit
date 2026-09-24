@@ -370,6 +370,7 @@ class TrackerWorker(BaseWorker):
             "plate_width": plate.m["width"] if plate else None, "plate_height": plate.m["height"] if plate else None,
             "working_scale": prep["working_scale"], "pixel_aspect": prep["pixel_aspect"],
             "fps": plate.m.get("fps") if plate else None,
+            "plate_cache": plate.cache_dir if plate else None,
             "reprojection_error": error, "points": model_stats(final)[1],
             "mapper": os.path.basename(os.path.dirname(os.path.normpath(best)))
                       if os.path.basename(os.path.normpath(best)).isdigit() else os.path.basename(os.path.normpath(best)),

@@ -24,23 +24,6 @@ def test_exr_highlights_survive_loading(hdr_exr_sequence):
     assert display[15, 15].max() < 255
 
 
-@pytest.mark.xfail(reason="ISSUE-C2: camera export writes literal '\\n' instead of line breaks")
-def test_nuke_camera_export_has_line_breaks(tmp_path):
-    from plugins.CompositeOutput.colmap_exporter import export_to_nuke
-
-    cameras = {1: {"model": "SIMPLE_PINHOLE", "width": 1920, "height": 1080, "params": [1500.0, 960.0, 540.0]}}
-    images = {
-        1: {"q": (1.0, 0.0, 0.0, 0.0), "t": (0.0, 0.0, 0.0), "camera_id": 1, "name": "frame_001001.jpg"},
-        2: {"q": (1.0, 0.0, 0.0, 0.0), "t": (0.1, 0.0, 0.0), "camera_id": 1, "name": "frame_001002.jpg"},
-    }
-    points = {1: {"xyz": (0.0, 0.0, 5.0), "rgb": (255, 255, 255)}}
-    out = tmp_path / "cam.nk"
-    export_to_nuke(cameras, images, points, str(out))
-    text = out.read_text()
-    assert "\\n" not in text
-    assert text.count("\n") > 5
-
-
 @pytest.mark.models
 def test_vitmatte_alpha_matches_plate_size():
     """ISSUE-C3"""

@@ -43,7 +43,7 @@ Each node is done when it works on the test plates at HD, 4K and frame 1001, Can
 - [x] 3D Tracker: rebuilt on the Automated Tracker's COLMAP/GLOMAP solver (H18)
 
 ## Pass 3: Export
-- [ ] Camera to Nuke/Blender/Alembic/USD, reusing the Automated Tracker's tested writers (C2)
+- [x] Camera to Nuke/Blender/Alembic/USD, reusing the Automated Tracker's tested writers (C2)
 - [ ] Unified Output: proper RGBA/multi-channel EXR, premult, no gamma on data (H19)
 - [ ] Roto export hardening (M10)
 
